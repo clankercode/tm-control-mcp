@@ -71,6 +71,19 @@ This means `Select` is an ORDINARY SCRIPT FUNCTION in the page's Manialink, not 
 
 For the programmatic-navigation use case, the `Router_Push` path is sufficient.
 
+### Terminal actions that are NOT Router_Push (live 2026-04-20)
+
+Not every "button" on a page pushes a route. Some end-of-flow buttons call the title control API directly instead, bypassing the Router entirely. These cannot be triggered by `SetMenuPage`:
+
+- `Page_MapEditorSettings / button-create` → `TitleControl::EditNewMap(TitleControl, Enviro, Mood, "", PlayerModel, MapType, IsMouseSimple, Plugins, Settings, OnlyForced)` (Page_MapEditorSettings XML @ offset 197012).
+- `Page_MapEditorSettings / button-edit` → `TitleControl::EditMap(TitleControl, FileName, "", "", PlayerModel, Plugins, Settings, !Simple, OnlyForced)` (Page_MapEditorSettings XML @ offset 195282).
+
+These are the same APIs our `EditNewMap` / (future) `EditMap` MCP tools wrap via `app.ManiaTitleControlScriptAPI.*`. So the full "menu → editor" flow can be driven today as `SetMenuPage /create/mapeditorsettings` + `EditNewMap {Environment, Decoration, MapType}`, but NOT by `SetMenuPage` alone.
+
+### Click synthesis feasibility note
+
+To fake a real click on `button-create` we'd need to inject a `ComponentNavigation_ComponentNavigation::C_EventType_NavigateMouse` event with `Mouse=MouseClick` and `To="button-create"` into the page's own event queue (not the top-level menu module). MLHook exposes `Queue_Menu_SendCustomEvent` (top-level ScriptHandler only) and `InjectManialinkToMenu` (arbitrary page injection), but no "queue event to a specific Page_* layer" primitive. `GetPendingEvents` on the page drains from its own internal pool populated by the runtime on real input. Implication: driving `Select` without the Router_Push shortcut probably requires either (a) injecting a Manialink bridge page that calls the title control API directly (same effect as our existing `EditNewMap` tool), or (b) simulating host-level mouse input. Both strictly heavier than the current `SetMenuPage + EditNewMap` combo.
+
 ## Routes with side-effects (DANGEROUS — may leave Race mode)
 
 Not every route just swaps a `Page_*` layer. Some Router pushes kick off navigation flows that cascade into a playground launch:
