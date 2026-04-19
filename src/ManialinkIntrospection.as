@@ -147,6 +147,60 @@ namespace TmMcp {
         return false;
     }
 
+    // DFS from `node` looking for the first descendant whose ControlId == target.
+    // Returns true when found; `outPath` is filled with the slash-joined child-index
+    // chain FROM (but not including) the start node down to the match. So for
+    // MainFrame → Controls[3] (frame-global) → Controls[0] (button-create) the
+    // path is "3/0". The empty string means the start node itself matched.
+    bool _FindControlIndexPath(CGameManialinkControl@ node, const string &in target, string &out outPath) {
+        if (node is null) return false;
+        string selfId = "";
+        try { selfId = string(node.ControlId); } catch { /* swallow */ }
+        if (selfId == target) { outPath = ""; return true; }
+        auto frame = cast<CGameManialinkFrame>(node);
+        if (frame is null) return false;
+        uint n = 0;
+        try { n = frame.Controls.Length; } catch { n = 0; }
+        for (uint i = 0; i < n; i++) {
+            CGameManialinkControl@ c = null;
+            try { @c = frame.Controls[i]; } catch { @c = null; }
+            if (c is null) continue;
+            string subPath;
+            if (_FindControlIndexPath(c, target, subPath)) {
+                string idx = "" + i;
+                outPath = subPath.Length > 0 ? (idx + "/" + subPath) : idx;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Walk a slash-separated child-index path from `root`. Empty segments are
+    // skipped; each non-empty segment is parsed as a uint and used to index
+    // `frame.Controls`. Returns null if any step fails.
+    CGameManialinkControl@ _ResolveControlIndexPath(CGameManialinkFrame@ root, const string &in path) {
+        if (root is null) return null;
+        if (path.Length == 0) return root;
+        auto segs = path.Split("/");
+        CGameManialinkControl@ cur = root;
+        for (uint i = 0; i < segs.Length; i++) {
+            string seg = segs[i];
+            if (seg.Length == 0) continue;
+            auto frame = cast<CGameManialinkFrame>(cur);
+            if (frame is null) return null;
+            uint n = 0;
+            try { n = frame.Controls.Length; } catch { n = 0; }
+            uint ix = 0;
+            try { ix = Text::ParseUInt(seg); } catch { return null; }
+            if (ix >= n) return null;
+            CGameManialinkControl@ next = null;
+            try { @next = frame.Controls[ix]; } catch { @next = null; }
+            if (next is null) return null;
+            @cur = next;
+        }
+        return cur;
+    }
+
     Json::Value _ControlSnapshotJson(CGameManialinkControl@ ctrl) {
         Json::Value o = Json::Object();
         if (ctrl is null) { o["null"] = true; return o; }
@@ -225,10 +279,14 @@ namespace TmMcp {
         output["pageGetFirstChild"] = _ControlSnapshotJson(direct);
         output["mainFrameGetFirstChild"] = _ControlSnapshotJson(viaFrame);
         if (mainFrame !is null) {
-            string foundPath;
-            bool pathFound = _FindControlPath(mainFrame, controlId, foundPath);
+            string idxPath;
+            bool pathFound = _FindControlIndexPath(mainFrame, controlId, idxPath);
             output["pathFound"] = pathFound;
-            if (pathFound) output["path"] = foundPath;
+            if (pathFound) {
+                output["path"] = idxPath;
+                string idPath;
+                if (_FindControlPath(mainFrame, controlId, idPath)) output["idPath"] = idPath;
+            }
         }
         auto picked = direct !is null ? direct : viaFrame;
         if (picked !is null) {
