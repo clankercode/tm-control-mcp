@@ -69,6 +69,7 @@ Current tools:
 - `AddItemToNamedMacroblock`
 - `AddItemsToNamedMacroblock`
 - `PlaceNamedMacroblock`
+- `PreflightNamedMacroblockPlacement`
 - `CanPlaceBlock`
 - `PlaceBlock`
 - `PlaceBlockViaEditorPlusPlus`
@@ -117,6 +118,7 @@ python3 tools/call.py FindInventory '{"query":"LightCube","type":"item","limit":
 python3 tools/call.py BrowseInventoryTree '{"root":"items","path":"Official","depth":5,"query":"LightCube","limit":35}'
 python3 tools/call.py InspectMacroblockModel '{"index":0,"limit":5}'
 python3 tools/call.py ListMacroblockInstances '{"recent":true,"limit":5}'
+python3 tools/call.py PreflightNamedMacroblockPlacement '{"name":"stress-a","offsetX":32}'
 python3 tools/call.py GetItems '{"limit":10}'
 python3 tools/call.py GetRecentItems '{"count":5}'
 python3 tools/call.py FindBlockModels '{"query":"TechnicsScreen","limit":5}'
@@ -231,6 +233,9 @@ inserted map blocks after `PlaceNamedMacroblock` succeeds. These named handles
 are in-memory only and are cleared when TM Control MCP reloads.
 Use `AddBlocksToNamedMacroblock` and `AddItemsToNamedMacroblock` for generated
 builds; they avoid one socket round trip per block/item.
+`PreflightNamedMacroblockPlacement` accepts the same transform inputs without
+mutating the map, then reports world extents, map bounds issues, missing models,
+and invalid variants.
 
 `PlaceItemViaEditorPlusPlus` places flying items through E++ item placement.
 It accepts item inventory paths from `FindInventory`, degree or radian rotation
