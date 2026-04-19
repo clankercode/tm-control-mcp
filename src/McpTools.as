@@ -735,7 +735,8 @@ namespace TmMcp {
             || name == "Undo"
             || name == "Redo"
             || name == "SetMenuPage"
-            || name == "GetMenuPage";
+            || name == "GetMenuPage"
+            || name == "ListKnownMenuRoutes";
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
@@ -801,6 +802,7 @@ namespace TmMcp {
         if (name == "Redo") return Redo(input);
         if (name == "SetMenuPage") return SetMenuPage(input);
         if (name == "GetMenuPage") return GetMenuPage(input);
+        if (name == "ListKnownMenuRoutes") return ListKnownMenuRoutes(input);
         return null;
     }
 
@@ -868,6 +870,7 @@ namespace TmMcp {
         tools.Add(MakeTool("Redo", "Redo the last undone editor action.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("SetMenuPage", "Navigate the main-menu router to a route via MLHook. Useful for programmatically opening /create, /mapeditorsettings, /solo, etc. Only works while in the main-menu module; use GetMenuPage to check.", '{"type":"object","properties":{"route":{"type":"string"},"extra":{"type":"string"}},"required":["route"]}'));
         tools.Add(MakeTool("GetMenuPage", "Report current top-level game mode (Menu/Editor/Race) and whether the main-menu module is active. Does not attempt to read the specific menu route.", '{"type":"object","properties":{}}'));
+        tools.Add(MakeTool("ListKnownMenuRoutes", "Return a hardcoded catalogue of main-menu Router_Push routes known to work (sourced from tm-menu-page-manager).", '{"type":"object","properties":{}}'));
         return tools;
     }
 
@@ -913,6 +916,26 @@ namespace TmMcp {
 #else
         return MakeError("MLHook dependency not compiled in");
 #endif
+    }
+
+    Json::Value@ ListKnownMenuRoutes(Json::Value &in input) {
+        // Hardcoded set from tm-menu-page-manager (src/Main.as). These are confirmed
+        // route strings accepted by the main-menu Router_Push event. There is no
+        // public API to enumerate the router's actual route table; use this as a
+        // practical starting catalogue.
+        Json::Value output = Json::Object();
+        Json::Value routes = Json::Array();
+        string[] known = {
+            "/home", "/live", "/solo", "/local", "/arcade",
+            "/server-review", "/play-map", "/local-multi", "/against-replay",
+            "/totdchanneldisplay", "/matchmakingmainpage",
+            "/clubs", "/create", "/mapeditorsettings", "/garage",
+            "/edit-replay", "/submittedmaps", "/empty"
+        };
+        for (uint i = 0; i < known.Length; i++) routes.Add(known[i]);
+        output["routes"] = routes;
+        output["note"] = "Not dynamic. Sourced from tm-menu-page-manager; some routes may reject push or require specific 'extra' payloads.";
+        return MakeSuccess(output);
     }
 
     Json::Value@ GetMenuPage(Json::Value &in input) {
