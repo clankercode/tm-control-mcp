@@ -233,11 +233,12 @@ Named macroblock tools keep E++ `MacroblockSpec` handles in plugin memory.
 They support free block specs, flying item specs, and placement-time translation
 and rotation around a world-space pivot. Rotation inputs are degrees by default;
 use `pitchRad`, `yawRad`, or `rollRad` for radians. Free block specs accept
-`variant`, `bgSkin`, and `fgSkin`; skins are applied directly to the newly
-inserted map blocks after `PlaceNamedMacroblock` succeeds. Skin application is
-verified against the placed block's `Skin` field; unsupported blocks report
-`skinsApplied=false` with a per-block error. These named handles are in-memory
-only and are cleared when TM Control MCP reloads.
+`variant`, `bgSkin`, and `fgSkin`; item specs also accept `bgSkin` and `fgSkin`.
+Skins are applied directly to newly inserted map blocks/items after
+`PlaceNamedMacroblock` succeeds. Skin application is verified against the placed
+block/item skin fields; unsupported targets report `skinsApplied=false` with a
+per-target error. These named handles are in-memory only and are cleared when TM
+Control MCP reloads.
 Use `AddBlocksToNamedMacroblock` and `AddItemsToNamedMacroblock` for generated
 builds; they avoid one socket round trip per block/item.
 `PreflightNamedMacroblockPlacement` accepts the same transform inputs without

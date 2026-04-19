@@ -9,23 +9,6 @@ namespace TmMcp {
     array<Editor::MacroblockSpec@> g_NamedMacroblocks;
     array<NamedMacroblockSkin@[]@> g_NamedMacroblockSkins;
 
-    class NamedMacroblockSkin {
-        uint blockIndex;
-        string fgSkin;
-        string bgSkin;
-
-        NamedMacroblockSkin(uint blockIndex, const string &in fgSkin, const string &in bgSkin) {
-            this.blockIndex = blockIndex;
-            this.fgSkin = fgSkin;
-            this.bgSkin = bgSkin;
-        }
-    }
-
-    NamedMacroblockSkin@[]@ NewNamedMacroblockSkinList() {
-        NamedMacroblockSkin@[] skins;
-        return skins;
-    }
-
     CGameCtnEditorFree@ GetEditor() {
         auto app = cast<CTrackMania>(GetApp());
         if (app is null || app.Editor is null) return null;
@@ -460,17 +443,6 @@ namespace TmMcp {
         return obj;
     }
 
-    Json::Value BlockSkinToJson(CGameCtnBlock@ block) {
-        Json::Value skin = Json::Object();
-        skin["hasSkin"] = block !is null && block.Skin !is null;
-        if (block !is null && block.Skin !is null) {
-            skin["bgSkin"] = PackDescPath(block.Skin.PackDesc);
-            skin["fgSkin"] = PackDescPath(block.Skin.ForegroundPackDesc);
-            skin["parentSkin"] = PackDescPath(block.Skin.ParentPackDesc);
-        }
-        return skin;
-    }
-
     Json::Value ItemToJson(CGameCtnAnchoredObject@ item) {
         if (item is null) return Json::Value();
         Json::Value obj = Json::Object();
@@ -491,6 +463,7 @@ namespace TmMcp {
             obj["idName"] = item.ItemModel.IdName;
             obj["waypointType"] = int(item.ItemModel.WaypointType);
         }
+        obj["skin"] = ItemSkinToJson(item);
         return obj;
     }
 
@@ -557,108 +530,6 @@ namespace TmMcp {
         int index = FindNamedMacroblockIndex(name);
         if (index < 0) return null;
         return g_NamedMacroblocks[index];
-    }
-
-    NamedMacroblockSkin@[]@ GetNamedMacroblockSkins(const string &in name) {
-        int index = FindNamedMacroblockIndex(name);
-        if (index < 0 || index >= int(g_NamedMacroblockSkins.Length)) return null;
-        return g_NamedMacroblockSkins[index];
-    }
-
-    Json::Value NamedMacroblockSkinToJson(NamedMacroblockSkin@ skin) {
-        Json::Value obj = Json::Object();
-        if (skin is null) return obj;
-        obj["blockIndex"] = int(skin.blockIndex);
-        obj["fgSkin"] = skin.fgSkin;
-        obj["bgSkin"] = skin.bgSkin;
-        return obj;
-    }
-
-    Json::Value NamedMacroblockSkinsToJson(NamedMacroblockSkin@[]@ skins, int limit = 100) {
-        Json::Value output = Json::Array();
-        if (skins is null) return output;
-        if (limit < 1) limit = 1;
-        for (uint i = 0; i < skins.Length && output.Length < uint(limit); i++) {
-            output.Add(NamedMacroblockSkinToJson(skins[i]));
-        }
-        return output;
-    }
-
-    void AddPostSkinToNamedMacroblock(const string &in name, uint blockIndex, const string &in fgSkin, const string &in bgSkin) {
-        if (fgSkin.Length == 0 && bgSkin.Length == 0) return;
-        auto skins = GetNamedMacroblockSkins(name);
-        if (skins is null) return;
-        skins.InsertLast(NamedMacroblockSkin(blockIndex, fgSkin, bgSkin));
-    }
-
-    Editor::SetSkinSpec@[] BuildPlacedSkinSpecs(const string &in name, Editor::MacroblockSpec@ placedMb) {
-        Editor::SetSkinSpec@[] skinsToApply;
-        auto skins = GetNamedMacroblockSkins(name);
-        if (skins is null || placedMb is null) return skinsToApply;
-        for (uint i = 0; i < skins.Length; i++) {
-            auto skin = skins[i];
-            if (skin is null || skin.blockIndex >= placedMb.blocks.Length) continue;
-            skinsToApply.InsertLast(Editor::SetSkinSpec(placedMb.blocks[skin.blockIndex], skin.fgSkin, skin.bgSkin));
-        }
-        return skinsToApply;
-    }
-
-    Json::Value ApplyNamedMacroblockSkinsDirect(CGameEditorPluginMapMapType@ pmt, const string &in name, int blockBaseIndex) {
-        Json::Value output = Json::Object();
-        Json::Value applied = Json::Array();
-        Json::Value errors = Json::Array();
-        auto skins = GetNamedMacroblockSkins(name);
-        if (pmt is null || pmt.Map is null || skins is null) {
-            output["requested"] = 0;
-            output["applied"] = applied;
-            output["errors"] = errors;
-            output["ok"] = false;
-            return output;
-        }
-
-        for (uint i = 0; i < skins.Length; i++) {
-            auto skin = skins[i];
-            if (skin is null) continue;
-            int mapIndex = blockBaseIndex + int(skin.blockIndex);
-            if (mapIndex < 0 || mapIndex >= int(pmt.Map.Blocks.Length)) {
-                Json::Value err = NamedMacroblockSkinToJson(skin);
-                err["error"] = "map block index out of range";
-                err["mapIndex"] = mapIndex;
-                errors.Add(err);
-                continue;
-            }
-            auto block = pmt.Map.Blocks[mapIndex];
-            if (block is null) {
-                Json::Value err = NamedMacroblockSkinToJson(skin);
-                err["error"] = "map block is null";
-                err["mapIndex"] = mapIndex;
-                errors.Add(err);
-                continue;
-            }
-            try {
-                pmt.SetBlockSkins(block, skin.bgSkin, skin.fgSkin);
-                Json::Value ok = NamedMacroblockSkinToJson(skin);
-                ok["mapIndex"] = mapIndex;
-                ok["actualSkin"] = BlockSkinToJson(block);
-                if (block.Skin is null) {
-                    ok["error"] = "skin was not reflected on block after SetBlockSkins";
-                    errors.Add(ok);
-                } else {
-                    applied.Add(ok);
-                }
-            } catch {
-                Json::Value err = NamedMacroblockSkinToJson(skin);
-                err["error"] = getExceptionInfo();
-                err["mapIndex"] = mapIndex;
-                errors.Add(err);
-            }
-        }
-
-        output["requested"] = int(skins.Length);
-        output["applied"] = applied;
-        output["errors"] = errors;
-        output["ok"] = errors.Length == 0;
-        return output;
     }
 
     Json::Value NamedMacroblockSummary(const string &in name, Editor::MacroblockSpec@ mb) {
@@ -946,7 +817,7 @@ namespace TmMcp {
         tools.Add(MakeTool("ClearNamedMacroblock", "Clear one in-memory named macroblock, or all with all=true.", '{"type":"object","properties":{"name":{"type":"string"},"all":{"type":"boolean"}}}'));
         tools.Add(MakeTool("AddBlockToNamedMacroblock", "Add a free block spec to an in-memory named macroblock. Rotation defaults to degrees; optional bgSkin/fgSkin are applied after placement.", '{"type":"object","properties":{"name":{"type":"string"},"blockName":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"pitchRad":{"type":"number"},"yawRad":{"type":"number"},"rollRad":{"type":"number"},"variant":{"type":"integer"},"bgSkin":{"type":"string"},"fgSkin":{"type":"string"},"skin":{"type":"string"},"create":{"type":"boolean"}},"required":["name","blockName","x","y","z"]}'));
         tools.Add(MakeTool("AddBlocksToNamedMacroblock", "Add many free block specs to an in-memory named macroblock in one MCP request.", '{"type":"object","properties":{"name":{"type":"string"},"blocks":{"type":"array","items":{"type":"object"}},"create":{"type":"boolean"},"continueOnError":{"type":"boolean"}},"required":["name","blocks"]}'));
-        tools.Add(MakeTool("AddItemToNamedMacroblock", "Add a flying item spec to an in-memory named macroblock by inventory item path. Rotation defaults to degrees.", '{"type":"object","properties":{"name":{"type":"string"},"itemPath":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"pitchRad":{"type":"number"},"yawRad":{"type":"number"},"rollRad":{"type":"number"},"variant":{"type":"integer"},"create":{"type":"boolean"}},"required":["name","itemPath","x","y","z"]}'));
+        tools.Add(MakeTool("AddItemToNamedMacroblock", "Add a flying item spec to an in-memory named macroblock by inventory item path. Rotation defaults to degrees; optional bgSkin/fgSkin are applied after placement.", '{"type":"object","properties":{"name":{"type":"string"},"itemPath":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"pitchRad":{"type":"number"},"yawRad":{"type":"number"},"rollRad":{"type":"number"},"variant":{"type":"integer"},"bgSkin":{"type":"string"},"fgSkin":{"type":"string"},"skin":{"type":"string"},"create":{"type":"boolean"}},"required":["name","itemPath","x","y","z"]}'));
         tools.Add(MakeTool("AddItemsToNamedMacroblock", "Add many flying item specs to an in-memory named macroblock in one MCP request.", '{"type":"object","properties":{"name":{"type":"string"},"items":{"type":"array","items":{"type":"object"}},"create":{"type":"boolean"},"continueOnError":{"type":"boolean"}},"required":["name","items"]}'));
         tools.Add(MakeTool("PlaceNamedMacroblock", "Place an in-memory named macroblock through Editor++ macroblock placement with optional position offset, rotation around pivot, and mapPre/mapPost metadata.", '{"type":"object","properties":{"name":{"type":"string"},"offsetX":{"type":"number"},"offsetY":{"type":"number"},"offsetZ":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"pitchRad":{"type":"number"},"yawRad":{"type":"number"},"rollRad":{"type":"number"},"pivotX":{"type":"number"},"pivotY":{"type":"number"},"pivotZ":{"type":"number"},"addUndo":{"type":"boolean"},"autofocus":{"type":"boolean"},"autofocusDistance":{"type":"number"}},"required":["name"]}'));
         tools.Add(MakeTool("PreflightNamedMacroblockPlacement", "Non-mutating checks for a named macroblock placement: transformed extents, map bounds, missing models, and invalid variants.", '{"type":"object","properties":{"name":{"type":"string"},"offsetX":{"type":"number"},"offsetY":{"type":"number"},"offsetZ":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"pitchRad":{"type":"number"},"yawRad":{"type":"number"},"rollRad":{"type":"number"},"pivotX":{"type":"number"},"pivotY":{"type":"number"},"pivotZ":{"type":"number"},"limit":{"type":"integer"}},"required":["name"]}'));
@@ -1950,16 +1821,24 @@ namespace TmMcp {
         auto spec = Editor::MakeItemSpec(itemModel, pos, rot);
         spec.isFlying = 1;
         spec.variantIx = input.HasKey("variant") ? uint16(input["variant"]) : 0;
+        uint itemIndex = mb.items.Length;
         mb.items.InsertLast(spec);
+        string fgSkin = input.HasKey("fgSkin") ? string(input["fgSkin"]) : "";
+        string bgSkin = input.HasKey("bgSkin") ? string(input["bgSkin"]) : "";
+        if (!input.HasKey("fgSkin") && input.HasKey("skin")) bgSkin = string(input["skin"]);
+        AddPostItemSkinToNamedMacroblock(name, itemIndex, fgSkin, bgSkin);
 
         Json::Value output = NamedMacroblockSummary(name, mb);
         output["added"] = true;
+        output["itemIndex"] = int(itemIndex);
         output["itemPath"] = itemPath;
         output["model"] = ItemModelToJson(itemModel, itemPath);
         output["pos"] = Vec3ToJson(pos);
         output["rot"] = Vec3ToJson(rot);
         output["rotDeg"] = Vec3DegToJson(rot);
         output["variant"] = int(spec.variantIx);
+        output["fgSkin"] = fgSkin;
+        output["bgSkin"] = bgSkin;
         return MakeSuccess(output);
     }
 
@@ -2019,6 +1898,7 @@ namespace TmMcp {
 
         Json::Value mapPre = MapSummary(editor);
         int blockBaseIndex = int(editor.Challenge.Blocks.Length);
+        int itemBaseIndex = int(editor.Challenge.AnchoredObjects.Length);
         bool placed = false;
         string error = "";
         try {
@@ -2035,7 +1915,7 @@ namespace TmMcp {
         int skinsRequested = postSkins is null ? 0 : int(postSkins.Length);
         if (placed && skinsRequested > 0) {
             try {
-                skinApplication = ApplyNamedMacroblockSkinsDirect(editor.PluginMapType, name, blockBaseIndex);
+                skinApplication = ApplyNamedMacroblockSkinsDirect(editor.PluginMapType, name, blockBaseIndex, itemBaseIndex);
                 skinsApplied = bool(skinApplication["ok"]);
                 for (uint i = 0; i < 5; i++) yield();
             } catch {
