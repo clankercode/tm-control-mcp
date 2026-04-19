@@ -43,6 +43,7 @@ Current tools:
 - `ControlValidation`
 - `ControlSelection`
 - `GetCursor`
+- `GetEditorSelectionState`
 - `ControlCursor`
 - `GetEditorCamera`
 - `SetEditorCamera`
@@ -60,6 +61,7 @@ Current tools:
 - `InspectMacroblockModel`
 - `ListMacroblockInstances`
 - `FindBlockModels`
+- `RunGizmoApplyBlock`
 - `CreateNamedMacroblock`
 - `GetNamedMacroblock`
 - `ListNamedMacroblocks`
@@ -111,6 +113,7 @@ python3 tools/call.py ControlCamera '{"action":"status"}'
 python3 tools/call.py ControlCamera '{"action":"watchWholeMap","smooth":true}'
 python3 tools/call.py ControlCursor '{"action":"status"}'
 python3 tools/call.py ControlCursor '{"action":"move","direction":"Forward","directionKind":"relative"}'
+python3 tools/call.py GetEditorSelectionState
 python3 tools/call.py TakeScreenshot '{"format":"jpg"}'
 python3 tools/call.py GetInventorySummary
 python3 tools/call.py FindInventory '{"query":"RoadTech","type":"block","limit":5}'
@@ -228,6 +231,9 @@ leaving native macroblock instances behind, so `total=0` is valid on those maps.
 for choosing nonzero variants for macroblock stress tests.
 `SetCursorBlock` is an alias for `SelectBlockModel`, which sets the editor's
 normal and ghost selected block model through E++ exports.
+`GetEditorSelectionState` is a read-only snapshot of gizmo-relevant editor
+state: placement modes, picked block, selected block models, cursor coordinate,
+and current block variant.
 `RunGizmoApplyBlock` is a DEV diagnostic for the actual E++ gizmo block-apply
 path. It is useful for macroblock/gizmo crash regression tests because it calls
 the same apply function without marker files or manual cursor interaction.

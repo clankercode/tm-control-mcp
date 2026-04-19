@@ -680,6 +680,7 @@ namespace TmMcp {
             || name == "ControlValidation"
             || name == "ControlSelection"
             || name == "GetCursor"
+            || name == "GetEditorSelectionState"
             || name == "ControlCursor"
             || name == "GetEditorCamera"
             || name == "SetEditorCamera"
@@ -737,6 +738,7 @@ namespace TmMcp {
         if (name == "ControlValidation") return ControlValidation(input);
         if (name == "ControlSelection") return ControlSelection(input);
         if (name == "GetCursor") return GetCursor(input);
+        if (name == "GetEditorSelectionState") return GetEditorSelectionState(input);
         if (name == "ControlCursor") return ControlCursor(input);
         if (name == "GetEditorCamera") return GetEditorCamera(input);
         if (name == "SetEditorCamera") return SetEditorCamera(input);
@@ -796,6 +798,7 @@ namespace TmMcp {
         tools.Add(MakeTool("ControlValidation", "Inspect or trigger map validation/test/playground controls. Actions: status, validate, requestEnterPlayground, requestLeavePlayground, testFromStart, testFromCoord.", '{"type":"object","properties":{"action":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"}}}'));
         tools.Add(MakeTool("ControlSelection", "Inspect or control editor copy-paste/custom selection. Actions: status, showCustom, hideCustom, resetSelection, selectAll, addSelection, copy, cut, remove, symmetrize.", '{"type":"object","properties":{"action":{"type":"string"},"x1":{"type":"integer"},"y1":{"type":"integer"},"z1":{"type":"integer"},"x2":{"type":"integer"},"y2":{"type":"integer"},"z2":{"type":"integer"},"limit":{"type":"integer"}}}'));
         tools.Add(MakeTool("GetCursor", "Get editor cursor coordinate and selected block.", '{"type":"object","properties":{}}'));
+        tools.Add(MakeTool("GetEditorSelectionState", "Read current editor selection/picker/cursor state for gizmo diagnostics.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("ControlCursor", "Use the editor cursor API: status, raise, lower, rotate, move, moveToCameraTarget, followCamera, disableMouseDetection, releaseLock, resetRGB, setRGB.", '{"type":"object","properties":{"action":{"type":"string"},"direction":{"type":"string"},"directionKind":{"type":"string"},"count":{"type":"integer"},"clockwise":{"type":"boolean"},"follow":{"type":"boolean"},"disable":{"type":"boolean"},"r":{"type":"number"},"g":{"type":"number"},"b":{"type":"number"}}}'));
         tools.Add(MakeTool("GetEditorCamera", "Get editor camera target, angles, distance, and current orbital position.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("SetEditorCamera", "Set editor camera target, angles, and target distance. Angles default to degrees; use hAngleRad/vAngleRad for radians.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"hAngle":{"type":"number"},"vAngle":{"type":"number"},"hAngleRad":{"type":"number"},"vAngleRad":{"type":"number"},"distance":{"type":"number"},"animate":{"type":"boolean"}}}'));
