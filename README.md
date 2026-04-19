@@ -228,6 +228,9 @@ leaving native macroblock instances behind, so `total=0` is valid on those maps.
 for choosing nonzero variants for macroblock stress tests.
 `SetCursorBlock` is an alias for `SelectBlockModel`, which sets the editor's
 normal and ghost selected block model through E++ exports.
+`RunGizmoApplyBlock` is a DEV diagnostic for the actual E++ gizmo block-apply
+path. It is useful for macroblock/gizmo crash regression tests because it calls
+the same apply function without marker files or manual cursor interaction.
 
 Named macroblock tools keep E++ `MacroblockSpec` handles in plugin memory.
 They support free block specs, flying item specs, and placement-time translation
