@@ -496,6 +496,69 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
+    // Grep/slice a layer's Manialink XML without dumping the whole multi-KB string.
+    // Inputs: layerIndex, plus either (find + context) for substring search OR
+    // (offset + length) for a raw slice. Returns hits with byte offsets.
+    Json::Value@ GetLayerXml(Json::Value &in input) {
+        if (!input.HasKey("layerIndex")) return MakeError("missing layerIndex");
+        int layerIndex = int(input["layerIndex"]);
+        auto menuApp = _GetMenuApp();
+        if (menuApp is null) return MakeError("menu mania app not available");
+        uint nb = 0;
+        try { nb = menuApp.UILayers.Length; } catch { nb = 0; }
+        if (layerIndex < 0 || uint(layerIndex) >= nb) return MakeError("layerIndex out of range");
+        CGameUILayer@ layer = null;
+        try { @layer = menuApp.UILayers[uint(layerIndex)]; } catch { return MakeError("could not read layer"); }
+        if (layer is null) return MakeError("layer is null");
+        string src = "";
+        try { src = layer.ManialinkPageUtf8; } catch { return MakeError("ManialinkPageUtf8 threw"); }
+
+        Json::Value output = Json::Object();
+        output["layerIndex"] = layerIndex;
+        output["xmlLength"] = int(src.Length);
+
+        if (input.HasKey("find")) {
+            string needle = string(input["find"]);
+            int ctx = input.HasKey("context") ? int(input["context"]) : 120;
+            int maxHits = input.HasKey("maxHits") ? int(input["maxHits"]) : 20;
+            bool caseInsensitive = input.HasKey("caseInsensitive") ? bool(input["caseInsensitive"]) : false;
+            Json::Value hits = Json::Array();
+            string hay = caseInsensitive ? src.ToLower() : src;
+            string need = caseInsensitive ? needle.ToLower() : needle;
+            int pos = 0;
+            int count = 0;
+            while (count < maxHits) {
+                string tail = hay.SubStr(uint(pos));
+                int rel = tail.IndexOf(need);
+                if (rel < 0) break;
+                int abs = pos + rel;
+                int start = abs - ctx; if (start < 0) start = 0;
+                int endRaw = abs + int(needle.Length) + ctx;
+                if (endRaw > int(src.Length)) endRaw = int(src.Length);
+                Json::Value h = Json::Object();
+                h["offset"] = abs;
+                h["snippet"] = src.SubStr(uint(start), uint(endRaw - start));
+                hits.Add(h);
+                pos = abs + int(needle.Length);
+                count++;
+            }
+            output["find"] = needle;
+            output["hits"] = hits;
+            output["count"] = int(hits.Length);
+            return MakeSuccess(output);
+        }
+
+        int offset = input.HasKey("offset") ? int(input["offset"]) : 0;
+        int length = input.HasKey("length") ? int(input["length"]) : 2048;
+        if (offset < 0) offset = 0;
+        if (offset > int(src.Length)) offset = int(src.Length);
+        int endRaw = offset + length;
+        if (endRaw > int(src.Length)) endRaw = int(src.Length);
+        output["offset"] = offset;
+        output["slice"] = src.SubStr(uint(offset), uint(endRaw - offset));
+        return MakeSuccess(output);
+    }
+
     Json::Value@ FindMenuButtons(Json::Value &in input) {
         bool onlyVisible = input.HasKey("onlyVisible") ? bool(input["onlyVisible"]) : true;
         int maxDepth = input.HasKey("maxDepth") ? int(input["maxDepth"]) : 10;

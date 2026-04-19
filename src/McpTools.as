@@ -746,7 +746,8 @@ namespace TmMcp {
             || name == "GetLayerTree"
             || name == "FindMenuButtons"
             || name == "FindControlsByClass"
-            || name == "FindControlsByLabel";
+            || name == "FindControlsByLabel"
+            || name == "GetLayerXml";
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
@@ -823,6 +824,7 @@ namespace TmMcp {
         if (name == "FindMenuButtons") return FindMenuButtons(input);
         if (name == "FindControlsByClass") return FindControlsByClass(input);
         if (name == "FindControlsByLabel") return FindControlsByLabel(input);
+        if (name == "GetLayerXml") return GetLayerXml(input);
         return null;
     }
 
@@ -901,6 +903,7 @@ namespace TmMcp {
         tools.Add(MakeTool("FindMenuButtons", "High-level: flat list of visible main-menu navigation buttons across all visible UI layers. Default classFilter is \"component-navigation-item\" (Nadeo menu button pattern). For each match, includes layerIndex, layerName, controlId, classes, absPos/size, raw label (|PageName|Text), and stripped displayText (Text).", '{"type":"object","properties":{"onlyVisible":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxResults":{"type":"integer"},"className":{"type":"string"}}}'));
         tools.Add(MakeTool("FindControlsByClass", "Search across main-menu UI layers for controls whose class list matches classPattern. substring=true (default) does Contains match, substring=false requires exact equality. Returns same enriched entries as FindMenuButtons (includes child label text if present).", '{"type":"object","properties":{"classPattern":{"type":"string"},"substring":{"type":"boolean"},"onlyVisible":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxResults":{"type":"integer"}},"required":["classPattern"]}'));
         tools.Add(MakeTool("FindControlsByLabel", "Search across main-menu UI layers for Label controls whose Value contains the given substring. Case-insensitive by default. Returns layerIndex, layerName, controlId, raw label, displayText (translation prefix stripped), classes, absPos, size.", '{"type":"object","properties":{"substring":{"type":"string"},"caseInsensitive":{"type":"boolean"},"onlyVisible":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxResults":{"type":"integer"}},"required":["substring"]}'));
+        tools.Add(MakeTool("GetLayerXml", "Read a slice of a UI layer's Manialink XML, or substring-grep it. Either {layerIndex, find, context?=120, maxHits?=20, caseInsensitive?=false} to grep, or {layerIndex, offset?=0, length?=2048} to slice. Use instead of dumping the whole 10-50 KB XML for a layer.", '{"type":"object","properties":{"layerIndex":{"type":"integer"},"find":{"type":"string"},"context":{"type":"integer"},"maxHits":{"type":"integer"},"caseInsensitive":{"type":"boolean"},"offset":{"type":"integer"},"length":{"type":"integer"}},"required":["layerIndex"]}'));
         return tools;
     }
 
@@ -982,22 +985,39 @@ namespace TmMcp {
     }
 
     Json::Value@ ListKnownMenuRoutes(Json::Value &in input) {
-        // Hardcoded set from tm-menu-page-manager (src/Main.as). These are confirmed
-        // route strings accepted by the main-menu Router_Push event. There is no
-        // public API to enumerate the router's actual route table; use this as a
-        // practical starting catalogue.
+        // Routes are hierarchical: subpages use their FULL path (e.g.
+        // "/create/mapeditorsettings"), not the leaf name alone. The bare
+        // leaf form generally renders a blank Page_LoadingScreen. See
+        // research/MenuManialinkLayers.md for how these were mined from
+        // each parent page's Select() switch via GetLayerXml.
         Json::Value output = Json::Object();
-        Json::Value routes = Json::Array();
-        string[] known = {
-            "/home", "/live", "/solo", "/local", "/arcade",
-            "/server-review", "/play-map", "/local-multi", "/against-replay",
-            "/totdchanneldisplay", "/matchmakingmainpage",
-            "/clubs", "/create", "/mapeditorsettings", "/garage",
-            "/edit-replay", "/submittedmaps", "/empty"
+        Json::Value topLevel = Json::Array();
+        string[] top = {
+            "/home", "/solo", "/live", "/local", "/arcade",
+            "/clubs", "/create", "/settings", "/profile",
+            "/play-map", "/against-replay", "/press-start",
+            "/empty"
         };
-        for (uint i = 0; i < known.Length; i++) routes.Add(known[i]);
-        output["routes"] = routes;
-        output["note"] = "Not dynamic. Sourced from tm-menu-page-manager; some routes may reject push or require specific 'extra' payloads.";
+        for (uint i = 0; i < top.Length; i++) topLevel.Add(top[i]);
+        output["topLevel"] = topLevel;
+
+        Json::Value sub = Json::Array();
+        string[] subpages = {
+            // Verified on 2026-04-20 live TM session.
+            "/create/mapeditorsettings",
+            "/create/garage",
+            "/create/edit-replay",
+            "/create/server-review",
+            "/create/prestige-recap",
+            "/solo/library-clubcampaigns",
+            "/solo/monthlycampaigndisplay",
+            "/solo/campaigndisplay",
+            "/solo/weekly-tracks"
+        };
+        for (uint i = 0; i < subpages.Length; i++) sub.Add(subpages[i]);
+        output["subpages"] = sub;
+
+        output["note"] = "Pushing a bare leaf (e.g. '/mapeditorsettings') renders blank. Use the full path ('/create/mapeditorsettings'). Some subpages (e.g. /solo/campaigndisplay) expect structured 'extra' payloads; without them the page may render empty.";
         return MakeSuccess(output);
     }
 
