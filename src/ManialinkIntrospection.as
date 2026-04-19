@@ -580,6 +580,23 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
+    // Returns the LocalPage of the named Page_* layer, or null.
+    CGameManialinkPage@ _GetLayerPage(const string &in layerName) {
+        auto menuApp = _GetMenuApp();
+        if (menuApp is null) return null;
+        uint nb = 0; try { nb = menuApp.UILayers.Length; } catch { nb = 0; }
+        for (uint i = 0; i < nb; i++) {
+            CGameUILayer@ layer = null;
+            try { @layer = menuApp.UILayers[i]; } catch { @layer = null; }
+            if (layer is null) continue;
+            if (_ExtractManialinkName(layer) != layerName) continue;
+            CGameManialinkPage@ page = null;
+            try { @page = layer.LocalPage; } catch { @page = null; }
+            return page;
+        }
+        return null;
+    }
+
     // Single-call tool: navigate Page_MapEditorSettings click-chain and launch the editor.
     // Drives the full 7-step button sequence (SetMenuPage + 6 clicks) for a chosen
     // mapType / environment / mood / inputDevice / difficulty combo.
@@ -716,12 +733,37 @@ namespace TmMcp {
             string expectFrame = expectedFrameIds[si];
             bool isFinal = expectFrame.Length == 0;
 
-            // Click the button. Short-circuit on protocol-level resolution
-            // failures (controlId not found, nav-zone missing) so the caller
-            // sees the real error instead of a generic "frame not visible"
-            // timeout downstream.
+            // Resolve the button's indexPath on Page_MapEditorSettings so the
+            // click is scoped to that layer. Passing controlId alone falls
+            // through to a global DFS that can hit Page_HomePage's button-create
+            // first (different template — CMGame_ExpendableButton vs the
+            // Trackmania_Button we want here).
+            CGameManialinkPage@ pmesPage = _GetLayerPage("Page_MapEditorSettings");
+            CGameManialinkFrame@ pmesMain = null;
+            if (pmesPage !is null) {
+                try { @pmesMain = pmesPage.MainFrame; } catch { @pmesMain = null; }
+            }
+            string btnIdxPath;
+            bool btnFound = pmesMain !is null && _FindControlIndexPath(pmesMain, btnId, btnIdxPath);
+            if (!btnFound) {
+                Json::Value step = Json::Object();
+                step["name"] = btnId + " click";
+                step["observed"] = false;
+                step["ms"] = int(Time::Now - startMs);
+                step["error"] = "button not found on Page_MapEditorSettings";
+                steps.Add(step);
+                Json::Value rv = Json::Object();
+                rv["ok"] = false;
+                rv["failedAt"] = btnId + " click";
+                rv["expectedFrame"] = expectFrame;
+                rv["lastObserved"] = "button '" + btnId + "' not present on Page_MapEditorSettings (expected frame from previous step may not have rendered yet)";
+                rv["elapsedMs"] = int(Time::Now - startMs);
+                rv["steps"] = steps;
+                return MakeSuccess(rv);
+            }
             Json::Value clickInput = Json::Object();
-            clickInput["controlId"] = btnId;
+            clickInput["indexPath"] = btnIdxPath;
+            clickInput["layerName"] = "Page_MapEditorSettings";
             auto clickRes = ClickMenuButton(clickInput);
             if (clickRes !is null && clickRes.HasKey("success") && !bool(clickRes["success"])) {
                 string clickErr = "ClickMenuButton failed";
@@ -781,16 +823,20 @@ namespace TmMcp {
                 return MakeSuccess(rv);
 
             } else {
-                // Poll for expectFrame to become visible (max 1500ms, 100ms interval)
+                // Poll for expectFrame to become visible (max 1500ms, 100ms interval).
+                // Scoped to Page_MapEditorSettings — global DFS would return a
+                // non-visible match on Page_HomePage and never find the right one.
                 bool frameVisible = false;
                 for (int w = 0; w < 15; w++) {
                     sleep(100);
-                    auto ctrl = _FindControlById(expectFrame);
-                    if (ctrl !is null) {
-                        bool vis = false;
-                        try { vis = bool(ctrl.Visible); } catch { vis = false; }
-                        if (vis) { frameVisible = true; break; }
-                    }
+                    CGameManialinkPage@ fpage = _GetLayerPage("Page_MapEditorSettings");
+                    if (fpage is null) continue;
+                    CGameManialinkControl@ ctrl = null;
+                    try { @ctrl = fpage.GetFirstChild(expectFrame); } catch { @ctrl = null; }
+                    if (ctrl is null) continue;
+                    bool vis = false;
+                    try { vis = bool(ctrl.Visible); } catch { vis = false; }
+                    if (vis) { frameVisible = true; break; }
                 }
                 Json::Value step = Json::Object();
                 step["name"] = btnId + " -> " + expectFrame;
