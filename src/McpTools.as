@@ -992,8 +992,17 @@ namespace TmMcp {
             ? bool(input["allowPlaygroundLaunch"]) : false;
         auto app = cast<CGameManiaPlanet>(GetApp());
         if (app is null) return MakeError("app not available");
-        if (app.Switcher.ModuleStack.Length == 0 || cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0]) is null) {
-            return MakeError("not in menu; current module is not CTrackManiaMenus");
+        if (app.Switcher.ModuleStack.Length == 0) {
+            return MakeError("not in menu; Switcher.ModuleStack is empty");
+        }
+        if (cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0]) is null) {
+            auto mod = app.Switcher.ModuleStack[0];
+            string modTy = "<unknown>";
+            if (mod !is null) {
+                auto ty = Reflection::TypeOf(mod);
+                if (ty !is null) modTy = ty.Name;
+            }
+            return MakeError("not in menu; current module is " + modTy + " (expected CTrackManiaMenus)");
         }
         if (_IsDangerousMenuRoute(route) && !allowPlaygroundLaunch) {
             return MakeError("route '" + route + "' can auto-launch a playground (observed live: silently loaded active campaign map). Pass allowPlaygroundLaunch:true to confirm. Use GetMode to detect and BackToMainMenu to unwind.");
