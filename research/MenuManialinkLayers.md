@@ -84,6 +84,18 @@ These are the same APIs our `EditNewMap` / (future) `EditMap` MCP tools wrap via
 
 To fake a real click on `button-create` we'd need to inject a `ComponentNavigation_ComponentNavigation::C_EventType_NavigateMouse` event with `Mouse=MouseClick` and `To="button-create"` into the page's own event queue (not the top-level menu module). MLHook exposes `Queue_Menu_SendCustomEvent` (top-level ScriptHandler only) and `InjectManialinkToMenu` (arbitrary page injection), but no "queue event to a specific Page_* layer" primitive. `GetPendingEvents` on the page drains from its own internal pool populated by the runtime on real input. Implication: driving `Select` without the Router_Push shortcut probably requires either (a) injecting a Manialink bridge page that calls the title control API directly (same effect as our existing `EditNewMap` tool), or (b) simulating host-level mouse input. Both strictly heavier than the current `SetMenuPage + EditNewMap` combo.
 
+### Openplanet.h discovery (2026-04-20, post-crash scoping)
+
+`CGameManialinkNavigationScriptHandler::ApplyInput(CGameManialinkFrame*, EMenuNavAction)` (Openplanet.h:25207) is the clean click primitive — calling it with `Action=Select` (value 4) on the focused button's frame fires the same path a keyboard "A" press would. The page handler receives a `CEventMenuNavigationOnAction` with `IsMouse=false` and `Input=Select`, and the page's own `ComponentNavigation` normaliser would call `Select(State, Event.To)`. Same terminal action as a click.
+
+Open problem: `CGameManialinkNavigationScriptHandler` has a public constructor but NO field on `CGameManialinkPage` / `CGameManialinkScriptHandler` / any CGameUILayer exposes a handle back to the active instance. Per-page navigation handler reach is presumably internal to the engine's MLUI runtime. To actually invoke `ApplyInput` we'd need either (a) a memory-offset route to the handler off the Page/ScriptHandler (Ghidra exercise), or (b) to construct our own handler and somehow wire it into the event pump (likely pool-invariant-breaking, same risk shape as option D in item-skin saga).
+
+Related API on `CGameManialinkScriptHandler` worth a probe: `TriggerPageAction(string ActionString)` (line 4473). Unexplored — if pages register actions via `<action>` decls that shortcut to `Select`, this could be the zero-risk path.
+
+The plain `CGameManialinkControl::Focus()` we already wire in `FocusMenuControl` is insufficient: it changes focus but doesn't fire the Select event. Event-queue direct injection into `CGameManialinkScriptHandler::PendingEvents` (line 4452) would work but all `CGameManialinkScriptEvent` fields are `const` in script, requiring raw offset writes — Ghidra pass needed for field offsets and refcount/lifecycle rules.
+
+**Current recommendation**: unless click-synthesis is a hard requirement, compose `SetMenuPage /create/mapeditorsettings` + `EditNewMap {Environment, Decoration, MapType}` — same title-control call the button would make.
+
 ## Routes with side-effects (DANGEROUS — may leave Race mode)
 
 Not every route just swaps a `Page_*` layer. Some Router pushes kick off navigation flows that cascade into a playground launch:
