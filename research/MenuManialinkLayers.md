@@ -71,6 +71,18 @@ This means `Select` is an ORDINARY SCRIPT FUNCTION in the page's Manialink, not 
 
 For the programmatic-navigation use case, the `Router_Push` path is sufficient.
 
+## Routes with side-effects (DANGEROUS — may leave Race mode)
+
+Not every route just swaps a `Page_*` layer. Some Router pushes kick off navigation flows that cascade into a playground launch:
+
+| Route | Observed side effect |
+|-------|----------------------|
+| `/solo/campaigndisplay` | **Auto-loaded the current campaign's active map** (`Spring 2026 - 01`) and transitioned into Race/PlaygroundScript mode. The Page_CampaignDisplay layer became visible briefly before cascading into the race. Observed 2026-04-20 live session. |
+
+Rule of thumb: routes that present a *single* selected thing (a campaign, a replay, a specific match) will likely auto-enter that thing if their content state is already populated. Routes that show a *list* or *settings form* (like `/create/mapeditorsettings`, `/create/garage`) are safe.
+
+Use `GetMode` (returns `{mode, mapName?, mapUid?, selfHosted?}`) to detect a cascade. Use `BackToMainMenu` to unwind.
+
 ## Route map discovered from XML (Page_Create, layer index depends on session)
 
 Page_Create (navgroup "navgroup-page-create"):
