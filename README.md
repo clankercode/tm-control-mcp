@@ -163,6 +163,11 @@ and meters. Coord bounds are `[0,0,0]` through `size - 1`, with
 `maxExclusive=size`. Meter bounds use 32m X/Z units, 8m Y units, and the usual
 64m base-height offset; on a 48x40x48 map the Y max-exclusive is 256m.
 
+`GetMapEnvironment` is a read-only vista/mood metadata probe. It reports the
+challenge collection, decoration, map type/style, vehicle collection text,
+editor mood time fields, and `PluginMapType` collection unit dimensions. Use it
+before adding any map-type/style or mood mutation tooling.
+
 `SaveMapAs` saves the current editor map to a named `.Map.Gbx` under the user
 `Maps` folder. Pass either `fileName` relative to `Maps`, or `name` plus
 `folder`; for example `{"name":"stress-01","folder":"MCP","overwrite":true}`

@@ -802,6 +802,7 @@ namespace TmMcp {
         return name == "GetMode"
             || name == "OpenMapInEditor"
             || name == "GetMapInfo"
+            || name == "GetMapEnvironment"
             || name == "SaveMapAs"
             || name == "GetDialog"
             || name == "RespondDialog"
@@ -857,6 +858,7 @@ namespace TmMcp {
         if (name == "GetMode") return GetMode(input);
         if (name == "OpenMapInEditor") return OpenMapInEditor(input);
         if (name == "GetMapInfo") return GetMapInfo(input);
+        if (name == "GetMapEnvironment") return GetMapEnvironment(input);
         if (name == "SaveMapAs") return SaveMapAs(input);
         if (name == "GetDialog") return GetDialog(input);
         if (name == "RespondDialog") return RespondDialog(input);
@@ -914,6 +916,7 @@ namespace TmMcp {
         tools.Add(MakeTool("GetMode", "Get current game mode.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("OpenMapInEditor", "Open a local map file in the editor.", '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}'));
         tools.Add(MakeTool("GetMapInfo", "Get current editor map name and counts.", '{"type":"object","properties":{}}'));
+        tools.Add(MakeTool("GetMapEnvironment", "Read map collection, decoration, map type/style, mood, and collection-unit metadata.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx.", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}}}'));
         tools.Add(MakeTool("GetDialog", "Inspect Trackmania's current BasicDialogs state and active dialog frame.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("RespondDialog", "Respond to Trackmania BasicDialogs. action: yes, no, cancel, ok, validate, hide.", '{"type":"object","properties":{"action":{"type":"string"}},"required":["action"]}'));
