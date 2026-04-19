@@ -323,6 +323,278 @@ namespace TmMcp {
         }
     }
 
+    // Exact-match class test.
+    bool _ControlHasClass(CGameManialinkControl@ ctrl, const string &in className) {
+        if (ctrl is null) return false;
+        try {
+            uint nb = ctrl.ControlClasses.Length;
+            for (uint i = 0; i < nb; i++) {
+                if (string(ctrl.ControlClasses[i]) == className) return true;
+            }
+        } catch { /* swallow */ }
+        return false;
+    }
+
+    bool _ControlClassMatches(CGameManialinkControl@ ctrl, const string &in needle, bool substring) {
+        if (ctrl is null) return false;
+        try {
+            uint nb = ctrl.ControlClasses.Length;
+            for (uint i = 0; i < nb; i++) {
+                string cls = string(ctrl.ControlClasses[i]);
+                if (substring) {
+                    if (cls.Contains(needle)) return true;
+                } else {
+                    if (cls == needle) return true;
+                }
+            }
+        } catch { /* swallow */ }
+        return false;
+    }
+
+    string _ReadLabelValue(CGameManialinkControl@ ctrl) {
+        if (ctrl is null) return "";
+        auto lbl = cast<CGameManialinkLabel>(ctrl);
+        if (lbl is null) return "";
+        try {
+            auto ty = Reflection::TypeOf(lbl);
+            if (ty is null) return "";
+            auto m = ty.GetMember("Value");
+            if (m is null || m.Offset >= 0xFFFF) return "";
+            return Dev::GetOffsetString(lbl, m.Offset);
+        } catch { /* swallow */ }
+        return "";
+    }
+
+    // Depth-first search for the first non-empty Label descendant text.
+    // Used to pull the visible text out of a nav button's frame subtree.
+    string _FindFirstLabelValue(CGameManialinkControl@ root, int maxDepth) {
+        if (root is null || maxDepth < 0) return "";
+        string v = _ReadLabelValue(root);
+        if (v.Length > 0) return v;
+        auto frame = cast<CGameManialinkFrame>(root);
+        if (frame is null) return "";
+        uint nb = 0;
+        try { nb = frame.Controls.Length; } catch { nb = 0; }
+        for (uint i = 0; i < nb; i++) {
+            CGameManialinkControl@ child = null;
+            try { @child = frame.Controls[i]; } catch { @child = null; }
+            if (child is null) continue;
+            string childVal = _FindFirstLabelValue(child, maxDepth - 1);
+            if (childVal.Length > 0) return childVal;
+        }
+        return "";
+    }
+
+    // Nadeo menu labels are translation keys that use two control markers:
+    // U+0091 (fallback delimiter) and U+0092 (translation-key marker). In
+    // UTF-8 these encode as the 2-byte sequences C2 91 and C2 92. Observed:
+    //     \u0092|Prefix|Text                       (marker + keyed lookup)
+    //     \u0091<fallback>\u0091\u0092|Prefix|Text (fallback + keyed lookup)
+    //     \u0092<plain text>                       (marker + direct text, no key)
+    //     |Prefix|Text                             (rare, no marker)
+    //     Plain text                               (no translation at all)
+    // Strip to just the trailing Text segment.
+    string _StripTranslationPrefix(const string &in raw) {
+        if (raw.Length == 0) return raw;
+        string s = raw;
+        string U91 = "\xC2\x91";
+        string U92 = "\xC2\x92";
+        // Drop \u0091<fallback>\u0091 prefix.
+        if (s.Length >= 2 && s.SubStr(0, 2) == U91) {
+            string rest = s.SubStr(2);
+            int closeFall = rest.IndexOf(U91);
+            if (closeFall >= 0) s = rest.SubStr(uint(closeFall) + 2);
+        }
+        // Drop leading \u0092 marker.
+        if (s.Length >= 2 && s.SubStr(0, 2) == U92) s = s.SubStr(2);
+        // If a |Key|Text structure remains, return Text.
+        if (s.Length > 0 && s.SubStr(0, 1) == "|") {
+            string rest = s.SubStr(1);
+            int close = rest.IndexOf("|");
+            if (close >= 0) return rest.SubStr(uint(close) + 1);
+        }
+        return s;
+    }
+
+    class _Counter { int n = 0; }
+
+    void _CollectMatchingByClass(CGameManialinkControl@ ctrl, const string &in path, int depth, int maxDepth, bool onlyVisible, const string &in classNeedle, bool classSubstring, Json::Value &inout results, _Counter@ matchCount, int maxResults) {
+        if (ctrl is null) return;
+        if (depth > maxDepth) return;
+        if (matchCount.n >= maxResults) return;
+
+        bool visible = true;
+        try { visible = bool(ctrl.Visible); } catch { visible = true; }
+        if (onlyVisible && !visible) return;
+
+        if (_ControlClassMatches(ctrl, classNeedle, classSubstring)) {
+            Json::Value entry = _ControlToJson(ctrl, path);
+            string rawLabel = _FindFirstLabelValue(ctrl, 6);
+            if (rawLabel.Length > 0) {
+                entry["label"] = rawLabel;
+                string txt = _StripTranslationPrefix(rawLabel);
+                if (txt != rawLabel) entry["displayText"] = txt;
+            }
+            results.Add(entry);
+            matchCount.n++;
+            if (matchCount.n >= maxResults) return;
+        }
+
+        auto frame = cast<CGameManialinkFrame>(ctrl);
+        if (frame is null) return;
+        uint nb = 0;
+        try { nb = frame.Controls.Length; } catch { nb = 0; }
+        for (uint i = 0; i < nb; i++) {
+            CGameManialinkControl@ child = null;
+            try { @child = frame.Controls[i]; } catch { @child = null; }
+            if (child is null) continue;
+            string childId = "";
+            try { childId = string(child.ControlId); } catch { childId = ""; }
+            string childPath = path + "/" + (childId.Length > 0 ? childId : ("#" + i));
+            _CollectMatchingByClass(child, childPath, depth + 1, maxDepth, onlyVisible, classNeedle, classSubstring, results, matchCount, maxResults);
+        }
+    }
+
+    Json::Value@ _FindControlsAcrossLayers(const string &in classNeedle, bool classSubstring, bool onlyVisibleLayers, bool onlyVisibleControls, int maxDepth, int maxResults) {
+        auto menuApp = _GetMenuApp();
+        if (menuApp is null) return MakeError("menu mania app not available (not in menu?)");
+        Json::Value output = Json::Object();
+        Json::Value arr = Json::Array();
+        uint nb = 0;
+        try { nb = menuApp.UILayers.Length; } catch { nb = 0; }
+        _Counter@ matchCount = _Counter();
+        for (uint li = 0; li < nb; li++) {
+            if (matchCount.n >= maxResults) break;
+            CGameUILayer@ layer = null;
+            try { @layer = menuApp.UILayers[li]; } catch { @layer = null; }
+            if (layer is null) continue;
+            if (onlyVisibleLayers) {
+                bool vis = true;
+                try { vis = bool(layer.IsVisible); } catch { vis = true; }
+                if (!vis) continue;
+            }
+            CGameManialinkPage@ page = null;
+            try { @page = layer.LocalPage; } catch { @page = null; }
+            if (page is null) continue;
+            CGameManialinkFrame@ mainFrame = null;
+            try { @mainFrame = page.MainFrame; } catch { @mainFrame = null; }
+            if (mainFrame is null) continue;
+
+            string layerName = _ExtractManialinkName(layer);
+            Json::Value layerResults = Json::Array();
+            _CollectMatchingByClass(mainFrame, "L" + li, 0, maxDepth, onlyVisibleControls, classNeedle, classSubstring, layerResults, matchCount, maxResults);
+            for (uint k = 0; k < layerResults.Length; k++) {
+                Json::Value entry = layerResults[k];
+                entry["layerIndex"] = int(li);
+                if (layerName.Length > 0) entry["layerName"] = layerName;
+                arr.Add(entry);
+            }
+        }
+        output["matches"] = arr;
+        output["count"] = int(arr.Length);
+        if (matchCount.n >= maxResults) output["truncated"] = true;
+        return MakeSuccess(output);
+    }
+
+    Json::Value@ FindMenuButtons(Json::Value &in input) {
+        bool onlyVisible = input.HasKey("onlyVisible") ? bool(input["onlyVisible"]) : true;
+        int maxDepth = input.HasKey("maxDepth") ? int(input["maxDepth"]) : 10;
+        int maxResults = input.HasKey("maxResults") ? int(input["maxResults"]) : 100;
+        string classNeedle = input.HasKey("className") ? string(input["className"]) : "component-navigation-item";
+        return _FindControlsAcrossLayers(classNeedle, false, onlyVisible, onlyVisible, maxDepth, maxResults);
+    }
+
+    Json::Value@ FindControlsByClass(Json::Value &in input) {
+        if (!input.HasKey("classPattern")) return MakeError("missing classPattern");
+        string pattern = string(input["classPattern"]);
+        bool substring = input.HasKey("substring") ? bool(input["substring"]) : true;
+        bool onlyVisible = input.HasKey("onlyVisible") ? bool(input["onlyVisible"]) : true;
+        int maxDepth = input.HasKey("maxDepth") ? int(input["maxDepth"]) : 10;
+        int maxResults = input.HasKey("maxResults") ? int(input["maxResults"]) : 100;
+        return _FindControlsAcrossLayers(pattern, substring, onlyVisible, onlyVisible, maxDepth, maxResults);
+    }
+
+    void _WalkForLabel(CGameManialinkControl@ ctrl, const string &in path, int depth, int maxDepth, bool onlyVisible, const string &in needleCmp, bool caseInsensitive, Json::Value &inout results, _Counter@ matchCount, int maxResults, int layerIndex, const string &in layerName) {
+        if (ctrl is null) return;
+        if (depth > maxDepth) return;
+        if (matchCount.n >= maxResults) return;
+        bool visible = true;
+        try { visible = bool(ctrl.Visible); } catch { visible = true; }
+        if (onlyVisible && !visible) return;
+
+        string val = _ReadLabelValue(ctrl);
+        if (val.Length > 0) {
+            string cmp = caseInsensitive ? val.ToLower() : val;
+            if (cmp.Contains(needleCmp)) {
+                Json::Value entry = _ControlToJson(ctrl, path);
+                entry["label"] = val;
+                string stripped = _StripTranslationPrefix(val);
+                if (stripped != val) entry["displayText"] = stripped;
+                entry["layerIndex"] = layerIndex;
+                if (layerName.Length > 0) entry["layerName"] = layerName;
+                results.Add(entry);
+                matchCount.n++;
+                if (matchCount.n >= maxResults) return;
+            }
+        }
+
+        auto frame = cast<CGameManialinkFrame>(ctrl);
+        if (frame is null) return;
+        uint nb = 0;
+        try { nb = frame.Controls.Length; } catch { nb = 0; }
+        for (uint i = 0; i < nb; i++) {
+            CGameManialinkControl@ child = null;
+            try { @child = frame.Controls[i]; } catch { @child = null; }
+            if (child is null) continue;
+            string childId = "";
+            try { childId = string(child.ControlId); } catch { childId = ""; }
+            string childPath = path + "/" + (childId.Length > 0 ? childId : ("#" + i));
+            _WalkForLabel(child, childPath, depth + 1, maxDepth, onlyVisible, needleCmp, caseInsensitive, results, matchCount, maxResults, layerIndex, layerName);
+        }
+    }
+
+    Json::Value@ FindControlsByLabel(Json::Value &in input) {
+        if (!input.HasKey("substring")) return MakeError("missing substring");
+        string needle = string(input["substring"]);
+        bool caseInsensitive = input.HasKey("caseInsensitive") ? bool(input["caseInsensitive"]) : true;
+        bool onlyVisible = input.HasKey("onlyVisible") ? bool(input["onlyVisible"]) : true;
+        int maxDepth = input.HasKey("maxDepth") ? int(input["maxDepth"]) : 12;
+        int maxResults = input.HasKey("maxResults") ? int(input["maxResults"]) : 100;
+        string needleCmp = caseInsensitive ? needle.ToLower() : needle;
+
+        auto menuApp = _GetMenuApp();
+        if (menuApp is null) return MakeError("menu mania app not available (not in menu?)");
+        Json::Value output = Json::Object();
+        Json::Value arr = Json::Array();
+        uint nb = 0;
+        try { nb = menuApp.UILayers.Length; } catch { nb = 0; }
+        _Counter@ matchCount = _Counter();
+        for (uint li = 0; li < nb; li++) {
+            if (matchCount.n >= maxResults) break;
+            CGameUILayer@ layer = null;
+            try { @layer = menuApp.UILayers[li]; } catch { @layer = null; }
+            if (layer is null) continue;
+            if (onlyVisible) {
+                bool vis = true;
+                try { vis = bool(layer.IsVisible); } catch { vis = true; }
+                if (!vis) continue;
+            }
+            CGameManialinkPage@ page = null;
+            try { @page = layer.LocalPage; } catch { @page = null; }
+            if (page is null) continue;
+            CGameManialinkFrame@ mainFrame = null;
+            try { @mainFrame = page.MainFrame; } catch { @mainFrame = null; }
+            if (mainFrame is null) continue;
+
+            string layerName = _ExtractManialinkName(layer);
+            _WalkForLabel(mainFrame, "L" + li, 0, maxDepth, onlyVisible, needleCmp, caseInsensitive, arr, matchCount, maxResults, int(li), layerName);
+        }
+        output["matches"] = arr;
+        output["count"] = int(arr.Length);
+        if (matchCount.n >= maxResults) output["truncated"] = true;
+        return MakeSuccess(output);
+    }
+
     Json::Value@ ListMenuManialinkControls(Json::Value &in input) {
         int maxDepth = input.HasKey("maxDepth") ? int(input["maxDepth"]) : 8;
         bool onlyWithId = input.HasKey("onlyWithId") ? bool(input["onlyWithId"]) : true;

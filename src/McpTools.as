@@ -743,7 +743,10 @@ namespace TmMcp {
             || name == "ListMenuManialinkControls"
             || name == "FocusMenuControl"
             || name == "GetUILayers"
-            || name == "GetLayerTree";
+            || name == "GetLayerTree"
+            || name == "FindMenuButtons"
+            || name == "FindControlsByClass"
+            || name == "FindControlsByLabel";
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
@@ -817,6 +820,9 @@ namespace TmMcp {
         if (name == "FocusMenuControl") return FocusMenuControl(input);
         if (name == "GetUILayers") return GetUILayers(input);
         if (name == "GetLayerTree") return GetLayerTree(input);
+        if (name == "FindMenuButtons") return FindMenuButtons(input);
+        if (name == "FindControlsByClass") return FindControlsByClass(input);
+        if (name == "FindControlsByLabel") return FindControlsByLabel(input);
         return null;
     }
 
@@ -892,6 +898,9 @@ namespace TmMcp {
         tools.Add(MakeTool("FocusMenuControl", "Find a menu control by ControlId across all UI layers and call Focus() on it. Probe step before trying synthetic click events. Does not perform click.", '{"type":"object","properties":{"controlId":{"type":"string"}},"required":["controlId"]}'));
         tools.Add(MakeTool("GetUILayers", "Lightweight: list main-menu UI layers with index, type, visibility, attachId, pageUrl, and (default) the extracted <manialink name> attribute. Does NOT traverse the control tree. Use GetLayerTree for per-layer introspection. Use includeXmlSize=true to also return the XML length (avoids returning the full XML).", '{"type":"object","properties":{"includeName":{"type":"boolean"},"includeXmlSize":{"type":"boolean"},"onlyVisible":{"type":"boolean"}}}'));
         tools.Add(MakeTool("GetLayerTree", "Walk the control tree of one UI layer (by layerIndex) with optional rootPath (slash-separated ControlIds). Returns controls starting at that point. Used with GetUILayers to drill in without dumping every layer.", '{"type":"object","properties":{"layerIndex":{"type":"integer"},"maxDepth":{"type":"integer"},"rootPath":{"type":"string"},"onlyWithId":{"type":"boolean"},"includeHidden":{"type":"boolean"},"maxResults":{"type":"integer"}},"required":["layerIndex"]}'));
+        tools.Add(MakeTool("FindMenuButtons", "High-level: flat list of visible main-menu navigation buttons across all visible UI layers. Default classFilter is \"component-navigation-item\" (Nadeo menu button pattern). For each match, includes layerIndex, layerName, controlId, classes, absPos/size, raw label (|PageName|Text), and stripped displayText (Text).", '{"type":"object","properties":{"onlyVisible":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxResults":{"type":"integer"},"className":{"type":"string"}}}'));
+        tools.Add(MakeTool("FindControlsByClass", "Search across main-menu UI layers for controls whose class list matches classPattern. substring=true (default) does Contains match, substring=false requires exact equality. Returns same enriched entries as FindMenuButtons (includes child label text if present).", '{"type":"object","properties":{"classPattern":{"type":"string"},"substring":{"type":"boolean"},"onlyVisible":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxResults":{"type":"integer"}},"required":["classPattern"]}'));
+        tools.Add(MakeTool("FindControlsByLabel", "Search across main-menu UI layers for Label controls whose Value contains the given substring. Case-insensitive by default. Returns layerIndex, layerName, controlId, raw label, displayText (translation prefix stripped), classes, absPos, size.", '{"type":"object","properties":{"substring":{"type":"string"},"caseInsensitive":{"type":"boolean"},"onlyVisible":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxResults":{"type":"integer"}},"required":["substring"]}'));
         return tools;
     }
 

@@ -52,10 +52,28 @@ Observed: `SetMenuPage /mapeditorsettings` → `GetUILayers onlyVisible=true` sh
 
 ## Introspection tools (tm-control-mcp)
 
+Low-level (drill-in):
 - `GetUILayers` — lightweight list: index, type, visibility, attachId, pageUrl, manialinkName, top-level children count. Default reads only the first 1 KB of ManialinkPageUtf8 per layer.
 - `GetLayerTree { layerIndex, rootPath?, maxDepth, onlyWithId }` — walk one layer's control tree starting at an optional path. Returns controlId, classes, type, visibility, absPos, size, labelValue, data attributes.
 - `ListMenuManialinkControls` — older alias that walks every layer. Kept for compatibility; prefer `GetUILayers` + `GetLayerTree` for scoped queries.
 - `FocusMenuControl { controlId }` — Focus() by id. Does NOT click; useful for discovery only.
+
+High-level (one-shot "find me the button"):
+- `FindMenuButtons { onlyVisible?, className? }` — flat list of all visible nav buttons across the whole menu. Default class filter is `component-navigation-item`. Each match includes `layerIndex`, `layerName`, `controlId`, `classes`, `absPos`, `size`, raw `label`, and translation-stripped `displayText`.
+- `FindControlsByClass { classPattern, substring?=true }` — substring or exact class match across all layers.
+- `FindControlsByLabel { substring, caseInsensitive?=true }` — search by localized label text; returns the inner Label controls.
+
+## Nadeo label translation-key format
+
+Labels embed UTF-8 C1 control markers: `U+0091` (`\xC2\x91`) and `U+0092` (`\xC2\x92`). Observed forms (see `_StripTranslationPrefix` in ManialinkIntrospection.as):
+
+| Raw form                                               | Meaning                          | Stripped         |
+|--------------------------------------------------------|----------------------------------|------------------|
+| `\u0092\|Prefix\|Text`                                 | marker + keyed lookup            | `Text`           |
+| `\u0091<fallback>\u0091\u0092\|Prefix\|Text`           | fallback + keyed lookup          | `Text`           |
+| `\u0092<plain text>`                                   | marker + direct text (no key)    | `<plain text>`   |
+| `\|Prefix\|Text`                                       | rare, no marker                  | `Text`           |
+| Plain text (e.g. `Ubisoft Connect`)                    | no translation                   | unchanged        |
 
 ## Follow-ups tried, still failing
 
