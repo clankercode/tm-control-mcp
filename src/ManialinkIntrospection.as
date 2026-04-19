@@ -444,6 +444,76 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
+    // Resolve a control by either `controlId` (global search) or
+    // `{layerIndex, indexPath}`/`{layerName, indexPath}` (direct walk). Returns
+    // null on failure; err is set with a human-readable reason when non-null.
+    CGameManialinkControl@ _ResolveControlFromInput(Json::Value &in input, string &out err) {
+        err = "";
+        if (input.HasKey("controlId")) {
+            string cid = string(input["controlId"]);
+            auto ctrl = _FindControlById(cid);
+            if (ctrl is null) { err = "control not found: " + cid; return null; }
+            return ctrl;
+        }
+        if (!input.HasKey("indexPath")) {
+            err = "missing controlId or indexPath";
+            return null;
+        }
+        string ipath = string(input["indexPath"]);
+        auto menuApp = _GetMenuApp();
+        if (menuApp is null) { err = "menu mania app not available"; return null; }
+        uint nb = 0;
+        try { nb = menuApp.UILayers.Length; } catch { nb = 0; }
+
+        CGameUILayer@ picked = null;
+        if (input.HasKey("layerIndex")) {
+            int li = int(input["layerIndex"]);
+            if (li < 0 || uint(li) >= nb) { err = "layerIndex out of range"; return null; }
+            try { @picked = menuApp.UILayers[uint(li)]; } catch { @picked = null; }
+        } else if (input.HasKey("layerName")) {
+            string want = string(input["layerName"]);
+            for (uint i = 0; i < nb; i++) {
+                CGameUILayer@ layer = null;
+                try { @layer = menuApp.UILayers[i]; } catch { @layer = null; }
+                if (layer is null) continue;
+                if (_ExtractManialinkName(layer) == want) { @picked = layer; break; }
+            }
+        } else {
+            err = "indexPath needs layerIndex or layerName";
+            return null;
+        }
+        if (picked is null) { err = "layer not found"; return null; }
+        CGameManialinkPage@ page = null;
+        try { @page = picked.LocalPage; } catch { @page = null; }
+        if (page is null) { err = "layer has no LocalPage"; return null; }
+        CGameManialinkFrame@ mainFrame = null;
+        try { @mainFrame = page.MainFrame; } catch { @mainFrame = null; }
+        if (mainFrame is null) { err = "layer page has no MainFrame"; return null; }
+        auto ctrl = _ResolveControlIndexPath(mainFrame, ipath);
+        if (ctrl is null) { err = "indexPath did not resolve"; return null; }
+        return ctrl;
+    }
+
+    Json::Value@ SetMenuControlVisible(Json::Value &in input) {
+        if (!input.HasKey("visible")) return MakeError("missing visible (bool)");
+        bool visible = bool(input["visible"]);
+        string err;
+        auto ctrl = _ResolveControlFromInput(input, err);
+        if (ctrl is null) return MakeError(err);
+        if (visible) {
+            try { ctrl.Show(); } catch { return MakeError("Show() threw: " + getExceptionInfo()); }
+        } else {
+            try { ctrl.Hide(); } catch { return MakeError("Hide() threw: " + getExceptionInfo()); }
+        }
+        Json::Value output = Json::Object();
+        try { output["controlId"] = string(ctrl.ControlId); } catch { /* swallow */ }
+        try { output["type"] = Reflection::TypeOf(ctrl).Name; } catch { /* swallow */ }
+        try { output["visible"] = bool(ctrl.Visible); } catch { /* swallow */ }
+        output["requested"] = visible;
+        output["note"] = "Calls Show()/Hide(). Note: game often re-renders the menu and may reset visibility on the next tick. Observe via GetUILayers or InspectMenuControl.";
+        return MakeSuccess(output);
+    }
+
     Json::Value _ControlToJson(CGameManialinkControl@ ctrl, const string &in path) {
         Json::Value obj = Json::Object();
         if (ctrl is null) {

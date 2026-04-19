@@ -756,7 +756,8 @@ namespace TmMcp {
             || name == "GetLayerXml"
             || name == "BackToMainMenu"
             || name == "ClickMenuButton"
-            || name == "InspectMenuControl";
+            || name == "InspectMenuControl"
+            || name == "SetMenuControlVisible";
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
@@ -838,6 +839,7 @@ namespace TmMcp {
         if (name == "BackToMainMenu") return BackToMainMenu(input);
         if (name == "ClickMenuButton") return ClickMenuButton(input);
         if (name == "InspectMenuControl") return InspectMenuControl(input);
+        if (name == "SetMenuControlVisible") return SetMenuControlVisible(input);
         return null;
     }
 
@@ -921,6 +923,7 @@ namespace TmMcp {
         tools.Add(MakeTool("BackToMainMenu", "Unwind out of whatever module the game is currently in (Editor, Race) and return to the main menu. Works from a live race, self-hosted solo, or the editor. Async — poll GetMode until mode=='Menu'.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("ClickMenuButton", "DISABLED — calling TriggerPageAction from Angelscript crashes openplanet.dll natively. Kept as a surfaced error so callers learn the constraint. Use SetMenuPage for nav routes; EditNewMap/BackToMainMenu for terminal actions.", '{"type":"object","properties":{"action":{"type":"string"},"controlId":{"type":"string"}}}'));
         tools.Add(MakeTool("InspectMenuControl", "Probe: resolve a ControlId on the active Page_* (or named layer) via LocalPage.GetFirstChild and MainFrame.GetFirstChild. Returns type, classes, visibility, position, plus two path encodings from MainFrame: 'path' is slash-joined child indexes (e.g. '3/0' = MainFrame.Controls[3].Controls[0]), 'idPath' is slash-joined ControlIds (e.g. 'frame-global/button-create'). Includes up to 32 children if the match is a frame. Read-only — safe to call from Angelscript.", '{"type":"object","properties":{"controlId":{"type":"string"},"layerName":{"type":"string"}},"required":["controlId"]}'));
+        tools.Add(MakeTool("SetMenuControlVisible", "Call Show()/Hide() on a menu control. Resolve either by {controlId} (global search) or {indexPath, layerIndex|layerName} (direct walk from MainFrame). visible=true calls Show; false calls Hide. Menu may re-render and reset visibility on the next tick — re-observe after to confirm. Works from Angelscript (unlike TriggerPageAction).", '{"type":"object","properties":{"controlId":{"type":"string"},"indexPath":{"type":"string"},"layerIndex":{"type":"integer"},"layerName":{"type":"string"},"visible":{"type":"boolean"}},"required":["visible"]}'));
         return tools;
     }
 
