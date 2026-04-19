@@ -220,16 +220,21 @@ namespace TmMcp {
         auto frame = bd.Dialogs is null ? null : bd.Dialogs.CurrentFrame;
         output["available"] = true;
         output["dialog"] = int(bd.Dialog);
+        output["dialogKind"] = bd.Dialog == CGameDialogs::EDialog::None ? "none"
+            : (bd.Dialog == CGameDialogs::EDialog::Message ? "message" : "wait");
         output["hasFrame"] = frame !is null;
         if (frame !is null) {
             output["frameIdName"] = frame.IdName;
         }
-        output["messageText"] = string(bd.Message_LabelText);
-        output["messageButtonText"] = string(bd.Message_ButtonText);
-        output["waitText"] = string(bd.WaitMessage_LabelText);
-        output["waitButtonText"] = string(bd.WaitMessage_ButtonText);
-        output["waitProgress"] = bd.WaitMessage_Progress;
-        output["waitShowAbortButton"] = bd.WaitMessage_ShowAbortButton;
+        if (bd.Dialog == CGameDialogs::EDialog::Message) {
+            output["messageText"] = string(bd.Message_LabelText);
+            output["messageButtonText"] = string(bd.Message_ButtonText);
+        } else if (bd.Dialog == CGameDialogs::EDialog::WaitMessage) {
+            output["waitText"] = string(bd.WaitMessage_LabelText);
+            output["waitButtonText"] = string(bd.WaitMessage_ButtonText);
+            output["waitProgress"] = bd.WaitMessage_Progress;
+            output["waitShowAbortButton"] = bd.WaitMessage_ShowAbortButton;
+        }
         return output;
     }
 
