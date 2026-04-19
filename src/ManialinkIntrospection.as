@@ -121,6 +121,134 @@ namespace TmMcp {
     // visible, so reading the visible Page_* list reports what actually
     // rendered. Caller decides how to interpret (multiple visible pages can
     // exist during transitions or for overlay pages like Page_Popup).
+    // DFS from `node` looking for the first descendant whose ControlId == target.
+    // Returns true when found; `outPath` is filled with the slash-joined ControlId
+    // chain from (but not including) the start node down to the match. Ids used in
+    // the path are each control's ControlId (anonymous controls appear as "").
+    bool _FindControlPath(CGameManialinkControl@ node, const string &in target, string &out outPath) {
+        if (node is null) return false;
+        string selfId = "";
+        try { selfId = string(node.ControlId); } catch { /* swallow */ }
+        if (selfId == target) { outPath = selfId; return true; }
+        auto frame = cast<CGameManialinkFrame>(node);
+        if (frame is null) return false;
+        uint n = 0;
+        try { n = frame.Controls.Length; } catch { n = 0; }
+        for (uint i = 0; i < n; i++) {
+            CGameManialinkControl@ c = null;
+            try { @c = frame.Controls[i]; } catch { @c = null; }
+            if (c is null) continue;
+            string subPath;
+            if (_FindControlPath(c, target, subPath)) {
+                outPath = selfId.Length > 0 ? (selfId + "/" + subPath) : subPath;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    Json::Value _ControlSnapshotJson(CGameManialinkControl@ ctrl) {
+        Json::Value o = Json::Object();
+        if (ctrl is null) { o["null"] = true; return o; }
+        try { o["controlId"] = string(ctrl.ControlId); } catch { /* swallow */ }
+        try { o["typeName"] = string(Reflection::TypeOf(ctrl).Name); } catch { /* swallow */ }
+        try { o["visible"] = bool(ctrl.Visible); } catch { /* swallow */ }
+        try { o["isFocused"] = bool(ctrl.IsFocused); } catch { /* swallow */ }
+        try {
+            Json::Value cls = Json::Array();
+            uint nc = ctrl.ControlClasses.Length;
+            for (uint i = 0; i < nc; i++) cls.Add(string(ctrl.ControlClasses[i]));
+            o["classes"] = cls;
+        } catch { /* swallow */ }
+        try {
+            Json::Value pos = Json::Array();
+            pos.Add(ctrl.AbsolutePosition.x);
+            pos.Add(ctrl.AbsolutePosition.y);
+            pos.Add(ctrl.AbsolutePosition.z);
+            o["absPos"] = pos;
+        } catch { /* swallow */ }
+        auto frame = cast<CGameManialinkFrame>(ctrl);
+        if (frame !is null) {
+            try { o["isFrame"] = true; } catch { /* swallow */ }
+            try { o["childCount"] = int(frame.Controls.Length); } catch { /* swallow */ }
+        }
+        return o;
+    }
+
+    Json::Value@ InspectMenuControl(Json::Value &in input) {
+        if (!input.HasKey("controlId")) return MakeError("missing controlId");
+        string controlId = string(input["controlId"]);
+        string layerName = input.HasKey("layerName") ? string(input["layerName"]) : "";
+        auto menuApp = _GetMenuApp();
+        if (menuApp is null) return MakeError("menu mania app not available (not in menu?)");
+
+        CGameUILayer@ pickedLayer = null;
+        int pickedIndex = -1;
+        string pickedName = "";
+        uint nb = 0;
+        try { nb = menuApp.UILayers.Length; } catch { nb = 0; }
+        for (uint i = 0; i < nb; i++) {
+            CGameUILayer@ layer = null;
+            try { @layer = menuApp.UILayers[i]; } catch { @layer = null; }
+            if (layer is null) continue;
+            bool vis = true;
+            try { vis = bool(layer.IsVisible); } catch { vis = true; }
+            if (!vis) continue;
+            string name = _ExtractManialinkName(layer);
+            if (name.Length < 5 || name.SubStr(0, 5) != "Page_") continue;
+            if (layerName.Length > 0 && name != layerName) continue;
+            @pickedLayer = layer;
+            pickedIndex = int(i);
+            pickedName = name;
+            if (layerName.Length > 0) break;
+        }
+        if (pickedLayer is null) return MakeError("no visible Page_* layer matched (layerName='" + layerName + "')");
+
+        CGameManialinkPage@ page = null;
+        try { @page = pickedLayer.LocalPage; } catch { @page = null; }
+        if (page is null) return MakeError("picked layer has no LocalPage");
+
+        CGameManialinkControl@ direct = null;
+        try { @direct = page.GetFirstChild(controlId); } catch { /* swallow */ }
+
+        CGameManialinkFrame@ mainFrame = null;
+        try { @mainFrame = page.MainFrame; } catch { @mainFrame = null; }
+        CGameManialinkControl@ viaFrame = null;
+        if (mainFrame !is null) {
+            try { @viaFrame = mainFrame.GetFirstChild(controlId); } catch { /* swallow */ }
+        }
+
+        Json::Value output = Json::Object();
+        output["layerIndex"] = pickedIndex;
+        output["layerName"] = pickedName;
+        output["controlId"] = controlId;
+        output["pageGetFirstChild"] = _ControlSnapshotJson(direct);
+        output["mainFrameGetFirstChild"] = _ControlSnapshotJson(viaFrame);
+        if (mainFrame !is null) {
+            string foundPath;
+            bool pathFound = _FindControlPath(mainFrame, controlId, foundPath);
+            output["pathFound"] = pathFound;
+            if (pathFound) output["path"] = foundPath;
+        }
+        auto picked = direct !is null ? direct : viaFrame;
+        if (picked !is null) {
+            auto frame = cast<CGameManialinkFrame>(picked);
+            if (frame !is null) {
+                Json::Value kids = Json::Array();
+                uint nk = 0;
+                try { nk = frame.Controls.Length; } catch { nk = 0; }
+                for (uint i = 0; i < nk && i < 32; i++) {
+                    CGameManialinkControl@ c = null;
+                    try { @c = frame.Controls[i]; } catch { @c = null; }
+                    kids.Add(_ControlSnapshotJson(c));
+                }
+                output["children"] = kids;
+            }
+        }
+        output["note"] = "Probe: calls page.GetFirstChild(controlId) and mainFrame.GetFirstChild(controlId). Both should return the same node if present. Child list limited to 32.";
+        return MakeSuccess(output);
+    }
+
     Json::Value@ GetActiveMenuPages(Json::Value &in input) {
         auto menuApp = _GetMenuApp();
         if (menuApp is null) return MakeError("menu mania app not available (not in menu?)");

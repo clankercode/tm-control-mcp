@@ -755,7 +755,8 @@ namespace TmMcp {
             || name == "FindControlsByLabel"
             || name == "GetLayerXml"
             || name == "BackToMainMenu"
-            || name == "ClickMenuButton";
+            || name == "ClickMenuButton"
+            || name == "InspectMenuControl";
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
@@ -836,6 +837,7 @@ namespace TmMcp {
         if (name == "GetLayerXml") return GetLayerXml(input);
         if (name == "BackToMainMenu") return BackToMainMenu(input);
         if (name == "ClickMenuButton") return ClickMenuButton(input);
+        if (name == "InspectMenuControl") return InspectMenuControl(input);
         return null;
     }
 
@@ -918,6 +920,7 @@ namespace TmMcp {
         tools.Add(MakeTool("GetLayerXml", "Read a slice of a UI layer's Manialink XML, or substring-grep it. Either {layerIndex, find, context?=120, maxHits?=20, caseInsensitive?=false} to grep, or {layerIndex, offset?=0, length?=2048} to slice. Use instead of dumping the whole 10-50 KB XML for a layer.", '{"type":"object","properties":{"layerIndex":{"type":"integer"},"find":{"type":"string"},"context":{"type":"integer"},"maxHits":{"type":"integer"},"caseInsensitive":{"type":"boolean"},"offset":{"type":"integer"},"length":{"type":"integer"}},"required":["layerIndex"]}'));
         tools.Add(MakeTool("BackToMainMenu", "Unwind out of whatever module the game is currently in (Editor, Race) and return to the main menu. Works from a live race, self-hosted solo, or the editor. Async — poll GetMode until mode=='Menu'.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("ClickMenuButton", "DISABLED — calling TriggerPageAction from Angelscript crashes openplanet.dll natively. Kept as a surfaced error so callers learn the constraint. Use SetMenuPage for nav routes; EditNewMap/BackToMainMenu for terminal actions.", '{"type":"object","properties":{"action":{"type":"string"},"controlId":{"type":"string"}}}'));
+        tools.Add(MakeTool("InspectMenuControl", "Probe: resolve a ControlId on the active Page_* (or named layer) via LocalPage.GetFirstChild and MainFrame.GetFirstChild. Returns type, classes, visibility, position, slash-joined path from MainFrame (e.g. 'frame-global/button-create'), and up to 32 children if it is a frame. Read-only — safe to call from Angelscript.", '{"type":"object","properties":{"controlId":{"type":"string"},"layerName":{"type":"string"}},"required":["controlId"]}'));
         return tools;
     }
 
