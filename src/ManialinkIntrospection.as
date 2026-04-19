@@ -115,6 +115,41 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
+    // Enumerate visible Manialink layers whose <manialink name> begins with
+    // "Page_". This is the route-level counterpart to GetMenuPage's mode-level
+    // answer: after SetMenuPage, the Router swaps which Page_* layer is
+    // visible, so reading the visible Page_* list reports what actually
+    // rendered. Caller decides how to interpret (multiple visible pages can
+    // exist during transitions or for overlay pages like Page_Popup).
+    Json::Value@ GetActiveMenuPages(Json::Value &in input) {
+        auto menuApp = _GetMenuApp();
+        if (menuApp is null) return MakeError("menu mania app not available (not in menu?)");
+        Json::Value output = Json::Object();
+        Json::Value arr = Json::Array();
+        uint nb = 0;
+        try { nb = menuApp.UILayers.Length; } catch { nb = 0; }
+        for (uint i = 0; i < nb; i++) {
+            CGameUILayer@ layer = null;
+            try { @layer = menuApp.UILayers[i]; } catch { @layer = null; }
+            if (layer is null) continue;
+            bool vis = true;
+            try { vis = bool(layer.IsVisible); } catch { vis = true; }
+            if (!vis) continue;
+            string name = _ExtractManialinkName(layer);
+            if (name.Length < 5) continue;
+            if (name.SubStr(0, 5) != "Page_") continue;
+            Json::Value entry = Json::Object();
+            entry["index"] = int(i);
+            entry["manialinkName"] = name;
+            try { entry["attachId"] = string(layer.AttachId); } catch { /* swallow */ }
+            arr.Add(entry);
+        }
+        output["nbLayers"] = int(nb);
+        output["pages"] = arr;
+        output["note"] = "Visible Manialink layers named Page_*. Typically one is the active route; overlays may add more. Use SetMenuPage then poll this to verify.";
+        return MakeSuccess(output);
+    }
+
     // Resolve a slash-separated ControlId path starting from a frame. Each
     // segment walks via GetFirstChild (recursive) on the current node if it is
     // a frame. Returns null if any segment fails to match.
