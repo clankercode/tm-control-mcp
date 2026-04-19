@@ -754,7 +754,8 @@ namespace TmMcp {
             || name == "FindControlsByClass"
             || name == "FindControlsByLabel"
             || name == "GetLayerXml"
-            || name == "BackToMainMenu";
+            || name == "BackToMainMenu"
+            || name == "ClickMenuButton";
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
@@ -834,6 +835,7 @@ namespace TmMcp {
         if (name == "FindControlsByLabel") return FindControlsByLabel(input);
         if (name == "GetLayerXml") return GetLayerXml(input);
         if (name == "BackToMainMenu") return BackToMainMenu(input);
+        if (name == "ClickMenuButton") return ClickMenuButton(input);
         return null;
     }
 
@@ -915,6 +917,7 @@ namespace TmMcp {
         tools.Add(MakeTool("FindControlsByLabel", "Search across main-menu UI layers for Label controls whose Value contains the given substring. Case-insensitive by default. Returns layerIndex, layerName, controlId, raw label, displayText (translation prefix stripped), classes, absPos, size.", '{"type":"object","properties":{"substring":{"type":"string"},"caseInsensitive":{"type":"boolean"},"onlyVisible":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxResults":{"type":"integer"}},"required":["substring"]}'));
         tools.Add(MakeTool("GetLayerXml", "Read a slice of a UI layer's Manialink XML, or substring-grep it. Either {layerIndex, find, context?=120, maxHits?=20, caseInsensitive?=false} to grep, or {layerIndex, offset?=0, length?=2048} to slice. Use instead of dumping the whole 10-50 KB XML for a layer.", '{"type":"object","properties":{"layerIndex":{"type":"integer"},"find":{"type":"string"},"context":{"type":"integer"},"maxHits":{"type":"integer"},"caseInsensitive":{"type":"boolean"},"offset":{"type":"integer"},"length":{"type":"integer"}},"required":["layerIndex"]}'));
         tools.Add(MakeTool("BackToMainMenu", "Unwind out of whatever module the game is currently in (Editor, Race) and return to the main menu. Works from a live race, self-hosted solo, or the editor. Async — poll GetMode until mode=='Menu'.", '{"type":"object","properties":{}}'));
+        tools.Add(MakeTool("ClickMenuButton", "DISABLED — calling TriggerPageAction from Angelscript crashes openplanet.dll natively. Kept as a surfaced error so callers learn the constraint. Use SetMenuPage for nav routes; EditNewMap/BackToMainMenu for terminal actions.", '{"type":"object","properties":{"action":{"type":"string"},"controlId":{"type":"string"}}}'));
         return tools;
     }
 
@@ -955,6 +958,14 @@ namespace TmMcp {
         Json::Value output = Json::Object();
         output["note"] = "BackToMainMenu() called; unwind is async. Poll GetMode until it returns 'Menu'.";
         return MakeSuccess(output);
+    }
+
+    Json::Value@ ClickMenuButton(Json::Value &in input) {
+        // UNSAFE. Calling ManialinkScriptHandlerMenus.TriggerPageAction(...) from the
+        // Angelscript thread crashes openplanet.dll natively (observed 2026-04-20).
+        // Left stubbed in place so the tool name surfaces the safety note instead of
+        // silently disappearing; see research/MenuManialinkLayers.md.
+        return MakeError("ClickMenuButton is disabled: calling TriggerPageAction from Angelscript crashes openplanet.dll. Use SetMenuPage for nav routes and terminal tools (e.g. EditNewMap) for action buttons. See research/MenuManialinkLayers.md.");
     }
 
     bool _IsDangerousMenuRoute(const string &in route) {
