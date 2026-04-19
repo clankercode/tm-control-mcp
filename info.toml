@@ -6,6 +6,6 @@ version  = "0.1.0"
 
 [script]
 #__DEFINES__
-dependencies = ["Editor"]
+dependencies = ["Editor", "MLHook"]
 module = "TmMcp"
 timeout = 0

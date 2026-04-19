@@ -733,7 +733,9 @@ namespace TmMcp {
             || name == "SelectBlockModel"
             || name == "SetCursorBlock"
             || name == "Undo"
-            || name == "Redo";
+            || name == "Redo"
+            || name == "SetMenuPage"
+            || name == "GetMenuPage";
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
@@ -797,6 +799,8 @@ namespace TmMcp {
         if (name == "SetCursorBlock") return SetCursorBlock(input);
         if (name == "Undo") return Undo(input);
         if (name == "Redo") return Redo(input);
+        if (name == "SetMenuPage") return SetMenuPage(input);
+        if (name == "GetMenuPage") return GetMenuPage(input);
         return null;
     }
 
@@ -862,6 +866,8 @@ namespace TmMcp {
         tools.Add(MakeTool("SetCursorBlock", "Alias for SelectBlockModel.", '{"type":"object","properties":{"blockName":{"type":"string"},"selection":{"type":"string"}},"required":["blockName"]}'));
         tools.Add(MakeTool("Undo", "Undo the last editor action.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("Redo", "Redo the last undone editor action.", '{"type":"object","properties":{}}'));
+        tools.Add(MakeTool("SetMenuPage", "Navigate the main-menu router to a route via MLHook. Useful for programmatically opening /create, /mapeditorsettings, /solo, etc. Only works while in the main-menu module; use GetMenuPage to check.", '{"type":"object","properties":{"route":{"type":"string"},"extra":{"type":"string"}},"required":["route"]}'));
+        tools.Add(MakeTool("GetMenuPage", "Report current top-level game mode (Menu/Editor/Race) and whether the main-menu module is active. Does not attempt to read the specific menu route.", '{"type":"object","properties":{}}'));
         return tools;
     }
 
@@ -885,6 +891,46 @@ namespace TmMcp {
         } else {
             output["mode"] = "Menu";
         }
+        return MakeSuccess(output);
+    }
+
+    Json::Value@ SetMenuPage(Json::Value &in input) {
+#if DEPENDENCY_MLHOOK
+        if (!input.HasKey("route")) return MakeError("missing route");
+        string route = string(input["route"]);
+        string extra = input.HasKey("extra") ? string(input["extra"]) : "{}";
+        auto app = cast<CGameManiaPlanet>(GetApp());
+        if (app is null) return MakeError("app not available");
+        if (app.Switcher.ModuleStack.Length == 0 || cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0]) is null) {
+            return MakeError("not in menu; current module is not CTrackManiaMenus");
+        }
+        MLHook::Queue_Menu_SendCustomEvent("Router_Push", { route, extra, "{}" });
+        Json::Value output = Json::Object();
+        output["route"] = route;
+        output["extra"] = extra;
+        output["note"] = "Router_Push queued via MLHook; menu transition is async";
+        return MakeSuccess(output);
+#else
+        return MakeError("MLHook dependency not compiled in");
+#endif
+    }
+
+    Json::Value@ GetMenuPage(Json::Value &in input) {
+        auto app = cast<CGameManiaPlanet>(GetApp());
+        Json::Value output = Json::Object();
+        if (app is null) {
+            output["available"] = false;
+            output["reason"] = "app not available";
+            return MakeSuccess(output);
+        }
+        output["moduleStackLen"] = int(app.Switcher.ModuleStack.Length);
+        auto menus = app.Switcher.ModuleStack.Length > 0
+            ? cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0])
+            : null;
+        output["inMenus"] = menus !is null;
+        if (app.Editor !is null) output["mode"] = "Editor";
+        else if (app.CurrentPlayground !is null) output["mode"] = "Race";
+        else output["mode"] = "Menu";
         return MakeSuccess(output);
     }
 
