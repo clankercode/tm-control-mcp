@@ -3,6 +3,183 @@ namespace TmMcp {
     // button/control paths to MCP callers so they can figure out which events
     // to fire via SetMenuPage / Queue_*_SendCustomEvent.
 
+    string _LayerTypeName(int t) {
+        switch (t) {
+            case 0: return "Normal";
+            case 1: return "ScoresTable";
+            case 2: return "ScreenIn3d";
+            case 3: return "AltMenu";
+            case 4: return "Markers";
+            case 5: return "CutScene";
+            case 6: return "InGameMenu";
+            case 7: return "EditorPlugin";
+            case 8: return "ManiaplanetPlugin";
+            case 9: return "ManiaplanetMenu";
+            case 10: return "LoadingScreen";
+        }
+        return "?";
+    }
+
+    CGameManiaAppTitle@ _GetMenuApp() {
+        auto app = cast<CTrackMania>(GetApp());
+        if (app is null) return null;
+        try {
+            auto menus = cast<CTrackManiaMenus>(app.MenuManager);
+            if (menus is null) return null;
+            return menus.MenuCustom_CurrentManiaApp;
+        } catch { return null; }
+    }
+
+    // Scan a Manialink XML header for the root <manialink name="..."> attribute.
+    // Reads only the first few hundred chars of the source to avoid allocating
+    // the full multi-KB page string where possible. Returns empty if not found.
+    string _ExtractManialinkName(CGameUILayer@ layer) {
+        if (layer is null) return "";
+        string src = "";
+        try { src = layer.ManialinkPageUtf8; } catch { return ""; }
+        if (src.Length == 0) return "";
+        int cap = int(src.Length) < 1024 ? int(src.Length) : 1024;
+        string head = src.SubStr(0, cap);
+        int open = head.IndexOf("<manialink");
+        if (open < 0) return "";
+        // Slice past the <manialink token, then find name="..." within the tag.
+        string tail = head.SubStr(open);
+        int nameIx = tail.IndexOf("name=\"");
+        if (nameIx < 0) return "";
+        int start = nameIx + 6;
+        string afterName = tail.SubStr(start);
+        int end = afterName.IndexOf("\"");
+        if (end < 0) return "";
+        return afterName.SubStr(0, end);
+    }
+
+    Json::Value _LayerMetaJson(CGameUILayer@ layer, int index, bool includeName, bool includeXmlSize) {
+        Json::Value obj = Json::Object();
+        obj["index"] = index;
+        if (layer is null) { obj["null"] = true; return obj; }
+        int ty = -1;
+        try { ty = int(layer.Type); } catch { /* ignore */ }
+        obj["type"] = ty;
+        obj["typeName"] = _LayerTypeName(ty);
+        try { obj["isVisible"] = bool(layer.IsVisible); } catch { /* ignore */ }
+        try { obj["attachId"] = string(layer.AttachId); } catch { /* ignore */ }
+        try { obj["isLocalPageScriptRunning"] = bool(layer.IsLocalPageScriptRunning); } catch { /* ignore */ }
+        CGameManialinkPage@ page = null;
+        try { @page = layer.LocalPage; } catch { @page = null; }
+        obj["hasPage"] = page !is null;
+        if (page !is null) {
+            try { obj["pageUrl"] = string(page.Url); } catch { /* ignore */ }
+            CGameManialinkFrame@ mainFrame = null;
+            try { @mainFrame = page.MainFrame; } catch { @mainFrame = null; }
+            obj["hasMainFrame"] = mainFrame !is null;
+            if (mainFrame !is null) {
+                int topLevel = 0;
+                try { topLevel = int(mainFrame.Controls.Length); } catch { /* ignore */ }
+                obj["topLevelChildren"] = topLevel;
+            }
+        }
+        if (includeName) {
+            obj["manialinkName"] = _ExtractManialinkName(layer);
+        }
+        if (includeXmlSize) {
+            int sz = -1;
+            try { sz = int(layer.ManialinkPageUtf8.Length); } catch { /* ignore */ }
+            obj["manialinkXmlLength"] = sz;
+        }
+        return obj;
+    }
+
+    Json::Value@ GetUILayers(Json::Value &in input) {
+        bool includeName = input.HasKey("includeName") ? bool(input["includeName"]) : true;
+        bool includeXmlSize = input.HasKey("includeXmlSize") ? bool(input["includeXmlSize"]) : false;
+        bool onlyVisible = input.HasKey("onlyVisible") ? bool(input["onlyVisible"]) : false;
+        auto menuApp = _GetMenuApp();
+        if (menuApp is null) return MakeError("menu mania app not available (not in menu?)");
+        Json::Value output = Json::Object();
+        Json::Value arr = Json::Array();
+        uint nb = 0;
+        try { nb = menuApp.UILayers.Length; } catch { nb = 0; }
+        for (uint i = 0; i < nb; i++) {
+            CGameUILayer@ layer = null;
+            try { @layer = menuApp.UILayers[i]; } catch { @layer = null; }
+            if (layer is null) continue;
+            if (onlyVisible) {
+                bool vis = true;
+                try { vis = bool(layer.IsVisible); } catch { vis = true; }
+                if (!vis) continue;
+            }
+            arr.Add(_LayerMetaJson(layer, int(i), includeName, includeXmlSize));
+        }
+        output["nbLayers"] = int(nb);
+        output["layers"] = arr;
+        return MakeSuccess(output);
+    }
+
+    // Resolve a slash-separated ControlId path starting from a frame. Each
+    // segment walks via GetFirstChild (recursive) on the current node if it is
+    // a frame. Returns null if any segment fails to match.
+    CGameManialinkControl@ _ResolveControlPath(CGameManialinkFrame@ root, const string &in path) {
+        if (root is null) return null;
+        if (path.Length == 0) return root;
+        auto segments = path.Split("/");
+        CGameManialinkControl@ cur = root;
+        for (uint i = 0; i < segments.Length; i++) {
+            string seg = segments[i];
+            if (seg.Length == 0) continue;
+            auto frame = cast<CGameManialinkFrame>(cur);
+            if (frame is null) return null;
+            CGameManialinkControl@ next = null;
+            try { @next = frame.GetFirstChild(seg); } catch { @next = null; }
+            if (next is null) return null;
+            @cur = next;
+        }
+        return cur;
+    }
+
+    Json::Value@ GetLayerTree(Json::Value &in input) {
+        if (!input.HasKey("layerIndex")) return MakeError("missing layerIndex");
+        int layerIndex = int(input["layerIndex"]);
+        int maxDepth = input.HasKey("maxDepth") ? int(input["maxDepth"]) : 4;
+        bool onlyWithId = input.HasKey("onlyWithId") ? bool(input["onlyWithId"]) : true;
+        bool includeHidden = input.HasKey("includeHidden") ? bool(input["includeHidden"]) : false;
+        int maxResults = input.HasKey("maxResults") ? int(input["maxResults"]) : 80;
+        string rootPath = input.HasKey("rootPath") ? string(input["rootPath"]) : "";
+
+        auto menuApp = _GetMenuApp();
+        if (menuApp is null) return MakeError("menu mania app not available");
+        uint nb = 0;
+        try { nb = menuApp.UILayers.Length; } catch { nb = 0; }
+        if (layerIndex < 0 || uint(layerIndex) >= nb) return MakeError("layerIndex out of range (have " + int(nb) + " layers)");
+        CGameUILayer@ layer = null;
+        try { @layer = menuApp.UILayers[uint(layerIndex)]; } catch { return MakeError("could not read layer"); }
+        if (layer is null) return MakeError("layer is null");
+        CGameManialinkPage@ page = null;
+        try { @page = layer.LocalPage; } catch { @page = null; }
+        if (page is null) return MakeError("layer has no LocalPage");
+        CGameManialinkFrame@ mainFrame = null;
+        try { @mainFrame = page.MainFrame; } catch { @mainFrame = null; }
+        if (mainFrame is null) return MakeError("layer page has no MainFrame");
+
+        CGameManialinkControl@ startCtrl = _ResolveControlPath(mainFrame, rootPath);
+        if (startCtrl is null) return MakeError("rootPath did not resolve");
+
+        Json::Value output = Json::Object();
+        output["layerIndex"] = layerIndex;
+        output["rootPath"] = rootPath;
+        Json::Value controls = Json::Array();
+        string startLabel = rootPath.Length > 0 ? rootPath : "<root>";
+        _WalkControl(startCtrl, startLabel, 0, maxDepth, onlyWithId, includeHidden, controls);
+        if (int(controls.Length) > maxResults) {
+            Json::Value trimmed = Json::Array();
+            for (int ci = 0; ci < maxResults; ci++) trimmed.Add(controls[ci]);
+            output["controls"] = trimmed;
+            output["trimmedAt"] = maxResults;
+        } else {
+            output["controls"] = controls;
+        }
+        return MakeSuccess(output);
+    }
+
     // Recursively search all UI layers for a control with the given ControlId.
     // Returns the first match or null. Safe to call while the menu is rebuilding.
     CGameManialinkControl@ _FindControlById(const string &in controlId) {

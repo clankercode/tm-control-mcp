@@ -741,7 +741,9 @@ namespace TmMcp {
             || name == "GetGuide"
             || name == "EditNewMap"
             || name == "ListMenuManialinkControls"
-            || name == "FocusMenuControl";
+            || name == "FocusMenuControl"
+            || name == "GetUILayers"
+            || name == "GetLayerTree";
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
@@ -813,6 +815,8 @@ namespace TmMcp {
         if (name == "EditNewMap") return EditNewMapTool(input);
         if (name == "ListMenuManialinkControls") return ListMenuManialinkControls(input);
         if (name == "FocusMenuControl") return FocusMenuControl(input);
+        if (name == "GetUILayers") return GetUILayers(input);
+        if (name == "GetLayerTree") return GetLayerTree(input);
         return null;
     }
 
@@ -886,6 +890,8 @@ namespace TmMcp {
         tools.Add(MakeTool("EditNewMap", "Create a new map in the editor with a specific Environment + Decoration (vista). Defaults: Stadium / 48x48Day / TrackMania TM_Race. See the map-vistas guide for decoration strings. Call returns immediately; poll GetMode until mode becomes Editor.", '{"type":"object","properties":{"environment":{"type":"string"},"decoration":{"type":"string"},"mapType":{"type":"string"}}}'));
         tools.Add(MakeTool("ListMenuManialinkControls", "Walk the main-menu UI layer tree and return controls with their ControlId, classes, visibility, and path. Used to discover button IDs before firing Manialink events. maxDepth default 8; onlyWithId default true (skip anonymous frames); includeHidden default false.", '{"type":"object","properties":{"maxDepth":{"type":"integer"},"onlyWithId":{"type":"boolean"},"includeHidden":{"type":"boolean"},"maxResults":{"type":"integer"}}}'));
         tools.Add(MakeTool("FocusMenuControl", "Find a menu control by ControlId across all UI layers and call Focus() on it. Probe step before trying synthetic click events. Does not perform click.", '{"type":"object","properties":{"controlId":{"type":"string"}},"required":["controlId"]}'));
+        tools.Add(MakeTool("GetUILayers", "Lightweight: list main-menu UI layers with index, type, visibility, attachId, pageUrl, and (default) the extracted <manialink name> attribute. Does NOT traverse the control tree. Use GetLayerTree for per-layer introspection. Use includeXmlSize=true to also return the XML length (avoids returning the full XML).", '{"type":"object","properties":{"includeName":{"type":"boolean"},"includeXmlSize":{"type":"boolean"},"onlyVisible":{"type":"boolean"}}}'));
+        tools.Add(MakeTool("GetLayerTree", "Walk the control tree of one UI layer (by layerIndex) with optional rootPath (slash-separated ControlIds). Returns controls starting at that point. Used with GetUILayers to drill in without dumping every layer.", '{"type":"object","properties":{"layerIndex":{"type":"integer"},"maxDepth":{"type":"integer"},"rootPath":{"type":"string"},"onlyWithId":{"type":"boolean"},"includeHidden":{"type":"boolean"},"maxResults":{"type":"integer"}},"required":["layerIndex"]}'));
         return tools;
     }
 
