@@ -747,7 +747,8 @@ namespace TmMcp {
             || name == "FindMenuButtons"
             || name == "FindControlsByClass"
             || name == "FindControlsByLabel"
-            || name == "GetLayerXml";
+            || name == "GetLayerXml"
+            || name == "BackToMainMenu";
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
@@ -825,6 +826,7 @@ namespace TmMcp {
         if (name == "FindControlsByClass") return FindControlsByClass(input);
         if (name == "FindControlsByLabel") return FindControlsByLabel(input);
         if (name == "GetLayerXml") return GetLayerXml(input);
+        if (name == "BackToMainMenu") return BackToMainMenu(input);
         return null;
     }
 
@@ -904,6 +906,7 @@ namespace TmMcp {
         tools.Add(MakeTool("FindControlsByClass", "Search across main-menu UI layers for controls whose class list matches classPattern. substring=true (default) does Contains match, substring=false requires exact equality. Returns same enriched entries as FindMenuButtons (includes child label text if present).", '{"type":"object","properties":{"classPattern":{"type":"string"},"substring":{"type":"boolean"},"onlyVisible":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxResults":{"type":"integer"}},"required":["classPattern"]}'));
         tools.Add(MakeTool("FindControlsByLabel", "Search across main-menu UI layers for Label controls whose Value contains the given substring. Case-insensitive by default. Returns layerIndex, layerName, controlId, raw label, displayText (translation prefix stripped), classes, absPos, size.", '{"type":"object","properties":{"substring":{"type":"string"},"caseInsensitive":{"type":"boolean"},"onlyVisible":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxResults":{"type":"integer"}},"required":["substring"]}'));
         tools.Add(MakeTool("GetLayerXml", "Read a slice of a UI layer's Manialink XML, or substring-grep it. Either {layerIndex, find, context?=120, maxHits?=20, caseInsensitive?=false} to grep, or {layerIndex, offset?=0, length?=2048} to slice. Use instead of dumping the whole 10-50 KB XML for a layer.", '{"type":"object","properties":{"layerIndex":{"type":"integer"},"find":{"type":"string"},"context":{"type":"integer"},"maxHits":{"type":"integer"},"caseInsensitive":{"type":"boolean"},"offset":{"type":"integer"},"length":{"type":"integer"}},"required":["layerIndex"]}'));
+        tools.Add(MakeTool("BackToMainMenu", "Unwind out of whatever module the game is currently in (Editor, Race) and return to the main menu. Works from a live race, self-hosted solo, or the editor. Async — poll GetMode until mode=='Menu'.", '{"type":"object","properties":{}}'));
         return tools;
     }
 
@@ -920,13 +923,29 @@ namespace TmMcp {
         Json::Value output = Json::Object();
         if (app is null) {
             output["mode"] = "Unknown";
-        } else if (app.Editor !is null) {
+            return MakeSuccess(output);
+        }
+        if (app.Editor !is null) {
             output["mode"] = "Editor";
         } else if (app.CurrentPlayground !is null) {
             output["mode"] = "Race";
+            output["selfHosted"] = app.PlaygroundScript !is null;
         } else {
             output["mode"] = "Menu";
         }
+        if (app.RootMap !is null) {
+            output["mapName"] = app.RootMap.MapName;
+            output["mapUid"] = app.RootMap.MapInfo !is null ? app.RootMap.MapInfo.MapUid : "";
+        }
+        return MakeSuccess(output);
+    }
+
+    Json::Value@ BackToMainMenu(Json::Value &in input) {
+        auto app = cast<CGameManiaPlanet>(GetApp());
+        if (app is null) return MakeError("app not available");
+        app.BackToMainMenu();
+        Json::Value output = Json::Object();
+        output["note"] = "BackToMainMenu() called; unwind is async. Poll GetMode until it returns 'Menu'.";
         return MakeSuccess(output);
     }
 
