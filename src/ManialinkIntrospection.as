@@ -71,6 +71,46 @@ namespace TmMcp {
         string tyName = "?";
         try { tyName = Reflection::TypeOf(ctrl).Name; } catch { tyName = "?"; }
         obj["type"] = tyName;
+
+        try {
+            Json::Value pos = Json::Array();
+            pos.Add(float(ctrl.AbsolutePosition.x));
+            pos.Add(float(ctrl.AbsolutePosition.y));
+            pos.Add(float(ctrl.AbsolutePosition.z));
+            obj["absPos"] = pos;
+        } catch { /* ignore */ }
+        try {
+            Json::Value size = Json::Array();
+            size.Add(float(ctrl.Size.x));
+            size.Add(float(ctrl.Size.y));
+            obj["size"] = size;
+        } catch { /* ignore */ }
+
+        // Common click-action data-attribute names on Nadeo menus
+        string[] dataKeys = { "action", "route", "context", "target", "handler", "event" };
+        Json::Value data = Json::Object();
+        for (uint di = 0; di < dataKeys.Length; di++) {
+            try {
+                if (ctrl.DataAttributeExists(dataKeys[di])) {
+                    data[dataKeys[di]] = string(ctrl.DataAttributeGet(dataKeys[di]));
+                }
+            } catch { /* ignore */ }
+        }
+        if (data.GetKeys().Length > 0) obj["data"] = data;
+
+        try {
+            auto lbl = cast<CGameManialinkLabel>(ctrl);
+            if (lbl !is null) {
+                auto ty = Reflection::TypeOf(lbl);
+                if (ty !is null) {
+                    auto m = ty.GetMember("Value");
+                    if (m !is null && m.Offset < 0xFFFF) {
+                        obj["labelValue"] = Dev::GetOffsetString(lbl, m.Offset);
+                    }
+                }
+            }
+        } catch { /* ignore */ }
+
         return obj;
     }
 
