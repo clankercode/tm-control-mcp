@@ -1,0 +1,5 @@
+*.op
+*.zip
+__pycache__/
+.goal-loops/
+op-next-formatted.json
