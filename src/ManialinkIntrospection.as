@@ -580,6 +580,214 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
+    // Single-call tool: navigate Page_MapEditorSettings click-chain and launch the editor.
+    // Drives the full 7-step button sequence (SetMenuPage + 6 clicks) for a chosen
+    // mapType / environment / mood / inputDevice / difficulty combo.
+    // Returns MakeSuccess with {ok, failedAt, steps, elapsedMs, ...} — never MakeError
+    // at the protocol level, so callers always get structured diagnostics.
+    Json::Value@ CreateMapViaMenu(Json::Value &in input) {
+        // --- Validate required fields ---
+        string[] requiredFields = { "mapType", "environment", "mood", "inputDevice", "difficulty", "timeoutMs" };
+        for (uint ri = 0; ri < requiredFields.Length; ri++) {
+            if (!input.HasKey(requiredFields[ri])) {
+                return MakeError("missing required field: " + requiredFields[ri]
+                    + ". Required: mapType (race|royal|stunt|platform), environment (Stadium|RedIsland|GreenCoast|BlueBay|WhiteShore), mood (Sunrise|Day|Sunset|Night), inputDevice (mouse|gamepad), difficulty (simple|advanced), timeoutMs (integer ms)");
+            }
+        }
+
+        string mapType     = string(input["mapType"]);
+        string environment = string(input["environment"]);
+        string mood        = string(input["mood"]);
+        string inputDevice = string(input["inputDevice"]);
+        string difficulty  = string(input["difficulty"]);
+        int timeoutMs      = int(input["timeoutMs"]);
+
+        // Enum validation
+        string[] validMapTypes  = { "race", "royal", "stunt", "platform" };
+        string[] validEnvs      = { "Stadium", "RedIsland", "GreenCoast", "BlueBay", "WhiteShore" };
+        string[] validMoods     = { "Sunrise", "Day", "Sunset", "Night" };
+        string[] validDevices   = { "mouse", "gamepad" };
+        string[] validDiffs     = { "simple", "advanced" };
+
+        bool okMapType = false; for (uint i = 0; i < validMapTypes.Length; i++) if (mapType == validMapTypes[i]) { okMapType = true; break; }
+        bool okEnv     = false; for (uint i = 0; i < validEnvs.Length;    i++) if (environment == validEnvs[i])  { okEnv     = true; break; }
+        bool okMood    = false; for (uint i = 0; i < validMoods.Length;   i++) if (mood == validMoods[i])        { okMood    = true; break; }
+        bool okDevice  = false; for (uint i = 0; i < validDevices.Length; i++) if (inputDevice == validDevices[i]) { okDevice = true; break; }
+        bool okDiff    = false; for (uint i = 0; i < validDiffs.Length;   i++) if (difficulty == validDiffs[i])  { okDiff    = true; break; }
+
+        if (!okMapType)  return MakeError("invalid mapType '" + mapType + "'. Allowed: race, royal, stunt, platform");
+        if (!okEnv)      return MakeError("invalid environment '" + environment + "'. Allowed: Stadium, RedIsland, GreenCoast, BlueBay, WhiteShore");
+        if (!okMood)     return MakeError("invalid mood '" + mood + "'. Allowed: Sunrise, Day, Sunset, Night");
+        if (!okDevice)   return MakeError("invalid inputDevice '" + inputDevice + "'. Allowed: mouse, gamepad");
+        if (!okDiff)     return MakeError("invalid difficulty '" + difficulty + "'. Allowed: simple, advanced");
+
+        uint startMs = Time::Now;
+        Json::Value steps = Json::Array();
+
+        // Helper: record a step result
+        // (inlined below for AS compatibility — no closures/lambdas)
+
+        // Helper: check whether a control with given id is visible across all layers
+        // Returns true if found and visible.
+
+        // --- Step 0: SetMenuPage to /create/mapeditorsettings ---
+        {
+            Json::Value smpInput = Json::Object();
+            smpInput["route"] = "/create/mapeditorsettings";
+            auto smpRes = SetMenuPage(smpInput);
+            // We ignore the protocol-level return; just wait for the page to appear.
+        }
+
+        // Poll for Page_MapEditorSettings to become visible (max 1000ms)
+        bool pageVisible = false;
+        for (int w = 0; w < 10; w++) {
+            sleep(100);
+            auto menuApp = _GetMenuApp();
+            if (menuApp is null) break;
+            uint nb = 0; try { nb = menuApp.UILayers.Length; } catch { nb = 0; }
+            for (uint li = 0; li < nb; li++) {
+                CGameUILayer@ layer = null;
+                try { @layer = menuApp.UILayers[li]; } catch { @layer = null; }
+                if (layer is null) continue;
+                bool vis = false; try { vis = bool(layer.IsVisible); } catch { vis = false; }
+                if (!vis) continue;
+                if (_ExtractManialinkName(layer) == "Page_MapEditorSettings") { pageVisible = true; break; }
+            }
+            if (pageVisible) break;
+        }
+        {
+            Json::Value step = Json::Object();
+            step["name"] = "SetMenuPage:/create/mapeditorsettings";
+            step["observed"] = pageVisible;
+            step["ms"] = int(Time::Now - startMs);
+            steps.Add(step);
+        }
+        if (!pageVisible) {
+            Json::Value rv = Json::Object();
+            rv["ok"] = false;
+            rv["failedAt"] = "SetMenuPage:/create/mapeditorsettings";
+            rv["expectedFrame"] = "Page_MapEditorSettings";
+            rv["lastObserved"] = "page not visible";
+            rv["elapsedMs"] = int(Time::Now - startMs);
+            rv["steps"] = steps;
+            rv["note"] = "Page_MapEditorSettings did not appear. Ensure game is in main menu and QuickStart is disabled (MapEditorUseQuickstart must be off).";
+            return MakeSuccess(rv);
+        }
+
+        // Define the step sequence:
+        // Each step: click buttonId, then poll for expectedFrameId to become visible.
+        // Last step polls GetMode == "Editor" instead.
+        //
+        // buttonIds[]:
+        string[] buttonIds = {
+            "button-create",
+            "button-create-" + mapType,
+            "button-" + inputDevice,
+            "button-difficulty-" + inputDevice + "-" + difficulty,
+            "button-enviro-" + environment,
+            "button-mood-" + mood
+        };
+        // expectedFrameIds[] — parallel array (empty string = final step, poll GetMode)
+        string[] expectedFrameIds = {
+            "frame-create-type",
+            "frame-controller",
+            "frame-difficulty-" + inputDevice,
+            "frame-enviro",
+            "frame-mood",
+            ""
+        };
+
+        for (uint si = 0; si < buttonIds.Length; si++) {
+            string btnId = buttonIds[si];
+            string expectFrame = expectedFrameIds[si];
+            bool isFinal = expectFrame.Length == 0;
+
+            // Click the button; detect success/failure via next-frame poll rather than
+            // inspecting ClickMenuButton's return (the frame transition is the ground truth).
+            Json::Value clickInput = Json::Object();
+            clickInput["controlId"] = btnId;
+            ClickMenuButton(clickInput);
+
+            uint stepStart = Time::Now;
+
+            if (isFinal) {
+                // Poll GetMode for "Editor"
+                bool editorReached = false;
+                int pollBudget = timeoutMs > 0 ? timeoutMs : 10000;
+                int pollElapsed = 0;
+                while (pollElapsed < pollBudget) {
+                    sleep(100);
+                    pollElapsed += 100;
+                    auto app = cast<CTrackMania>(GetApp());
+                    if (app !is null && app.Editor !is null) { editorReached = true; break; }
+                }
+                Json::Value step = Json::Object();
+                step["name"] = btnId + " -> Editor";
+                step["observed"] = editorReached;
+                step["ms"] = int(Time::Now - stepStart);
+                steps.Add(step);
+
+                if (!editorReached) {
+                    Json::Value rv = Json::Object();
+                    rv["ok"] = false;
+                    rv["failedAt"] = btnId;
+                    rv["expectedFrame"] = "GetMode==Editor";
+                    rv["lastObserved"] = "timeout waiting for Editor mode";
+                    rv["elapsedMs"] = int(Time::Now - startMs);
+                    rv["steps"] = steps;
+                    return MakeSuccess(rv);
+                }
+
+                // Success
+                Json::Value rv = Json::Object();
+                rv["ok"] = true;
+                rv["finalMode"] = "Editor";
+                rv["elapsedMs"] = int(Time::Now - startMs);
+                rv["steps"] = steps;
+                return MakeSuccess(rv);
+
+            } else {
+                // Poll for expectFrame to become visible (max 1500ms, 100ms interval)
+                bool frameVisible = false;
+                for (int w = 0; w < 15; w++) {
+                    sleep(100);
+                    auto ctrl = _FindControlById(expectFrame);
+                    if (ctrl !is null) {
+                        bool vis = false;
+                        try { vis = bool(ctrl.Visible); } catch { vis = false; }
+                        if (vis) { frameVisible = true; break; }
+                    }
+                }
+                Json::Value step = Json::Object();
+                step["name"] = btnId + " -> " + expectFrame;
+                step["observed"] = frameVisible;
+                step["ms"] = int(Time::Now - stepStart);
+                steps.Add(step);
+
+                if (!frameVisible) {
+                    string lastSeen = "not visible";
+                    if (si == 0) lastSeen = "frame-create-type not visible; check QuickStart (MapEditorUseQuickstart must be off)";
+                    Json::Value rv = Json::Object();
+                    rv["ok"] = false;
+                    rv["failedAt"] = btnId;
+                    rv["expectedFrame"] = expectFrame;
+                    rv["lastObserved"] = lastSeen;
+                    rv["elapsedMs"] = int(Time::Now - startMs);
+                    rv["steps"] = steps;
+                    return MakeSuccess(rv);
+                }
+            }
+        }
+
+        // Fallthrough (should not reach here)
+        Json::Value fallout = Json::Object();
+        fallout["ok"] = false;
+        fallout["failedAt"] = "unexpected fallthrough";
+        fallout["elapsedMs"] = int(Time::Now - startMs);
+        fallout["steps"] = steps;
+        return MakeSuccess(fallout);
+    }
+
     // Invoke CControlBase::OnAction() on the resolved control. OnAction is
     // the low-level click-dispatch that the UI itself calls when a button is
     // activated — living on CControlBase (Openplanet.h:13548) without the
