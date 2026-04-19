@@ -57,6 +57,12 @@ Observed: `SetMenuPage /mapeditorsettings` → `GetUILayers onlyVisible=true` sh
 - `ListMenuManialinkControls` — older alias that walks every layer. Kept for compatibility; prefer `GetUILayers` + `GetLayerTree` for scoped queries.
 - `FocusMenuControl { controlId }` — Focus() by id. Does NOT click; useful for discovery only.
 
+## Follow-ups tried, still failing
+
+- Pushing `/create` then `/mapeditorsettings` with long (6s) waits still leaves only Page_LoadingScreen visible. Page_Create is correctly hidden; Page_MapEditorSettings never shows.
+- Pushing `/mapeditorsettings` with extras `{"ShowParentPage":true,"KeepPreviousPagesDisplayed":true,"SaveHistory":true}` — same result.
+- Therefore the /mapeditorsettings (and probably other sub-page) transition is not handled purely by a Router_Push event listener; something in the parent's click handler does additional state-setup that we're missing.
+
 ## Open questions
 
 - How does the framework map a `Router_Push` route name to a `Page_*` layer? Is it by exact suffix match on the `manialinkName`, or by attach/parent context? (Would tell us whether hypothetical new plugin pages can register routes.)
