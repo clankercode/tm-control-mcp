@@ -892,7 +892,7 @@ namespace TmMcp {
         tools.Add(MakeTool("SetCursorBlock", "Alias for SelectBlockModel.", '{"type":"object","properties":{"blockName":{"type":"string"},"selection":{"type":"string"}},"required":["blockName"]}'));
         tools.Add(MakeTool("Undo", "Undo the last editor action.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("Redo", "Redo the last undone editor action.", '{"type":"object","properties":{}}'));
-        tools.Add(MakeTool("SetMenuPage", "Navigate the main-menu router to a route via MLHook. Routes are hierarchical (e.g. '/create/mapeditorsettings', not '/mapeditorsettings'); see ListKnownMenuRoutes. 'extra' is a JSON string for route hydration (e.g. '{\"Campaign\":\"...\"}'). 'history' is a JSON string for navigation-history controls (e.g. '{\"SaveHistory\":true,\"HidePreviousPage\":true}'), default '{}'. Only works while in the main-menu module; use GetMode to check.", '{"type":"object","properties":{"route":{"type":"string"},"extra":{"type":"string"},"history":{"type":"string"}},"required":["route"]}'));
+        tools.Add(MakeTool("SetMenuPage", "Navigate the main-menu router to a route via MLHook. Routes are hierarchical (e.g. '/create/mapeditorsettings', not '/mapeditorsettings'); see ListKnownMenuRoutes. 'extra' is a JSON string for route hydration (e.g. '{\"Campaign\":\"...\"}'). 'history' is a JSON string for navigation-history controls (e.g. '{\"SaveHistory\":true,\"HidePreviousPage\":true}'), default '{}'. Known side-effect routes (e.g. /solo/campaigndisplay) are blocked unless allowPlaygroundLaunch:true — they can silently auto-load a map into Race mode. Only works while in the main-menu module; use GetMode to check.", '{"type":"object","properties":{"route":{"type":"string"},"extra":{"type":"string"},"history":{"type":"string"},"allowPlaygroundLaunch":{"type":"boolean"}},"required":["route"]}'));
         tools.Add(MakeTool("GetMenuPage", "Report current top-level game mode (Menu/Editor/Race) and whether the main-menu module is active. Does not attempt to read the specific menu route.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("ListKnownMenuRoutes", "Return a hardcoded catalogue of main-menu Router_Push routes known to work (sourced from tm-menu-page-manager).", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("ListGuides", "List available self-documentation guides. Each has a short title; call GetGuide {topic} to fetch the full body.", '{"type":"object","properties":{}}'));
@@ -949,16 +949,28 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
+    bool _IsDangerousMenuRoute(const string &in route) {
+        // Routes observed to auto-launch a playground instead of only swapping a Page_*.
+        // See research/MenuManialinkLayers.md "Routes with side-effects".
+        return route == "/solo/campaigndisplay"
+            || route == "/solo/monthlycampaigndisplay";
+    }
+
     Json::Value@ SetMenuPage(Json::Value &in input) {
 #if DEPENDENCY_MLHOOK
         if (!input.HasKey("route")) return MakeError("missing route");
         string route = string(input["route"]);
         string extra = input.HasKey("extra") ? string(input["extra"]) : "{}";
         string history = input.HasKey("history") ? string(input["history"]) : "{}";
+        bool allowPlaygroundLaunch = input.HasKey("allowPlaygroundLaunch")
+            ? bool(input["allowPlaygroundLaunch"]) : false;
         auto app = cast<CGameManiaPlanet>(GetApp());
         if (app is null) return MakeError("app not available");
         if (app.Switcher.ModuleStack.Length == 0 || cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0]) is null) {
             return MakeError("not in menu; current module is not CTrackManiaMenus");
+        }
+        if (_IsDangerousMenuRoute(route) && !allowPlaygroundLaunch) {
+            return MakeError("route '" + route + "' can auto-launch a playground (observed live: silently loaded active campaign map). Pass allowPlaygroundLaunch:true to confirm. Use GetMode to detect and BackToMainMenu to unwind.");
         }
         MLHook::Queue_Menu_SendCustomEvent("Router_Push", { route, extra, history });
         Json::Value output = Json::Object();
@@ -966,6 +978,9 @@ namespace TmMcp {
         output["history"] = history;
         output["extra"] = extra;
         output["note"] = "Router_Push queued via MLHook; menu transition is async";
+        if (_IsDangerousMenuRoute(route)) {
+            output["warning"] = "side-effect route: may cascade into Race mode. Poll GetMode; use BackToMainMenu to unwind.";
+        }
         return MakeSuccess(output);
 #else
         return MakeError("MLHook dependency not compiled in");
