@@ -736,7 +736,9 @@ namespace TmMcp {
             || name == "Redo"
             || name == "SetMenuPage"
             || name == "GetMenuPage"
-            || name == "ListKnownMenuRoutes";
+            || name == "ListKnownMenuRoutes"
+            || name == "ListGuides"
+            || name == "GetGuide";
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
@@ -803,6 +805,8 @@ namespace TmMcp {
         if (name == "SetMenuPage") return SetMenuPage(input);
         if (name == "GetMenuPage") return GetMenuPage(input);
         if (name == "ListKnownMenuRoutes") return ListKnownMenuRoutes(input);
+        if (name == "ListGuides") return ListGuides(input);
+        if (name == "GetGuide") return GetGuide(input);
         return null;
     }
 
@@ -871,6 +875,8 @@ namespace TmMcp {
         tools.Add(MakeTool("SetMenuPage", "Navigate the main-menu router to a route via MLHook. Useful for programmatically opening /create, /mapeditorsettings, /solo, etc. Only works while in the main-menu module; use GetMenuPage to check.", '{"type":"object","properties":{"route":{"type":"string"},"extra":{"type":"string"}},"required":["route"]}'));
         tools.Add(MakeTool("GetMenuPage", "Report current top-level game mode (Menu/Editor/Race) and whether the main-menu module is active. Does not attempt to read the specific menu route.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("ListKnownMenuRoutes", "Return a hardcoded catalogue of main-menu Router_Push routes known to work (sourced from tm-menu-page-manager).", '{"type":"object","properties":{}}'));
+        tools.Add(MakeTool("ListGuides", "List available self-documentation guides. Each has a short title; call GetGuide {topic} to fetch the full body.", '{"type":"object","properties":{}}'));
+        tools.Add(MakeTool("GetGuide", "Fetch the full body of a named guide. Use ListGuides to see topics.", '{"type":"object","properties":{"topic":{"type":"string"}},"required":["topic"]}'));
         return tools;
     }
 

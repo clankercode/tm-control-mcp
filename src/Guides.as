@@ -1,0 +1,168 @@
+namespace TmMcp {
+    // Self-documentation for tm-control-mcp. Tool descriptions are one-liners;
+    // guides below carry the conceptual model, limits, and recipes that would
+    // otherwise bloat every tool schema.
+
+    class _Guide {
+        string topic;
+        string title;
+        string body;
+        _Guide(const string &in t, const string &in tl, const string &in b) {
+            topic = t;
+            title = tl;
+            body = b;
+        }
+    }
+
+    _Guide@[] g_Guides;
+
+    void _RegisterGuide(const string &in topic, const string &in title, const string &in body) {
+        g_Guides.InsertLast(_Guide(topic, title, body));
+    }
+
+    void _InitGuides() {
+        if (g_Guides.Length > 0) return;
+
+        _RegisterGuide("item-skins",
+            "Applying skins to placed items",
+            "Item skin application is post-placement only. The public pmt.SetItemSkin(s) API"
+            + " requires CGameCtnEditorScriptAnchoredObject wrappers from pmt.Items, which is"
+            + " only populated while a Manialink plugin is active in the editor script context."
+            + " Under tm-control-mcp (no Manialink), pmt.Items is empty, so tm-editor-plus-plus"
+            + " exposes Editor::SetItemSkinsRaw which writes pack-desc pointers directly to"
+            + " CGameCtnAnchoredObject at offsets 0x98 (bg) and 0xA0 (fg), bumps the pack-desc"
+            + " loaded flag at +0x98=4, and bumps the item change counter at +0x170.\n"
+            + "\n"
+            + "Usage through AddItemToNamedMacroblock + PlaceNamedMacroblock:\n"
+            + "1. AddItemToNamedMacroblock {name, itemPath, x, y, z, bgSkin, fgSkin}\n"
+            + "2. PlaceNamedMacroblock {name}\n"
+            + "3. Readback via GetRecentItems — actualSkin.hasSkin should be true.\n"
+            + "\n"
+            + "Which items accept skins: LightCube2m/4m/8m confirmed. Block skins have their"
+            + " own support matrix (see 'block-skins' guide).\n"
+            + "\n"
+            + "URL resolution: skin URLs resolve through Editor::GetPackDesc which borrows a"
+            + " shared temp block. Within one PlaceNamedMacroblock call, tm-control-mcp caches"
+            + " pack-descs by URL to avoid hammering the temp block.");
+
+        _RegisterGuide("block-skins",
+            "Applying skins to placed blocks",
+            "Block skins go through pmt.SetBlockSkins which is not gated on Manialink, so"
+            + " tm-control-mcp can call it directly after placement. AddBlockToNamedMacroblock"
+            + " + bgSkin/fgSkin + PlaceNamedMacroblock works end-to-end.\n"
+            + "\n"
+            + "Not every block model accepts skins. Confirmed accepting: TechnicsScreen1x1Straight,"
+            + " 2x1Straight, 4x1Straight. Confirmed not reflecting: TechnicsScreen155Straight,"
+            + " 155StraightX2, 2x3StraightSmall. Use ApplyNamedMacroblockSkinsDirect's error"
+            + " payload to detect unreflected skins (error 'skin was not reflected on block"
+            + " after SetBlockSkins').");
+
+        _RegisterGuide("macroblock-placement",
+            "How named macroblocks are placed",
+            "AddBlock/Item calls append to an in-memory MacroblockSpec keyed by name"
+            + " (g_NamedMacroblocks). PlaceNamedMacroblock duplicates the spec, calls"
+            + " Editor::PlaceMacroblock through tm-editor-plus-plus, then runs"
+            + " ApplyNamedMacroblockSkinsDirect as a post-phase against the new map indices.\n"
+            + "\n"
+            + "Gotchas:\n"
+            + "- MCP in-memory state persists across PlaceNamedMacroblock. AddItem to the same"
+            + "  name twice will grow the macroblock; create a fresh name per placement to avoid"
+            + "  accumulation.\n"
+            + "- The 'blockBaseIndex' passed to skin application is the map's Block count BEFORE"
+            + "  placement; itemBaseIndex is the AnchoredObjects count before placement. Map"
+            + "  items appended during placement take indices [base..base+added).\n"
+            + "- PlaceNamedMacroblock's 'autofocus' defaults on and moves the camera; disable"
+            + "  with 'autofocus: false' for headless runs.");
+
+        _RegisterGuide("menu-navigation",
+            "Navigating the main menu via MLHook",
+            "SetMenuPage {route} pushes the route onto the main-menu Router_Push event queue"
+            + " through MLHook. Works only while in the main-menu module (GetMenuPage.inMenus"
+            + " must be true). Routes are opaque strings; ListKnownMenuRoutes returns the set"
+            + " documented by tm-menu-page-manager.\n"
+            + "\n"
+            + "Limitations:\n"
+            + "- Some routes (e.g. /mapeditorsettings) render blank if the main-menu context"
+            + "  isn't at a compatible parent page; push /create first.\n"
+            + "- Clicking specific UI elements (vista tiles, buttons) requires different MLHook"
+            + "  events, not implemented yet.\n"
+            + "- For creating a new map with a chosen vista, the faster path is calling"
+            + "  app.ManiaTitleControlScriptAPI.EditNewMap2(Environment, Decoration, ...)"
+            + "  directly. Not wrapped as an MCP tool yet.\n"
+            + "\n"
+            + "Known routes (not exhaustive): /home, /live, /solo, /local, /arcade,"
+            + " /server-review, /play-map, /local-multi, /totdchanneldisplay,"
+            + " /matchmakingmainpage, /clubs, /create, /mapeditorsettings, /garage,"
+            + " /edit-replay, /submittedmaps, /empty.");
+
+        _RegisterGuide("map-vistas",
+            "Environment / decoration (vista) selection",
+            "TM map vistas are the combination of Environment (always 'Stadium' for TM2020)"
+            + " and Decoration. GetMapEnvironment reports the current map's collection and"
+            + " decoration. For new maps, the Decoration string picks the vista.\n"
+            + "\n"
+            + "Common Stadium decorations:\n"
+            + "- '48x48Screen155Day' — default day vista with 48-unit base\n"
+            + "- '48x48ScreenDay' / 'ScreenNight' / 'ScreenSunset'\n"
+            + "- '64x64' variants, '256x256' variants\n"
+            + "- 'Day', 'Night', 'Sunset', 'Sunrise' as mood suffixes\n"
+            + "\n"
+            + "To create a map with a specific vista programmatically:"
+            + " app.ManiaTitleControlScriptAPI.EditNewMap2('Stadium', '<decoration>', '', '',"
+            + " 'TrackMania\\\\TM_Race', false, '', '').");
+
+        _RegisterGuide("crash-debugging",
+            "Where to look when TM crashes",
+            "TM writes native crashes to LogCrash_<HASH>.txt under"
+            + " $PROTON_PREFIX/drive_c/users/steamuser/Documents/Trackmania/LogCrash/. The"
+            + " filename hash comes from the crashing PC address, so repeat crashes at the"
+            + " same site OVERWRITE the same file — copy it away immediately.\n"
+            + "\n"
+            + "Openplanet.log (in ~/OpenplanetNext/Openplanet.log) captures plugin-side events"
+            + " but is truncated on TM restart. Copy before relaunching.\n"
+            + "\n"
+            + "If TM dies without writing LogCrash, wineserver force-killed it. Useful cross-"
+            + "references: pgrep -af Trackmania.exe, journalctl for segfaults, dmesg.");
+
+        _RegisterGuide("item-placement-debris",
+            "Cleaning up test items / blocks",
+            "RemoveRecentItems {count} tries pmt.RemoveItem first (undo-safe). If that no-ops"
+            + " (common when pmt.Items is empty), forceBufferFallback=true switches to"
+            + " AnchoredObjects.RemoveRangeTail (undo-NOT-safe, no notification to the editor)."
+            + " RemoveRecentBlocks has no buffer fallback and relies on the public API.\n"
+            + "\n"
+            + "After forceBufferFallback cleanup, the editor's change counter may be out of"
+            + " sync with map content. Save-reload is the cheapest full reset.");
+    }
+
+    Json::Value@ ListGuides(Json::Value &in input) {
+        _InitGuides();
+        Json::Value output = Json::Object();
+        Json::Value arr = Json::Array();
+        for (uint i = 0; i < g_Guides.Length; i++) {
+            Json::Value g = Json::Object();
+            g["topic"] = g_Guides[i].topic;
+            g["title"] = g_Guides[i].title;
+            arr.Add(g);
+        }
+        output["guides"] = arr;
+        output["note"] = "Call GetGuide {topic} to fetch the full body.";
+        return MakeSuccess(output);
+    }
+
+    Json::Value@ GetGuide(Json::Value &in input) {
+        _InitGuides();
+        if (!input.HasKey("topic")) return MakeError("missing topic; call ListGuides to enumerate");
+        string topic = string(input["topic"]);
+        for (uint i = 0; i < g_Guides.Length; i++) {
+            if (g_Guides[i].topic == topic) {
+                Json::Value output = Json::Object();
+                output["topic"] = g_Guides[i].topic;
+                output["title"] = g_Guides[i].title;
+                output["body"] = g_Guides[i].body;
+                return MakeSuccess(output);
+            }
+        }
+        return MakeError("unknown topic: " + topic + "; call ListGuides to enumerate");
+    }
+}
