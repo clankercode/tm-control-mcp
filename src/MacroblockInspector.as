@@ -122,4 +122,64 @@ namespace TmMcp {
         output["inventory"] = InventorySummary(editor.PluginMapType);
         return MakeSuccess(output);
     }
+
+    Json::Value MacroblockInstanceToJson(CGameEditorMapMacroBlockInstance@ inst, int index, int unitCoordLimit) {
+        Json::Value output = Json::Object();
+        if (inst is null) return output;
+        output["index"] = index;
+        output["order"] = int(inst.Order);
+        output["coord"] = Int3ToJson(inst.Coord);
+        output["dir"] = int(inst.Dir);
+        output["userData"] = inst.UserData;
+        output["size"] = CoordToJson(inst.GetSize());
+        output["color"] = int(inst.Color);
+        output["forceMacroblockColor"] = inst.ForceMacroblockColor;
+        output["model"] = MacroblockInfoDetailsToJson(inst.MacroblockModel);
+
+        Json::Value unitCoords = Json::Array();
+        for (uint i = 0; i < inst.UnitCoords.Length && unitCoords.Length < uint(unitCoordLimit); i++) {
+            unitCoords.Add(CoordToJson(inst.UnitCoords[i]));
+        }
+        output["unitCoords"] = unitCoords;
+        output["nbUnitCoords"] = int(inst.UnitCoords.Length);
+        output["returnedUnitCoords"] = int(unitCoords.Length);
+        output["unitCoordsTruncated"] = inst.UnitCoords.Length > uint(unitCoordLimit);
+        return output;
+    }
+
+    Json::Value@ ListMacroblockInstances(Json::Value &in input) {
+        auto editor = GetEditor();
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available");
+
+        int total = int(editor.PluginMapType.MacroblockInstances.Length);
+        int limit = input.HasKey("limit") ? int(input["limit"]) : 50;
+        if (limit < 1) limit = 1;
+        if (limit > 250) limit = 250;
+        int offset = input.HasKey("offset") ? int(input["offset"]) : 0;
+        if (offset < 0) offset = 0;
+        bool recent = input.HasKey("recent") ? bool(input["recent"]) : false;
+        int unitCoordLimit = input.HasKey("unitCoordLimit") ? int(input["unitCoordLimit"]) : 50;
+        if (unitCoordLimit < 0) unitCoordLimit = 0;
+        if (unitCoordLimit > 500) unitCoordLimit = 500;
+
+        int start = recent ? Math::Max(0, total - offset - limit) : offset;
+        int end = recent ? Math::Max(0, total - offset) : Math::Min(total, start + limit);
+
+        Json::Value instances = Json::Array();
+        for (int i = start; i < end; i++) {
+            auto inst = editor.PluginMapType.MacroblockInstances[uint(i)];
+            instances.Add(MacroblockInstanceToJson(inst, i, unitCoordLimit));
+        }
+
+        Json::Value output = Json::Object();
+        output["instances"] = instances;
+        output["count"] = int(instances.Length);
+        output["total"] = total;
+        output["offset"] = offset;
+        output["limit"] = limit;
+        output["recent"] = recent;
+        output["unitCoordLimit"] = unitCoordLimit;
+        output["inventory"] = InventorySummary(editor.PluginMapType);
+        return MakeSuccess(output);
+    }
 }

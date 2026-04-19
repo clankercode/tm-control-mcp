@@ -813,6 +813,7 @@ namespace TmMcp {
             || name == "FindInventory"
             || name == "BrowseInventoryTree"
             || name == "InspectMacroblockModel"
+            || name == "ListMacroblockInstances"
             || name == "FindBlockModels"
             || name == "CreateNamedMacroblock"
             || name == "GetNamedMacroblock"
@@ -866,6 +867,7 @@ namespace TmMcp {
         if (name == "FindInventory") return FindInventory(input);
         if (name == "BrowseInventoryTree") return BrowseInventoryTree(input);
         if (name == "InspectMacroblockModel") return InspectMacroblockModel(input);
+        if (name == "ListMacroblockInstances") return ListMacroblockInstances(input);
         if (name == "FindBlockModels") return FindBlockModels(input);
         if (name == "CreateNamedMacroblock") return CreateNamedMacroblock(input);
         if (name == "GetNamedMacroblock") return GetNamedMacroblockTool(input);
@@ -921,6 +923,7 @@ namespace TmMcp {
         tools.Add(MakeTool("FindInventory", "Search E++ inventory cache blocks, items, and macroblocks.", '{"type":"object","properties":{"query":{"type":"string"},"type":{"type":"string"},"limit":{"type":"integer"}}}'));
         tools.Add(MakeTool("BrowseInventoryTree", "Read-only browse of the editor inventory root/directories. Supports root, rootIndex, path, depth, limit, query.", '{"type":"object","properties":{"root":{"type":"string"},"rootIndex":{"type":"integer"},"path":{"type":"string"},"depth":{"type":"integer"},"limit":{"type":"integer"},"query":{"type":"string"},"includeArticles":{"type":"boolean"}}}'));
         tools.Add(MakeTool("InspectMacroblockModel", "Inspect a loaded macroblock model by name, file path, or index via E++ MacroblockSpec conversion.", '{"type":"object","properties":{"name":{"type":"string"},"path":{"type":"string"},"index":{"type":"integer"},"limit":{"type":"integer"},"includeItems":{"type":"boolean"}}}'));
+        tools.Add(MakeTool("ListMacroblockInstances", "List placed map macroblock instances with coord, order, user data, size, unit coords, and model metadata.", '{"type":"object","properties":{"limit":{"type":"integer"},"offset":{"type":"integer"},"recent":{"type":"boolean"},"unitCoordLimit":{"type":"integer"}}}'));
         tools.Add(MakeTool("FindBlockModels", "Search loaded editor block models.", '{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"},"includeTerrain":{"type":"boolean"},"terrainOnly":{"type":"boolean"}}}'));
         tools.Add(MakeTool("CreateNamedMacroblock", "Create or replace an in-memory named macroblock.", '{"type":"object","properties":{"name":{"type":"string"},"replace":{"type":"boolean"}},"required":["name"]}'));
         tools.Add(MakeTool("GetNamedMacroblock", "Inspect an in-memory named macroblock and return stored block/item specs.", '{"type":"object","properties":{"name":{"type":"string"},"limit":{"type":"integer"},"includeItems":{"type":"boolean"}},"required":["name"]}'));

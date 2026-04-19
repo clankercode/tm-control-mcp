@@ -58,6 +58,7 @@ Current tools:
 - `FindInventory`
 - `BrowseInventoryTree`
 - `InspectMacroblockModel`
+- `ListMacroblockInstances`
 - `FindBlockModels`
 - `CreateNamedMacroblock`
 - `GetNamedMacroblock`
@@ -115,6 +116,7 @@ python3 tools/call.py FindInventory '{"query":"RoadTech","type":"block","limit":
 python3 tools/call.py FindInventory '{"query":"LightCube","type":"item","limit":5}'
 python3 tools/call.py BrowseInventoryTree '{"root":"items","path":"Official","depth":5,"query":"LightCube","limit":35}'
 python3 tools/call.py InspectMacroblockModel '{"index":0,"limit":5}'
+python3 tools/call.py ListMacroblockInstances '{"recent":true,"limit":5}'
 python3 tools/call.py GetItems '{"limit":10}'
 python3 tools/call.py GetRecentItems '{"count":5}'
 python3 tools/call.py FindBlockModels '{"query":"TechnicsScreen","limit":5}'
@@ -212,6 +214,9 @@ opening anything. It accepts `root` (`root`, `current`, `blocks`, `items`,
 `InspectMacroblockModel` resolves a loaded macroblock model by `name`, `path`,
 or `index`, then converts it through E++ `MakeMacroblockSpec` to return block
 and item specs. It does not currently expose block skins.
+`ListMacroblockInstances` lists native placed macroblock instances from the
+editor API. E++ macroblock placement can still materialize blocks/items without
+leaving native macroblock instances behind, so `total=0` is valid on those maps.
 `FindBlockModels` includes block variant counts and base sizes, which is useful
 for choosing nonzero variants for macroblock stress tests.
 `SetCursorBlock` is an alias for `SelectBlockModel`, which sets the editor's
