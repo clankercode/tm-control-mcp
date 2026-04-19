@@ -739,7 +739,8 @@ namespace TmMcp {
             || name == "ListKnownMenuRoutes"
             || name == "ListGuides"
             || name == "GetGuide"
-            || name == "EditNewMap";
+            || name == "EditNewMap"
+            || name == "ListMenuManialinkControls";
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
@@ -809,6 +810,7 @@ namespace TmMcp {
         if (name == "ListGuides") return ListGuides(input);
         if (name == "GetGuide") return GetGuide(input);
         if (name == "EditNewMap") return EditNewMapTool(input);
+        if (name == "ListMenuManialinkControls") return ListMenuManialinkControls(input);
         return null;
     }
 
@@ -880,6 +882,7 @@ namespace TmMcp {
         tools.Add(MakeTool("ListGuides", "List available self-documentation guides. Each has a short title; call GetGuide {topic} to fetch the full body.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("GetGuide", "Fetch the full body of a named guide. Use ListGuides to see topics.", '{"type":"object","properties":{"topic":{"type":"string"}},"required":["topic"]}'));
         tools.Add(MakeTool("EditNewMap", "Create a new map in the editor with a specific Environment + Decoration (vista). Defaults: Stadium / 48x48Day / TrackMania TM_Race. See the map-vistas guide for decoration strings. Call returns immediately; poll GetMode until mode becomes Editor.", '{"type":"object","properties":{"environment":{"type":"string"},"decoration":{"type":"string"},"mapType":{"type":"string"}}}'));
+        tools.Add(MakeTool("ListMenuManialinkControls", "Walk the main-menu UI layer tree and return controls with their ControlId, classes, visibility, and path. Used to discover button IDs before firing Manialink events. maxDepth default 8; onlyWithId default true (skip anonymous frames); includeHidden default false.", '{"type":"object","properties":{"maxDepth":{"type":"integer"},"onlyWithId":{"type":"boolean"},"includeHidden":{"type":"boolean"},"maxResults":{"type":"integer"}}}'));
         return tools;
     }
 
