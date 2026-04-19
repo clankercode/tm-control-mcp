@@ -3,6 +3,49 @@ namespace TmMcp {
     // button/control paths to MCP callers so they can figure out which events
     // to fire via SetMenuPage / Queue_*_SendCustomEvent.
 
+    // Recursively search all UI layers for a control with the given ControlId.
+    // Returns the first match or null. Safe to call while the menu is rebuilding.
+    CGameManialinkControl@ _FindControlById(const string &in controlId) {
+        auto app = cast<CTrackMania>(GetApp());
+        if (app is null) return null;
+        CGameManiaAppTitle@ menuApp = null;
+        try {
+            auto menus = cast<CTrackManiaMenus>(app.MenuManager);
+            if (menus !is null) @menuApp = menus.MenuCustom_CurrentManiaApp;
+        } catch { @menuApp = null; }
+        if (menuApp is null) return null;
+
+        uint nbLayers = 0;
+        try { nbLayers = menuApp.UILayers.Length; } catch { nbLayers = 0; }
+        for (uint li = 0; li < nbLayers; li++) {
+            CGameUILayer@ layer = null;
+            try { @layer = menuApp.UILayers[li]; } catch { @layer = null; }
+            if (layer is null) continue;
+            CGameManialinkPage@ page = null;
+            try { @page = layer.LocalPage; } catch { @page = null; }
+            if (page is null) continue;
+            CGameManialinkControl@ hit = null;
+            try { @hit = page.GetFirstChild(controlId); } catch { @hit = null; }
+            if (hit !is null) return hit;
+        }
+        return null;
+    }
+
+    Json::Value@ FocusMenuControl(Json::Value &in input) {
+        if (!input.HasKey("controlId")) return MakeError("missing controlId");
+        string controlId = string(input["controlId"]);
+        auto ctrl = _FindControlById(controlId);
+        if (ctrl is null) return MakeError("control not found: " + controlId);
+        try { ctrl.Focus(); } catch {
+            return MakeError("Focus() threw: " + getExceptionInfo());
+        }
+        Json::Value output = Json::Object();
+        output["controlId"] = controlId;
+        output["type"] = Reflection::TypeOf(ctrl).Name;
+        try { output["wasFocused"] = bool(ctrl.IsFocused); } catch { output["wasFocused"] = false; }
+        return MakeSuccess(output);
+    }
+
     Json::Value _ControlToJson(CGameManialinkControl@ ctrl, const string &in path) {
         Json::Value obj = Json::Object();
         if (ctrl is null) {

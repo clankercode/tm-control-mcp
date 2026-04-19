@@ -740,7 +740,8 @@ namespace TmMcp {
             || name == "ListGuides"
             || name == "GetGuide"
             || name == "EditNewMap"
-            || name == "ListMenuManialinkControls";
+            || name == "ListMenuManialinkControls"
+            || name == "FocusMenuControl";
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
@@ -811,6 +812,7 @@ namespace TmMcp {
         if (name == "GetGuide") return GetGuide(input);
         if (name == "EditNewMap") return EditNewMapTool(input);
         if (name == "ListMenuManialinkControls") return ListMenuManialinkControls(input);
+        if (name == "FocusMenuControl") return FocusMenuControl(input);
         return null;
     }
 
@@ -883,6 +885,7 @@ namespace TmMcp {
         tools.Add(MakeTool("GetGuide", "Fetch the full body of a named guide. Use ListGuides to see topics.", '{"type":"object","properties":{"topic":{"type":"string"}},"required":["topic"]}'));
         tools.Add(MakeTool("EditNewMap", "Create a new map in the editor with a specific Environment + Decoration (vista). Defaults: Stadium / 48x48Day / TrackMania TM_Race. See the map-vistas guide for decoration strings. Call returns immediately; poll GetMode until mode becomes Editor.", '{"type":"object","properties":{"environment":{"type":"string"},"decoration":{"type":"string"},"mapType":{"type":"string"}}}'));
         tools.Add(MakeTool("ListMenuManialinkControls", "Walk the main-menu UI layer tree and return controls with their ControlId, classes, visibility, and path. Used to discover button IDs before firing Manialink events. maxDepth default 8; onlyWithId default true (skip anonymous frames); includeHidden default false.", '{"type":"object","properties":{"maxDepth":{"type":"integer"},"onlyWithId":{"type":"boolean"},"includeHidden":{"type":"boolean"},"maxResults":{"type":"integer"}}}'));
+        tools.Add(MakeTool("FocusMenuControl", "Find a menu control by ControlId across all UI layers and call Focus() on it. Probe step before trying synthetic click events. Does not perform click.", '{"type":"object","properties":{"controlId":{"type":"string"}},"required":["controlId"]}'));
         return tools;
     }
 
