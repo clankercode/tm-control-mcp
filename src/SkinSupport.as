@@ -148,36 +148,42 @@ namespace TmMcp {
             err["error"] = "map item index out of range";
             err["mapIndex"] = itemMapIndex;
             err["nbMapItems"] = int(pmt.Map.AnchoredObjects.Length);
-            err["nbScriptItems"] = int(pmt.Items.Length);
             errors.Add(err);
             return;
         }
 
         auto mapItem = pmt.Map.AnchoredObjects[itemMapIndex];
-        auto scriptItem = FindScriptItemForMapItem(pmt, mapItem);
-        if (scriptItem is null || mapItem is null) {
+        if (mapItem is null) {
             Json::Value err = NamedMacroblockSkinToJson(skin);
-            err["error"] = scriptItem is null ? "script item match not found" : "map item is null";
+            err["error"] = "map item is null";
             err["mapIndex"] = itemMapIndex;
-            err["nbScriptItems"] = int(pmt.Items.Length);
             errors.Add(err);
             return;
         }
 
+        CSystemPackDesc@ bgPd = null;
+        CSystemPackDesc@ fgPd = null;
         try {
-            if (skin.fgSkin.Length > 0) {
-                pmt.SetItemSkins(scriptItem, skin.bgSkin, skin.fgSkin);
+            if (skin.bgSkin.Length > 0) @bgPd = Editor::GetPackDesc(skin.bgSkin);
+            if (skin.fgSkin.Length > 0) @fgPd = Editor::GetPackDesc(skin.fgSkin);
+            if ((skin.bgSkin.Length > 0 && bgPd is null) || (skin.fgSkin.Length > 0 && fgPd is null)) {
+                Json::Value err = NamedMacroblockSkinToJson(skin);
+                err["error"] = "failed to resolve skin URL(s) to pack desc";
+                err["mapIndex"] = itemMapIndex;
+                err["bgResolved"] = bgPd !is null;
+                err["fgResolved"] = fgPd !is null;
+                errors.Add(err);
             } else {
-                pmt.SetItemSkin(scriptItem, skin.bgSkin);
-            }
-            Json::Value ok = NamedMacroblockSkinToJson(skin);
-            ok["mapIndex"] = itemMapIndex;
-            ok["actualSkin"] = ItemSkinToJson(mapItem);
-            if (!bool(ok["actualSkin"]["hasSkin"])) {
-                ok["error"] = "skin was not reflected on item after SetItemSkin(s)";
-                errors.Add(ok);
-            } else {
-                applied.Add(ok);
+                Editor::SetItemSkinsRaw(mapItem, bgPd, fgPd);
+                Json::Value ok = NamedMacroblockSkinToJson(skin);
+                ok["mapIndex"] = itemMapIndex;
+                ok["actualSkin"] = ItemSkinToJson(mapItem);
+                if (!bool(ok["actualSkin"]["hasSkin"])) {
+                    ok["error"] = "skin was not reflected on item after SetItemSkinsRaw";
+                    errors.Add(ok);
+                } else {
+                    applied.Add(ok);
+                }
             }
         } catch {
             Json::Value err = NamedMacroblockSkinToJson(skin);
@@ -185,6 +191,8 @@ namespace TmMcp {
             err["mapIndex"] = itemMapIndex;
             errors.Add(err);
         }
+        if (bgPd !is null) bgPd.MwRelease();
+        if (fgPd !is null) fgPd.MwRelease();
     }
 
     void ApplyNamedMacroblockBlockSkin(
