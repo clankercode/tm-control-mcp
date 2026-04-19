@@ -139,6 +139,23 @@ Labels embed UTF-8 C1 control markers: `U+0091` (`\xC2\x91`) and `U+0092` (`\xC2
 | `\|Prefix\|Text`                                       | rare, no marker                  | `Text`           |
 | Plain text (e.g. `Ubisoft Connect`)                    | no translation                   | unchanged        |
 
+## Router_Push event payload shape
+
+The MLHook event queue entry `Queue_Menu_SendCustomEvent("Router_Push", {route, extra, history})` takes three strings:
+
+| Slot | Purpose | Format | Example |
+|------|---------|--------|---------|
+| 0 | Route path | String | `/create/mapeditorsettings` |
+| 1 | Extras / route hydration | JSON string | `{"ForceMode":"Royal"}` |
+| 2 | Navigation history controls | JSON string | `{"SaveHistory":true,"ResetPreviousPagesDisplayed":true,"KeepPreviousPagesDisplayed":false,"HidePreviousPage":true,"ShowParentPage":false,"ExcludeOverlays":[]}` |
+
+`SetMenuPage` currently exposes slot 0 (`route`) and slot 1 (`extra`, default `"{}"`) but not slot 2 (hardcoded `"{}"`). Exposing slot 2 would be a small additive improvement.
+
+Observed route-hydration behavior (2026-04-20):
+
+- `/solo/campaigndisplay` without extras → `Page_CampaignDisplay` becomes visible but its content panel stays empty (no campaign selected).
+- `/matchmakingmainpage` with `{"ForceMode":"Royal"}` — did NOT render on current build (stayed on Page_LoadingScreen). May be a dead route in newer TM builds, or a different path prefix is now required.
+
 ## Tools for this kind of investigation
 
 - `GetLayerXml { layerIndex, find?, context?=120, maxHits?=20, caseInsensitive?, offset?, length?=2048 }` — grep or slice a layer's Manialink XML. Far cheaper than dumping the whole 50-120 KB XML. Use it to chase handler names, control IDs, and Router_Router calls.
