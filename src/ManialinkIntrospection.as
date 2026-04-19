@@ -288,22 +288,55 @@ namespace TmMcp {
                 if (_FindControlPath(mainFrame, controlId, idPath)) output["idPath"] = idPath;
             }
         }
+        bool recursive = input.HasKey("recursive") ? bool(input["recursive"]) : false;
+        int maxDepth = input.HasKey("maxDepth") ? int(input["maxDepth"]) : 1;
+        bool onlyWithId = input.HasKey("onlyWithId") ? bool(input["onlyWithId"]) : false;
+        bool includeHidden = input.HasKey("includeHidden") ? bool(input["includeHidden"]) : true;
+        int maxResults = input.HasKey("maxResults") ? int(input["maxResults"]) : 200;
+
         auto picked = direct !is null ? direct : viaFrame;
         if (picked !is null) {
             auto frame = cast<CGameManialinkFrame>(picked);
             if (frame !is null) {
-                Json::Value kids = Json::Array();
-                uint nk = 0;
-                try { nk = frame.Controls.Length; } catch { nk = 0; }
-                for (uint i = 0; i < nk && i < 32; i++) {
-                    CGameManialinkControl@ c = null;
-                    try { @c = frame.Controls[i]; } catch { @c = null; }
-                    kids.Add(_ControlSnapshotJson(c));
+                if (recursive) {
+                    Json::Value descendants = Json::Array();
+                    uint nk = 0;
+                    try { nk = frame.Controls.Length; } catch { nk = 0; }
+                    for (uint i = 0; i < nk; i++) {
+                        CGameManialinkControl@ c = null;
+                        try { @c = frame.Controls[i]; } catch { @c = null; }
+                        if (c is null) continue;
+                        string cid = "";
+                        try { cid = string(c.ControlId); } catch { cid = ""; }
+                        string childPath = cid.Length > 0 ? cid : ("#" + i);
+                        _WalkControl(c, childPath, 0, maxDepth, onlyWithId, includeHidden, descendants);
+                        if (int(descendants.Length) >= maxResults) break;
+                    }
+                    if (int(descendants.Length) > maxResults) {
+                        Json::Value trimmed = Json::Array();
+                        for (int ci = 0; ci < maxResults; ci++) trimmed.Add(descendants[ci]);
+                        output["descendants"] = trimmed;
+                        output["truncated"] = true;
+                    } else {
+                        output["descendants"] = descendants;
+                    }
+                    output["descendantCount"] = int(descendants.Length);
+                } else {
+                    Json::Value kids = Json::Array();
+                    uint nk = 0;
+                    try { nk = frame.Controls.Length; } catch { nk = 0; }
+                    for (uint i = 0; i < nk && i < 32; i++) {
+                        CGameManialinkControl@ c = null;
+                        try { @c = frame.Controls[i]; } catch { @c = null; }
+                        kids.Add(_ControlSnapshotJson(c));
+                    }
+                    output["children"] = kids;
                 }
-                output["children"] = kids;
             }
         }
-        output["note"] = "Probe: calls page.GetFirstChild(controlId) and mainFrame.GetFirstChild(controlId). Both should return the same node if present. Child list limited to 32.";
+        output["note"] = recursive
+            ? "Probe: descendants walked via _WalkControl starting from matched control. Paths are id-based (with #N fallback for unnamed children)."
+            : "Probe: immediate children of matched control (capped at 32). Pass recursive:true with maxDepth for deeper walks.";
         return MakeSuccess(output);
     }
 
@@ -558,10 +591,65 @@ namespace TmMcp {
     // CMGame_ExpendableButton_quad-nav-zone at Controls[0]/[4]/[0] under the
     // nav-item frame. Caller decides which control to target via
     // controlId or indexPath.
+    void _RecursiveOnAction(CGameManialinkControl@ ctrl, int depth, int maxDepth, bool onlyVisible, Json::Value &inout fired, _Counter@ fireCount, int maxFires) {
+        if (ctrl is null) return;
+        if (depth > maxDepth) return;
+        if (fireCount.n >= maxFires) return;
+        if (onlyVisible) {
+            bool vis = true;
+            try { vis = bool(ctrl.Visible); } catch { vis = true; }
+            if (!vis) return;
+        }
+        CControlBase@ base = null;
+        try { @base = ctrl.Control; } catch { @base = null; }
+        if (base !is null) {
+            bool threw = false;
+            try { base.OnAction(); } catch { threw = true; }
+            Json::Value entry = Json::Object();
+            string cid = "";
+            try { cid = string(ctrl.ControlId); } catch { cid = ""; }
+            entry["controlId"] = cid;
+            string ty = "?";
+            try { ty = Reflection::TypeOf(ctrl).Name; } catch { /* swallow */ }
+            entry["type"] = ty;
+            if (threw) entry["threw"] = true;
+            fired.Add(entry);
+            fireCount.n++;
+            if (fireCount.n >= maxFires) return;
+        }
+        auto frame = cast<CGameManialinkFrame>(ctrl);
+        if (frame is null) return;
+        uint n = 0;
+        try { n = frame.Controls.Length; } catch { n = 0; }
+        for (uint i = 0; i < n; i++) {
+            CGameManialinkControl@ c = null;
+            try { @c = frame.Controls[i]; } catch { @c = null; }
+            if (c is null) continue;
+            _RecursiveOnAction(c, depth + 1, maxDepth, onlyVisible, fired, fireCount, maxFires);
+            if (fireCount.n >= maxFires) return;
+        }
+    }
+
     Json::Value@ TriggerControlOnAction(Json::Value &in input) {
         string err;
         auto ctrl = _ResolveControlFromInput(input, err);
         if (ctrl is null) return MakeError(err);
+        bool recursive = input.HasKey("recursive") ? bool(input["recursive"]) : false;
+        if (recursive) {
+            int maxDepth = input.HasKey("maxDepth") ? int(input["maxDepth"]) : 10;
+            int maxFires = input.HasKey("maxFires") ? int(input["maxFires"]) : 128;
+            bool onlyVisible = input.HasKey("onlyVisible") ? bool(input["onlyVisible"]) : true;
+            Json::Value fired = Json::Array();
+            _Counter@ fireCount = _Counter();
+            _RecursiveOnAction(ctrl, 0, maxDepth, onlyVisible, fired, fireCount, maxFires);
+            Json::Value output = Json::Object();
+            try { output["rootControlId"] = string(ctrl.ControlId); } catch { /* swallow */ }
+            output["recursive"] = true;
+            output["fireCount"] = fireCount.n;
+            output["fired"] = fired;
+            output["note"] = "Called CControlBase::OnAction() on every descendant (DFS, onlyVisible respected). Use when a single OnAction on the nav-zone does not advance the state machine.";
+            return MakeSuccess(output);
+        }
         CControlBase@ base = null;
         try { @base = ctrl.Control; } catch { return MakeError("reading .Control threw: " + getExceptionInfo()); }
         if (base is null) return MakeError("control.Control is null");
