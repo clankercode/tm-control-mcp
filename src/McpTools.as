@@ -698,6 +698,7 @@ namespace TmMcp {
             || name == "GetRecentItems"
             || name == "GetInventorySummary"
             || name == "FindInventory"
+            || name == "RefreshInventory"
             || name == "BrowseInventoryTree"
             || name == "InspectMacroblockModel"
             || name == "ListMacroblockInstances"
@@ -760,6 +761,7 @@ namespace TmMcp {
         if (name == "GetRecentItems") return GetRecentItems(input);
         if (name == "GetInventorySummary") return GetInventorySummary(input);
         if (name == "FindInventory") return FindInventory(input);
+        if (name == "RefreshInventory") return RefreshInventory(input);
         if (name == "BrowseInventoryTree") return BrowseInventoryTree(input);
         if (name == "InspectMacroblockModel") return InspectMacroblockModel(input);
         if (name == "ListMacroblockInstances") return ListMacroblockInstances(input);
@@ -824,6 +826,7 @@ namespace TmMcp {
         tools.Add(MakeTool("GetRecentItems", "Get the last N anchored items in map item order.", '{"type":"object","properties":{"count":{"type":"integer"}}}'));
         tools.Add(MakeTool("GetInventorySummary", "Get E++ inventory cache counts and scan status.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("FindInventory", "Search E++ inventory cache blocks, items, and macroblocks.", '{"type":"object","properties":{"query":{"type":"string"},"type":{"type":"string"},"limit":{"type":"integer"}}}'));
+        tools.Add(MakeTool("RefreshInventory", "Trigger E++ InventoryCache rescan (use after user adds items mid-session; cache is scanned once on editor load).", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("BrowseInventoryTree", "Read-only browse of the editor inventory root/directories. Supports root, rootIndex, path, depth, limit, query.", '{"type":"object","properties":{"root":{"type":"string"},"rootIndex":{"type":"integer"},"path":{"type":"string"},"depth":{"type":"integer"},"limit":{"type":"integer"},"query":{"type":"string"},"includeArticles":{"type":"boolean"}}}'));
         tools.Add(MakeTool("InspectMacroblockModel", "Inspect a loaded macroblock model by name, file path, or index via E++ MacroblockSpec conversion.", '{"type":"object","properties":{"name":{"type":"string"},"path":{"type":"string"},"index":{"type":"integer"},"limit":{"type":"integer"},"includeItems":{"type":"boolean"}}}'));
         tools.Add(MakeTool("ListMacroblockInstances", "List placed map macroblock instances with coord, order, user data, size, unit coords, and model metadata.", '{"type":"object","properties":{"limit":{"type":"integer"},"offset":{"type":"integer"},"recent":{"type":"boolean"},"unitCoordLimit":{"type":"integer"}}}'));
@@ -1629,6 +1632,18 @@ namespace TmMcp {
         output["query"] = query;
         output["type"] = requestedType;
         output["inventory"] = InventorySummary(editor.PluginMapType);
+        return MakeSuccess(output);
+    }
+
+    Json::Value@ RefreshInventory(Json::Value &in input) {
+        auto editor = GetEditor();
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available");
+        uint preCount = Editor::GetInventoryNbItems();
+        Editor::RefreshInventoryCache();
+        Json::Value output = Json::Object();
+        output["nbItemsBefore"] = int(preCount);
+        output["isScanningItems"] = Editor::IsInventoryScanningItems();
+        output["note"] = "rescan started; poll GetInventorySummary until isScanningItems=false, then re-query";
         return MakeSuccess(output);
     }
 
