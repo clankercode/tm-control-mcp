@@ -456,15 +456,19 @@ namespace TmMcp {
         auto rot = Editor::GetBlockRotation(block);
         obj["rot"] = Vec3ToJson(rot);
         obj["rotDeg"] = Vec3DegToJson(rot);
+        obj["skin"] = BlockSkinToJson(block);
+        return obj;
+    }
+
+    Json::Value BlockSkinToJson(CGameCtnBlock@ block) {
         Json::Value skin = Json::Object();
-        skin["hasSkin"] = block.Skin !is null;
-        if (block.Skin !is null) {
+        skin["hasSkin"] = block !is null && block.Skin !is null;
+        if (block !is null && block.Skin !is null) {
             skin["bgSkin"] = PackDescPath(block.Skin.PackDesc);
             skin["fgSkin"] = PackDescPath(block.Skin.ForegroundPackDesc);
             skin["parentSkin"] = PackDescPath(block.Skin.ParentPackDesc);
         }
-        obj["skin"] = skin;
-        return obj;
+        return skin;
     }
 
     Json::Value ItemToJson(CGameCtnAnchoredObject@ item) {
@@ -635,7 +639,13 @@ namespace TmMcp {
                 pmt.SetBlockSkins(block, skin.bgSkin, skin.fgSkin);
                 Json::Value ok = NamedMacroblockSkinToJson(skin);
                 ok["mapIndex"] = mapIndex;
-                applied.Add(ok);
+                ok["actualSkin"] = BlockSkinToJson(block);
+                if (block.Skin is null) {
+                    ok["error"] = "skin was not reflected on block after SetBlockSkins";
+                    errors.Add(ok);
+                } else {
+                    applied.Add(ok);
+                }
             } catch {
                 Json::Value err = NamedMacroblockSkinToJson(skin);
                 err["error"] = getExceptionInfo();
