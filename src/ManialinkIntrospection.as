@@ -635,7 +635,21 @@ namespace TmMcp {
             Json::Value smpInput = Json::Object();
             smpInput["route"] = "/create/mapeditorsettings";
             auto smpRes = SetMenuPage(smpInput);
-            // We ignore the protocol-level return; just wait for the page to appear.
+            // Propagate upstream errors (MLHook missing, not in menu module,
+            // dangerous route blocked, ...) instead of falling through to the
+            // page-visibility poll and reporting a generic timeout.
+            if (smpRes !is null && smpRes.HasKey("success") && !bool(smpRes["success"])) {
+                string upstreamErr = "SetMenuPage failed";
+                if (smpRes.HasKey("error")) upstreamErr = string(smpRes["error"]);
+                Json::Value rv = Json::Object();
+                rv["ok"] = false;
+                rv["failedAt"] = "SetMenuPage";
+                rv["expectedFrame"] = "Page_MapEditorSettings";
+                rv["lastObserved"] = upstreamErr;
+                rv["elapsedMs"] = int(Time::Now - startMs);
+                rv["steps"] = steps;
+                return MakeSuccess(rv);
+            }
         }
 
         // Poll for Page_MapEditorSettings to become visible (max 1000ms)
@@ -702,11 +716,31 @@ namespace TmMcp {
             string expectFrame = expectedFrameIds[si];
             bool isFinal = expectFrame.Length == 0;
 
-            // Click the button; detect success/failure via next-frame poll rather than
-            // inspecting ClickMenuButton's return (the frame transition is the ground truth).
+            // Click the button. Short-circuit on protocol-level resolution
+            // failures (controlId not found, nav-zone missing) so the caller
+            // sees the real error instead of a generic "frame not visible"
+            // timeout downstream.
             Json::Value clickInput = Json::Object();
             clickInput["controlId"] = btnId;
-            ClickMenuButton(clickInput);
+            auto clickRes = ClickMenuButton(clickInput);
+            if (clickRes !is null && clickRes.HasKey("success") && !bool(clickRes["success"])) {
+                string clickErr = "ClickMenuButton failed";
+                if (clickRes.HasKey("error")) clickErr = string(clickRes["error"]);
+                Json::Value step = Json::Object();
+                step["name"] = btnId + " click";
+                step["observed"] = false;
+                step["ms"] = int(Time::Now - startMs);
+                step["error"] = clickErr;
+                steps.Add(step);
+                Json::Value rv = Json::Object();
+                rv["ok"] = false;
+                rv["failedAt"] = btnId + " click";
+                rv["expectedFrame"] = expectFrame;
+                rv["lastObserved"] = clickErr;
+                rv["elapsedMs"] = int(Time::Now - startMs);
+                rv["steps"] = steps;
+                return MakeSuccess(rv);
+            }
 
             uint stepStart = Time::Now;
 
