@@ -494,6 +494,35 @@ namespace TmMcp {
         return ctrl;
     }
 
+    // Invoke CControlBase::OnAction() on the resolved control. OnAction is
+    // the low-level click-dispatch that the UI itself calls when a button is
+    // activated — living on CControlBase (Openplanet.h:13548) without the
+    // // Maniascript marker, so it is safe to call from Angelscript (unlike
+    // CGameManialinkScriptHandler::TriggerPageAction which native-crashes).
+    //
+    // For Nadeo expendable-button nav-items (e.g. 'button-create' on
+    // Page_HomePage), the control that actually owns the click is the leaf
+    // CMGame_ExpendableButton_quad-nav-zone at Controls[0]/[4]/[0] under the
+    // nav-item frame. Caller decides which control to target via
+    // controlId or indexPath.
+    Json::Value@ TriggerControlOnAction(Json::Value &in input) {
+        string err;
+        auto ctrl = _ResolveControlFromInput(input, err);
+        if (ctrl is null) return MakeError(err);
+        CControlBase@ base = null;
+        try { @base = ctrl.Control; } catch { return MakeError("reading .Control threw: " + getExceptionInfo()); }
+        if (base is null) return MakeError("control.Control is null");
+        string baseTy = "?";
+        try { baseTy = Reflection::TypeOf(base).Name; } catch { /* swallow */ }
+        try { base.OnAction(); } catch { return MakeError("OnAction() threw: " + getExceptionInfo()); }
+        Json::Value output = Json::Object();
+        try { output["controlId"] = string(ctrl.ControlId); } catch { /* swallow */ }
+        try { output["type"] = Reflection::TypeOf(ctrl).Name; } catch { /* swallow */ }
+        output["controlBaseType"] = baseTy;
+        output["note"] = "Called CControlBase::OnAction(). This is the game's own click-dispatch path; it does not need Maniascript runtime.";
+        return MakeSuccess(output);
+    }
+
     Json::Value@ SetMenuControlVisible(Json::Value &in input) {
         if (!input.HasKey("visible")) return MakeError("missing visible (bool)");
         bool visible = bool(input["visible"]);

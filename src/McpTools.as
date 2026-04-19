@@ -757,7 +757,8 @@ namespace TmMcp {
             || name == "BackToMainMenu"
             || name == "ClickMenuButton"
             || name == "InspectMenuControl"
-            || name == "SetMenuControlVisible";
+            || name == "SetMenuControlVisible"
+            || name == "TriggerControlOnAction";
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
@@ -840,6 +841,7 @@ namespace TmMcp {
         if (name == "ClickMenuButton") return ClickMenuButton(input);
         if (name == "InspectMenuControl") return InspectMenuControl(input);
         if (name == "SetMenuControlVisible") return SetMenuControlVisible(input);
+        if (name == "TriggerControlOnAction") return TriggerControlOnAction(input);
         return null;
     }
 
@@ -924,6 +926,7 @@ namespace TmMcp {
         tools.Add(MakeTool("ClickMenuButton", "DISABLED — calling TriggerPageAction from Angelscript crashes openplanet.dll natively. Kept as a surfaced error so callers learn the constraint. Use SetMenuPage for nav routes; EditNewMap/BackToMainMenu for terminal actions.", '{"type":"object","properties":{"action":{"type":"string"},"controlId":{"type":"string"}}}'));
         tools.Add(MakeTool("InspectMenuControl", "Probe: resolve a ControlId on the active Page_* (or named layer) via LocalPage.GetFirstChild and MainFrame.GetFirstChild. Returns type, classes, visibility, position, plus two path encodings from MainFrame: 'path' is slash-joined child indexes (e.g. '3/0' = MainFrame.Controls[3].Controls[0]), 'idPath' is slash-joined ControlIds (e.g. 'frame-global/button-create'). Includes up to 32 children if the match is a frame. Read-only — safe to call from Angelscript.", '{"type":"object","properties":{"controlId":{"type":"string"},"layerName":{"type":"string"}},"required":["controlId"]}'));
         tools.Add(MakeTool("SetMenuControlVisible", "Call Show()/Hide() on a menu control. Resolve either by {controlId} (global search) or {indexPath, layerIndex|layerName} (direct walk from MainFrame). visible=true calls Show; false calls Hide. Menu may re-render and reset visibility on the next tick — re-observe after to confirm. Works from Angelscript (unlike TriggerPageAction).", '{"type":"object","properties":{"controlId":{"type":"string"},"indexPath":{"type":"string"},"layerIndex":{"type":"integer"},"layerName":{"type":"string"},"visible":{"type":"boolean"}},"required":["visible"]}'));
+        tools.Add(MakeTool("TriggerControlOnAction", "Click a menu control by invoking its underlying CControlBase.OnAction() — the same dispatch the game uses when a button is activated. Resolve via {controlId} (global search) or {indexPath, layerIndex|layerName}. For Nadeo expendable-button nav-items (e.g. button-create on Page_HomePage) the click target is the leaf nav-zone at Controls[0]/[4]/[0]; pass that indexPath explicitly. Safe from Angelscript (OnAction is on CControlBase, not the script-handler).", '{"type":"object","properties":{"controlId":{"type":"string"},"indexPath":{"type":"string"},"layerIndex":{"type":"integer"},"layerName":{"type":"string"}}}'));
         return tools;
     }
 
