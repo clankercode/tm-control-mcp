@@ -23,7 +23,6 @@ plugin_slug() {
 
 local_dependency_root() {
   case "$1" in
-    McpTM) echo "../tm-mcptm" ;;
     AiApi) echo "../tm-aiapi" ;;
     *) return 1 ;;
   esac

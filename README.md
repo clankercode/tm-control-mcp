@@ -40,9 +40,13 @@ Current tools:
 - `SaveMapAs`
 - `GetDialog`
 - `RespondDialog`
+- `ControlValidation`
+- `ControlSelection`
 - `GetCursor`
+- `ControlCursor`
 - `GetEditorCamera`
 - `SetEditorCamera`
+- `ControlCamera`
 - `FocusCamera`
 - `TakeScreenshot`
 - `GetBlocks`
@@ -58,12 +62,18 @@ Current tools:
 - `ListNamedMacroblocks`
 - `ClearNamedMacroblock`
 - `AddBlockToNamedMacroblock`
+- `AddBlocksToNamedMacroblock`
 - `AddItemToNamedMacroblock`
+- `AddItemsToNamedMacroblock`
 - `PlaceNamedMacroblock`
+- `CanPlaceBlock`
 - `PlaceBlock`
 - `PlaceBlockViaEditorPlusPlus`
 - `PlaceItemViaEditorPlusPlus`
 - `RemoveBlock`
+- `ClearBlocks`
+- `ClearItems`
+- `ClearMapContent`
 - `RemoveRecentBlocks`
 - `RemoveRecentItems`
 - `RemoveBlocksByIndex`
@@ -75,16 +85,28 @@ Current tools:
 
 ## Quick Test
 
+`tools/call.py` checks for a real Wine/Proton `Trackmania.exe` process before
+opening the socket on every route, including `status` and `tools`. This avoids
+waiting on a stale wrapper or frozen plugin when the game is not actually
+running. Use `--skip-process-check` only for raw socket debugging.
+
 ```bash
 ./build.sh dev
 python3 tools/call.py status
+python3 tools/call.py --pretty status
 python3 tools/call.py GetMode
 python3 tools/call.py GetMapInfo
 python3 tools/call.py SaveMapAs '{"name":"codex-save-test","folder":"MCP","overwrite":true}'
 python3 tools/call.py GetDialog
 python3 tools/call.py RespondDialog '{"action":"no"}'
+python3 tools/call.py ControlValidation '{"action":"status"}'
+python3 tools/call.py ControlSelection '{"action":"status"}'
 python3 tools/call.py GetEditorCamera
 python3 tools/call.py FocusCamera '{"x":338,"y":108.8,"z":196.25,"distance":60}'
+python3 tools/call.py ControlCamera '{"action":"status"}'
+python3 tools/call.py ControlCamera '{"action":"watchWholeMap","smooth":true}'
+python3 tools/call.py ControlCursor '{"action":"status"}'
+python3 tools/call.py ControlCursor '{"action":"move","direction":"Forward","directionKind":"relative"}'
 python3 tools/call.py TakeScreenshot '{"format":"jpg"}'
 python3 tools/call.py GetInventorySummary
 python3 tools/call.py FindInventory '{"query":"RoadTech","type":"block","limit":5}'
@@ -98,23 +120,35 @@ python3 tools/call.py PlaceBlockViaEditorPlusPlus '{"blockName":"RoadTechStraigh
 python3 tools/call.py GetRecentBlocks '{"count":8}'
 python3 tools/call.py CreateNamedMacroblock '{"name":"stress-a","replace":true}'
 python3 tools/call.py AddBlockToNamedMacroblock '{"name":"stress-a","blockName":"RoadTechStraight","x":430,"y":128,"z":226,"pitch":12,"yaw":18,"roll":7}'
+python3 tools/call.py AddBlockToNamedMacroblock '{"name":"skin-a","blockName":"TechnicsScreen1x1Straight","x":900,"y":188,"z":560,"bgSkin":"Skins\\\\Stadium\\\\LightColors\\\\Pink.dds"}'
 python3 tools/call.py AddBlockToNamedMacroblock '{"name":"stress-a","blockName":"RoadTechStraight","x":462,"y":134.4,"z":235.75,"pitch":12,"yaw":18,"roll":7}'
+python3 tools/call.py AddBlocksToNamedMacroblock '{"name":"stress-a","blocks":[{"blockName":"RoadTechStraight","x":494,"y":142,"z":245,"yaw":30},{"blockName":"RoadTechStraight","x":526,"y":148,"z":254,"yaw":35}]}'
 python3 tools/call.py AddItemToNamedMacroblock '{"name":"stress-a","itemPath":"LightCube4m","x":494,"y":142,"z":245,"yaw":30}'
+python3 tools/call.py AddItemsToNamedMacroblock '{"name":"stress-a","items":[{"itemPath":"LightCube2m","x":510,"y":154,"z":250,"yaw":20}]}'
 python3 tools/call.py GetNamedMacroblock '{"name":"stress-a","limit":5}'
 python3 tools/call.py PlaceNamedMacroblock '{"name":"stress-a","offsetX":0,"offsetY":0,"offsetZ":0}'
 python3 tools/call.py PlaceNamedMacroblock '{"name":"stress-a","offsetX":64,"yaw":25,"pivotX":430,"pivotY":128,"pivotZ":226}'
+python3 tools/call.py CanPlaceBlock '{"blockName":"RoadTechStraight","x":24,"y":20,"z":24}'
 python3 tools/call.py PlaceItemViaEditorPlusPlus '{"itemPath":"LightCube2m","x":710,"y":190,"z":320,"yaw":20}'
+python3 tools/call.py ClearItems
+python3 tools/call.py ClearBlocks
+python3 tools/call.py ClearMapContent '{"includeTerrain":false}'
 python3 tools/call.py RemoveRecentItems '{"count":1}'
 python3 tools/call.py RemoveRecentBlocks '{"count":1}'
 python3 tools/call.py RemoveBlocksByIndex '{"index":2307}'
 python3 tools/call.py RemoveItemsByIndex '{"index":1,"forceBufferFallback":true}'
 ```
 
-`PlaceBlock` uses no-destruction placement unless `allowDestruction` is true.
-Prefer checking `canPlace` / `placed` and verifying with `GetBlockAt`; raw editor
-undo can group adjacent direct API actions. Mutating placement tools include
-`mapPre` and `mapPost` metadata with map name, size, block count, baked block
-count, item count, and vertex count.
+`tools/call.py` returns compact JSON by default. Use `--pretty` when reading
+responses manually. It returns compact JSON errors if Trackmania or the plugin
+socket is unavailable.
+
+`CanPlaceBlock` checks normal grid or terrain block placement without mutating
+the map. `PlaceBlock` uses no-destruction placement unless `allowDestruction`
+is true. Prefer checking `canPlace` / `placed` and verifying with `GetBlockAt`;
+raw editor undo can group adjacent direct API actions. Mutating placement tools
+include `mapPre` and `mapPost` metadata with map name, size, block count, baked
+block count, item count, and vertex count.
 
 `GetMapInfo` and mutating tool map summaries include `bounds` in editor coords
 and meters. Coord bounds are `[0,0,0]` through `size - 1`, with
@@ -133,6 +167,30 @@ is useful when editor automation hits in-game prompts such as unsaved map
 confirmation. `RespondDialog` accepts `yes`, `no`, `cancel`, `ok`, `wait-ok`,
 `validate`, `saveas-cancel`, and `hide`.
 
+`ControlValidation` exposes map validation and test/playground controls. Use
+`action=status` for read-only validation state. Deliberate mutating actions are
+`validate`, `requestEnterPlayground`, `requestLeavePlayground`, `testFromStart`,
+and `testFromCoord`.
+
+`ControlSelection` exposes editor copy-paste/custom selection controls. Use
+`action=status` for read-only selection state and selected coord counts.
+Deliberate mutating actions include `showCustom`, `hideCustom`,
+`resetSelection`, `selectAll`, `addSelection`, `copy`, `cut`, `remove`, and
+`symmetrize`.
+
+`ControlCamera` exposes the editor camera API. It can report camera API state,
+center on the cursor, move to map center, watch the whole map/start/closest
+finish/checkpoint, zoom, look cardinal or cardinal8 directions, follow the
+cursor, ignore camera collisions, release the camera lock, and set vertical
+step. `GetEditorCamera`, `SetEditorCamera`, and `FocusCamera` remain available
+for exact numeric camera control.
+
+`ControlCursor` exposes the editor cursor API. It can report cursor API state
+with `action=status`, move relative/cardinal/cardinal8 directions, rotate,
+raise/lower, move to the camera target, follow the camera target, disable mouse
+detection, release the cursor lock, and set/reset custom cursor RGB. It avoids
+direct coordinate writes for now and uses the game's cursor methods instead.
+
 `PlaceBlockViaEditorPlusPlus` places free blocks through E++ macroblock
 placement. Rotation inputs are degrees by default (`pitch`, `yaw`, `roll`);
 use `pitchRad`, `yawRad`, or `rollRad` for radians. `GetRecentBlocks` includes
@@ -143,14 +201,20 @@ Placement autofocus is enabled by default; pass `autofocus=false` to skip it or
 `FindInventory` searches loaded block models, macroblock models, and E++ item
 inventory wrapper exports. Use `type` as `block`, `item`, `macroblock`, or
 `all`. Item results return inventory paths suitable for item placement tools.
+`FindBlockModels` includes block variant counts and base sizes, which is useful
+for choosing nonzero variants for macroblock stress tests.
 `SetCursorBlock` is an alias for `SelectBlockModel`, which sets the editor's
 normal and ghost selected block model through E++ exports.
 
 Named macroblock tools keep E++ `MacroblockSpec` handles in plugin memory.
 They support free block specs, flying item specs, and placement-time translation
 and rotation around a world-space pivot. Rotation inputs are degrees by default;
-use `pitchRad`, `yawRad`, or `rollRad` for radians. These named handles are
-in-memory only and are cleared when TM Control MCP reloads.
+use `pitchRad`, `yawRad`, or `rollRad` for radians. Free block specs accept
+`variant`, `bgSkin`, and `fgSkin`; skins are applied directly to the newly
+inserted map blocks after `PlaceNamedMacroblock` succeeds. These named handles
+are in-memory only and are cleared when TM Control MCP reloads.
+Use `AddBlocksToNamedMacroblock` and `AddItemsToNamedMacroblock` for generated
+builds; they avoid one socket round trip per block/item.
 
 `PlaceItemViaEditorPlusPlus` places flying items through E++ item placement.
 It accepts item inventory paths from `FindInventory`, degree or radian rotation
@@ -162,11 +226,21 @@ freeblock deletion queue; non-free blocks fall back to E++ `DeleteBlocks`.
 `RemoveBlocksByIndex` uses the same deletion paths for explicit map block
 indices.
 
+`ClearBlocks`, `ClearItems`, and `ClearMapContent` call the editor
+`PluginMapType` clear methods directly. `ClearBlocks` uses `RemoveAllBlocks()`;
+`ClearItems` uses `RemoveAllObjects()`; `ClearMapContent` uses both, or
+`RemoveAllBlocksAndTerrain()` plus `RemoveAllObjects()` when
+`includeTerrain=true`. These tools return `mapPre` / `mapPost` summaries.
+
 `RemoveRecentItems` and `RemoveItemsByIndex` first try E++ `DeleteItems`.
 Direct `AnchoredObjects` buffer removal is available only with
 `forceBufferFallback=true`, reports `undoSupported=false`, and should be used
 as cleanup tooling rather than normal user-facing undoable deletion.
 
 `TakeScreenshot` triggers Trackmania's built-in viewport screenshot capture.
-The write is asynchronous; on the current Wine/Steam install the file appears
-under the user game folder as `ScreenShotNN.jpg`.
+When called through `tools/call.py`, the caller indexes the Wine user game
+folder before and after the request, waits briefly for the async write, and
+adds `detectedScreenshot.linuxPath` / `size` to the response when it can find
+the new file. The default Linux lookup path is the Steam Proton prefix for app
+`2225070`; set `TM_USER_GAME_FOLDER` to the active Trackmania documents folder
+for other Wine/Proton installs.

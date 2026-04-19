@@ -7,6 +7,24 @@ namespace Editor {
 namespace TmMcp {
     array<string> g_NamedMacroblockNames;
     array<Editor::MacroblockSpec@> g_NamedMacroblocks;
+    array<NamedMacroblockSkin@[]@> g_NamedMacroblockSkins;
+
+    class NamedMacroblockSkin {
+        uint blockIndex;
+        string fgSkin;
+        string bgSkin;
+
+        NamedMacroblockSkin(uint blockIndex, const string &in fgSkin, const string &in bgSkin) {
+            this.blockIndex = blockIndex;
+            this.fgSkin = fgSkin;
+            this.bgSkin = bgSkin;
+        }
+    }
+
+    NamedMacroblockSkin@[]@ NewNamedMacroblockSkinList() {
+        NamedMacroblockSkin@[] skins;
+        return skins;
+    }
 
     CGameCtnEditorFree@ GetEditor() {
         auto app = cast<CTrackMania>(GetApp());
@@ -118,6 +136,11 @@ namespace TmMcp {
         return output;
     }
 
+    string PackDescPath(CSystemPackDesc@ packDesc) {
+        if (packDesc is null) return "";
+        return packDesc.Url.Length > 0 ? packDesc.Url : string(packDesc.Name);
+    }
+
     float InputFloatOr(Json::Value &in input, const string &in key, float defaultValue) {
         return input.HasKey(key) ? float(input[key]) : defaultValue;
     }
@@ -161,8 +184,41 @@ namespace TmMcp {
             || input.HasKey("pitchRad") || input.HasKey("yawRad") || input.HasKey("rollRad");
     }
 
+    // Convert a world-space look direction into orbital (hAngle, vAngle) radians.
+    // Matches the game's convention verified by tests/test_camera_math.py:
+    //   look_dir(h, v) = (cos(v) * sin(h), -sin(v), cos(v) * cos(h))
+    // Editor::DirToLookUv omits asin and scales by /PI*2, so it is wrong at steep
+    // pitches; use proper atan2 / asin here instead.
+    vec2 LookDirToOrbitalAngles(vec3 dir) {
+        if (dir.LengthSquared() < 1.0e-12) return vec2(0, 0);
+        vec3 n = dir.Normalized();
+        float h = Math::Atan2(n.x, n.z);
+        float v = -Math::Asin(Math::Clamp(n.y, -1.0, 1.0));
+        return vec2(h, v);
+    }
+
     bool FocusCameraOn(vec3 pos, float distance) {
-        return Editor::SetCamAnimationGoTo(Editor::DirToLookUvFromCamera(pos), pos, distance);
+        auto editor = GetEditor();
+        auto orbital = editor is null ? null : editor.OrbitalCameraControl;
+        vec3 camPos = orbital is null ? pos + vec3(0, 0, -1) : orbital.Pos;
+        vec3 dir = pos - camPos;
+        if (dir.LengthSquared() < 1.0e-6) dir = vec3(0, 0, 1);
+        return Editor::SetCamAnimationGoTo(LookDirToOrbitalAngles(dir), pos, distance);
+    }
+
+    // High-angle autofocus: look down at `pos` from above, keeping the horizontal yaw
+    // pointing from the target back toward the current camera so the transition animates
+    // naturally from the user's viewpoint.
+    bool AutofocusCameraOn(vec3 pos, float distance) {
+        auto editor = GetEditor();
+        auto orbital = editor is null ? null : editor.OrbitalCameraControl;
+        if (orbital is null) return FocusCameraOn(pos, distance);
+        vec3 horiz = (orbital.Pos - pos) * vec3(1, 0, 1);
+        if (horiz.LengthSquared() < 1.0e-6) horiz = vec3(0, 0, -1);
+        horiz = horiz.Normalized();
+        float pitchDown = Math::ToRad(65.0);
+        vec3 lookDir = horiz * -Math::Cos(pitchDown) + vec3(0, -Math::Sin(pitchDown), 0);
+        return Editor::SetCamAnimationGoTo(LookDirToOrbitalAngles(lookDir), pos, distance);
     }
 
     Json::Value BasicDialogSummary() {
@@ -258,6 +314,125 @@ namespace TmMcp {
         return CGameEditorPluginMap::ECardinalDirections::North;
     }
 
+    CGameEditorPluginMap::ECardinalDirections8 Dir8FromString(const string &in dir) {
+        if (dir == "East") return CGameEditorPluginMap::ECardinalDirections8::East;
+        if (dir == "South") return CGameEditorPluginMap::ECardinalDirections8::South;
+        if (dir == "West") return CGameEditorPluginMap::ECardinalDirections8::West;
+        if (dir == "NorthEast") return CGameEditorPluginMap::ECardinalDirections8::NorthEast;
+        if (dir == "SouthEast") return CGameEditorPluginMap::ECardinalDirections8::SouthEast;
+        if (dir == "SouthWest") return CGameEditorPluginMap::ECardinalDirections8::SouthWest;
+        if (dir == "NorthWest") return CGameEditorPluginMap::ECardinalDirections8::NorthWest;
+        return CGameEditorPluginMap::ECardinalDirections8::North;
+    }
+
+    CGameEditorPluginMap::ERelativeDirections RelativeDirFromString(const string &in dir) {
+        if (dir == "RightForward") return CGameEditorPluginMap::ERelativeDirections::RightForward;
+        if (dir == "Right") return CGameEditorPluginMap::ERelativeDirections::Right;
+        if (dir == "RightBackward") return CGameEditorPluginMap::ERelativeDirections::RightBackward;
+        if (dir == "Backward") return CGameEditorPluginMap::ERelativeDirections::Backward;
+        if (dir == "LeftBackward") return CGameEditorPluginMap::ERelativeDirections::LeftBackward;
+        if (dir == "Left") return CGameEditorPluginMap::ERelativeDirections::Left;
+        if (dir == "LeftForward") return CGameEditorPluginMap::ERelativeDirections::LeftForward;
+        return CGameEditorPluginMap::ERelativeDirections::Forward;
+    }
+
+    Json::Value CursorApiToJson(CGameEditorPluginMap@ pmt) {
+        Json::Value output = Json::Object();
+        if (pmt is null || pmt.Cursor is null) {
+            output["available"] = false;
+            return output;
+        }
+        auto cursor = pmt.Cursor;
+        output["available"] = true;
+        output["coord"] = CoordToJson(cursor.Coord);
+        output["dir"] = int(cursor.Dir);
+        output["canUse"] = cursor.CanUse();
+        output["locked"] = cursor.GetLock();
+        output["canPlace"] = cursor.CanPlace();
+        output["brightness"] = cursor.Brightness;
+        output["hideDirectionalArrow"] = cursor.HideDirectionalArrow;
+        output["customRGB"] = cursor.IsCustomRGBActivated();
+        if (cursor.BlockModel !is null) {
+            output["blockName"] = cursor.BlockModel.Name;
+            output["blockIdName"] = cursor.BlockModel.IdName;
+        }
+        if (cursor.TerrainBlockModel !is null) {
+            output["terrainBlockName"] = cursor.TerrainBlockModel.Name;
+            output["terrainBlockIdName"] = cursor.TerrainBlockModel.IdName;
+        }
+        if (cursor.MacroblockModel !is null) {
+            output["macroblockName"] = cursor.MacroblockModel.Name;
+            output["macroblockIdName"] = cursor.MacroblockModel.IdName;
+        }
+        return output;
+    }
+
+    Json::Value ValidationToJson(CGameEditorPluginMapMapType@ pmt) {
+        Json::Value output = Json::Object();
+        if (pmt is null) {
+            output["available"] = false;
+            return output;
+        }
+        output["available"] = true;
+        output["validationStatus"] = int(pmt.ValidationStatus);
+        output["validabilityRequirementsMessage"] = string(pmt.ValidabilityRequirementsMessage);
+        output["validationEndRequested"] = pmt.ValidationEndRequested;
+        output["validationEndNoConfirm"] = pmt.ValidationEndNoConfirm;
+        output["isSwitchedToPlayground"] = pmt.IsSwitchedToPlayground;
+        output["isTesting"] = pmt.IsTesting;
+        output["isValidating"] = pmt.IsValidating;
+        return output;
+    }
+
+    Json::Value CameraApiToJson(CGameEditorPluginMap@ pmt) {
+        Json::Value output = Json::Object();
+        if (pmt is null || pmt.Camera is null) {
+            output["available"] = false;
+            return output;
+        }
+        output["available"] = true;
+        output["canUse"] = pmt.Camera.CanUse();
+        output["locked"] = pmt.Camera.GetLock();
+        return output;
+    }
+
+    Json::Value SelectionToJson(CGameEditorPluginMapMapType@ pmt, uint limit = 20) {
+        Json::Value output = Json::Object();
+        if (pmt is null) {
+            output["available"] = false;
+            return output;
+        }
+        output["available"] = true;
+        output["placeMode"] = int(pmt.PlaceMode);
+        output["editMode"] = int(pmt.EditMode);
+        output["selectedCoordsCount"] = int(pmt.CopyPaste_GetSelectedCoordsCount());
+        output["customSelectionCount"] = int(pmt.CustomSelectionCoords.Length);
+        output["customSelectionRGB"] = Vec3ToJson(pmt.CustomSelectionRGB);
+
+        Json::Value coords = Json::Array();
+        uint nb = Math::Min(limit, pmt.CustomSelectionCoords.Length);
+        for (uint i = 0; i < nb; i++) {
+            coords.Add(CoordToJson(pmt.CustomSelectionCoords[i]));
+        }
+        output["customSelectionSample"] = coords;
+        output["customSelectionSampleLimit"] = int(limit);
+        return output;
+    }
+
+    CGameEditorPluginCameraAPI::EZoomLevel ZoomLevelFromString(const string &in level) {
+        if (level == "Close") return CGameEditorPluginCameraAPI::EZoomLevel::Close;
+        if (level == "Far") return CGameEditorPluginCameraAPI::EZoomLevel::Far;
+        return CGameEditorPluginCameraAPI::EZoomLevel::Medium;
+    }
+
+    CGameEditorPluginCameraAPI::ECameraVStep CameraVStepFromString(const string &in step) {
+        if (step == "Low") return CGameEditorPluginCameraAPI::ECameraVStep::Low;
+        if (step == "MediumLow") return CGameEditorPluginCameraAPI::ECameraVStep::MediumLow;
+        if (step == "MediumHigh") return CGameEditorPluginCameraAPI::ECameraVStep::MediumHigh;
+        if (step == "High") return CGameEditorPluginCameraAPI::ECameraVStep::High;
+        return CGameEditorPluginCameraAPI::ECameraVStep::Medium;
+    }
+
     Json::Value BlockToJson(CGameCtnBlock@ block) {
         if (block is null) return Json::Value();
         Json::Value obj = Json::Object();
@@ -272,10 +447,23 @@ namespace TmMcp {
         }
         bool isFree = Editor::IsBlockFree(block);
         obj["isFree"] = isFree;
+        obj["variant"] = int(block.BlockInfoVariantIndex);
+        obj["mobilIndex"] = int(block.MobilIndex);
+        obj["mobilVariant"] = int(block.MobilVariantIndex);
+        obj["isGround"] = block.IsGround;
+        obj["isGhost"] = block.IsGhostBlock();
         obj["pos"] = Vec3ToJson(Editor::GetBlockLocation(block));
         auto rot = Editor::GetBlockRotation(block);
         obj["rot"] = Vec3ToJson(rot);
         obj["rotDeg"] = Vec3DegToJson(rot);
+        Json::Value skin = Json::Object();
+        skin["hasSkin"] = block.Skin !is null;
+        if (block.Skin !is null) {
+            skin["bgSkin"] = PackDescPath(block.Skin.PackDesc);
+            skin["fgSkin"] = PackDescPath(block.Skin.ForegroundPackDesc);
+            skin["parentSkin"] = PackDescPath(block.Skin.ParentPackDesc);
+        }
+        obj["skin"] = skin;
         return obj;
     }
 
@@ -322,6 +510,10 @@ namespace TmMcp {
         obj["name"] = blockInfo.Name;
         obj["idName"] = blockInfo.IdName;
         obj["isTerrain"] = isTerrain;
+        obj["groundVariants"] = int(blockInfo.AdditionalVariantsGround.Length) + 1;
+        obj["airVariants"] = int(blockInfo.AdditionalVariantsAir.Length) + 1;
+        obj["variantBaseGroundSize"] = CoordToJson(blockInfo.VariantBaseGround.Size);
+        obj["variantBaseAirSize"] = CoordToJson(blockInfo.VariantBaseAir.Size);
         return obj;
     }
 
@@ -363,13 +555,112 @@ namespace TmMcp {
         return g_NamedMacroblocks[index];
     }
 
+    NamedMacroblockSkin@[]@ GetNamedMacroblockSkins(const string &in name) {
+        int index = FindNamedMacroblockIndex(name);
+        if (index < 0 || index >= int(g_NamedMacroblockSkins.Length)) return null;
+        return g_NamedMacroblockSkins[index];
+    }
+
+    Json::Value NamedMacroblockSkinToJson(NamedMacroblockSkin@ skin) {
+        Json::Value obj = Json::Object();
+        if (skin is null) return obj;
+        obj["blockIndex"] = int(skin.blockIndex);
+        obj["fgSkin"] = skin.fgSkin;
+        obj["bgSkin"] = skin.bgSkin;
+        return obj;
+    }
+
+    Json::Value NamedMacroblockSkinsToJson(NamedMacroblockSkin@[]@ skins, int limit = 100) {
+        Json::Value output = Json::Array();
+        if (skins is null) return output;
+        if (limit < 1) limit = 1;
+        for (uint i = 0; i < skins.Length && output.Length < uint(limit); i++) {
+            output.Add(NamedMacroblockSkinToJson(skins[i]));
+        }
+        return output;
+    }
+
+    void AddPostSkinToNamedMacroblock(const string &in name, uint blockIndex, const string &in fgSkin, const string &in bgSkin) {
+        if (fgSkin.Length == 0 && bgSkin.Length == 0) return;
+        auto skins = GetNamedMacroblockSkins(name);
+        if (skins is null) return;
+        skins.InsertLast(NamedMacroblockSkin(blockIndex, fgSkin, bgSkin));
+    }
+
+    Editor::SetSkinSpec@[] BuildPlacedSkinSpecs(const string &in name, Editor::MacroblockSpec@ placedMb) {
+        Editor::SetSkinSpec@[] skinsToApply;
+        auto skins = GetNamedMacroblockSkins(name);
+        if (skins is null || placedMb is null) return skinsToApply;
+        for (uint i = 0; i < skins.Length; i++) {
+            auto skin = skins[i];
+            if (skin is null || skin.blockIndex >= placedMb.blocks.Length) continue;
+            skinsToApply.InsertLast(Editor::SetSkinSpec(placedMb.blocks[skin.blockIndex], skin.fgSkin, skin.bgSkin));
+        }
+        return skinsToApply;
+    }
+
+    Json::Value ApplyNamedMacroblockSkinsDirect(CGameEditorPluginMapMapType@ pmt, const string &in name, int blockBaseIndex) {
+        Json::Value output = Json::Object();
+        Json::Value applied = Json::Array();
+        Json::Value errors = Json::Array();
+        auto skins = GetNamedMacroblockSkins(name);
+        if (pmt is null || pmt.Map is null || skins is null) {
+            output["requested"] = 0;
+            output["applied"] = applied;
+            output["errors"] = errors;
+            output["ok"] = false;
+            return output;
+        }
+
+        for (uint i = 0; i < skins.Length; i++) {
+            auto skin = skins[i];
+            if (skin is null) continue;
+            int mapIndex = blockBaseIndex + int(skin.blockIndex);
+            if (mapIndex < 0 || mapIndex >= int(pmt.Map.Blocks.Length)) {
+                Json::Value err = NamedMacroblockSkinToJson(skin);
+                err["error"] = "map block index out of range";
+                err["mapIndex"] = mapIndex;
+                errors.Add(err);
+                continue;
+            }
+            auto block = pmt.Map.Blocks[mapIndex];
+            if (block is null) {
+                Json::Value err = NamedMacroblockSkinToJson(skin);
+                err["error"] = "map block is null";
+                err["mapIndex"] = mapIndex;
+                errors.Add(err);
+                continue;
+            }
+            try {
+                pmt.SetBlockSkins(block, skin.bgSkin, skin.fgSkin);
+                Json::Value ok = NamedMacroblockSkinToJson(skin);
+                ok["mapIndex"] = mapIndex;
+                applied.Add(ok);
+            } catch {
+                Json::Value err = NamedMacroblockSkinToJson(skin);
+                err["error"] = getExceptionInfo();
+                err["mapIndex"] = mapIndex;
+                errors.Add(err);
+            }
+        }
+
+        output["requested"] = int(skins.Length);
+        output["applied"] = applied;
+        output["errors"] = errors;
+        output["ok"] = errors.Length == 0;
+        return output;
+    }
+
     Json::Value NamedMacroblockSummary(const string &in name, Editor::MacroblockSpec@ mb) {
         Json::Value output = Json::Object();
+        auto skins = GetNamedMacroblockSkins(name);
         output["name"] = name;
         output["exists"] = mb !is null;
         output["nbBlocks"] = mb is null ? 0 : int(mb.blocks.Length);
         output["nbItems"] = mb is null ? 0 : int(mb.items.Length);
-        output["nbSkins"] = mb is null ? 0 : int(mb.skins.Length);
+        output["nbRawSkins"] = mb is null ? 0 : int(mb.skins.Length);
+        output["nbPostSkins"] = skins is null ? 0 : int(skins.Length);
+        output["nbSkins"] = int(output["nbRawSkins"]) + int(output["nbPostSkins"]);
         return output;
     }
 
@@ -504,9 +795,13 @@ namespace TmMcp {
             || name == "SaveMapAs"
             || name == "GetDialog"
             || name == "RespondDialog"
+            || name == "ControlValidation"
+            || name == "ControlSelection"
             || name == "GetCursor"
+            || name == "ControlCursor"
             || name == "GetEditorCamera"
             || name == "SetEditorCamera"
+            || name == "ControlCamera"
             || name == "FocusCamera"
             || name == "TakeScreenshot"
             || name == "GetBlocks"
@@ -522,12 +817,18 @@ namespace TmMcp {
             || name == "ListNamedMacroblocks"
             || name == "ClearNamedMacroblock"
             || name == "AddBlockToNamedMacroblock"
+            || name == "AddBlocksToNamedMacroblock"
             || name == "AddItemToNamedMacroblock"
+            || name == "AddItemsToNamedMacroblock"
             || name == "PlaceNamedMacroblock"
+            || name == "CanPlaceBlock"
             || name == "PlaceBlock"
             || name == "PlaceBlockViaEditorPlusPlus"
             || name == "PlaceItemViaEditorPlusPlus"
             || name == "RemoveBlock"
+            || name == "ClearBlocks"
+            || name == "ClearItems"
+            || name == "ClearMapContent"
             || name == "RemoveRecentBlocks"
             || name == "RemoveRecentItems"
             || name == "RemoveBlocksByIndex"
@@ -545,9 +846,13 @@ namespace TmMcp {
         if (name == "SaveMapAs") return SaveMapAs(input);
         if (name == "GetDialog") return GetDialog(input);
         if (name == "RespondDialog") return RespondDialog(input);
+        if (name == "ControlValidation") return ControlValidation(input);
+        if (name == "ControlSelection") return ControlSelection(input);
         if (name == "GetCursor") return GetCursor(input);
+        if (name == "ControlCursor") return ControlCursor(input);
         if (name == "GetEditorCamera") return GetEditorCamera(input);
         if (name == "SetEditorCamera") return SetEditorCamera(input);
+        if (name == "ControlCamera") return ControlCamera(input);
         if (name == "FocusCamera") return FocusCamera(input);
         if (name == "TakeScreenshot") return TakeScreenshot(input);
         if (name == "GetBlocks") return GetBlocks(input);
@@ -563,12 +868,18 @@ namespace TmMcp {
         if (name == "ListNamedMacroblocks") return ListNamedMacroblocks(input);
         if (name == "ClearNamedMacroblock") return ClearNamedMacroblock(input);
         if (name == "AddBlockToNamedMacroblock") return AddBlockToNamedMacroblock(input);
+        if (name == "AddBlocksToNamedMacroblock") return AddBlocksToNamedMacroblock(input);
         if (name == "AddItemToNamedMacroblock") return AddItemToNamedMacroblock(input);
+        if (name == "AddItemsToNamedMacroblock") return AddItemsToNamedMacroblock(input);
         if (name == "PlaceNamedMacroblock") return PlaceNamedMacroblock(input);
+        if (name == "CanPlaceBlock") return CanPlaceBlock(input);
         if (name == "PlaceBlock") return PlaceBlock(input);
         if (name == "PlaceBlockViaEditorPlusPlus") return PlaceBlockViaEditorPlusPlus(input);
         if (name == "PlaceItemViaEditorPlusPlus") return PlaceItemViaEditorPlusPlus(input);
         if (name == "RemoveBlock") return RemoveBlock(input);
+        if (name == "ClearBlocks") return ClearBlocks(input);
+        if (name == "ClearItems") return ClearItems(input);
+        if (name == "ClearMapContent") return ClearMapContent(input);
         if (name == "RemoveRecentBlocks") return RemoveRecentBlocks(input);
         if (name == "RemoveRecentItems") return RemoveRecentItems(input);
         if (name == "RemoveBlocksByIndex") return RemoveBlocksByIndex(input);
@@ -588,9 +899,13 @@ namespace TmMcp {
         tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx.", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}}}'));
         tools.Add(MakeTool("GetDialog", "Inspect Trackmania's current BasicDialogs state and active dialog frame.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("RespondDialog", "Respond to Trackmania BasicDialogs. action: yes, no, cancel, ok, validate, hide.", '{"type":"object","properties":{"action":{"type":"string"}},"required":["action"]}'));
+        tools.Add(MakeTool("ControlValidation", "Inspect or trigger map validation/test/playground controls. Actions: status, validate, requestEnterPlayground, requestLeavePlayground, testFromStart, testFromCoord.", '{"type":"object","properties":{"action":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"}}}'));
+        tools.Add(MakeTool("ControlSelection", "Inspect or control editor copy-paste/custom selection. Actions: status, showCustom, hideCustom, resetSelection, selectAll, addSelection, copy, cut, remove, symmetrize.", '{"type":"object","properties":{"action":{"type":"string"},"x1":{"type":"integer"},"y1":{"type":"integer"},"z1":{"type":"integer"},"x2":{"type":"integer"},"y2":{"type":"integer"},"z2":{"type":"integer"},"limit":{"type":"integer"}}}'));
         tools.Add(MakeTool("GetCursor", "Get editor cursor coordinate and selected block.", '{"type":"object","properties":{}}'));
+        tools.Add(MakeTool("ControlCursor", "Use the editor cursor API: status, raise, lower, rotate, move, moveToCameraTarget, followCamera, disableMouseDetection, releaseLock, resetRGB, setRGB.", '{"type":"object","properties":{"action":{"type":"string"},"direction":{"type":"string"},"directionKind":{"type":"string"},"count":{"type":"integer"},"clockwise":{"type":"boolean"},"follow":{"type":"boolean"},"disable":{"type":"boolean"},"r":{"type":"number"},"g":{"type":"number"},"b":{"type":"number"}}}'));
         tools.Add(MakeTool("GetEditorCamera", "Get editor camera target, angles, distance, and current orbital position.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("SetEditorCamera", "Set editor camera target, angles, and target distance. Angles default to degrees; use hAngleRad/vAngleRad for radians.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"hAngle":{"type":"number"},"vAngle":{"type":"number"},"hAngleRad":{"type":"number"},"vAngleRad":{"type":"number"},"distance":{"type":"number"},"animate":{"type":"boolean"}}}'));
+        tools.Add(MakeTool("ControlCamera", "Use the editor camera API: status, centerOnCursor, moveToMapCenter, watchWholeMap, watchStart, watchClosestFinishLine, watchClosestCheckpoint, zoom, zoomIn, zoomOut, look, followCursor, ignoreCollisions, releaseLock, setVStep.", '{"type":"object","properties":{"action":{"type":"string"},"smooth":{"type":"boolean"},"loop":{"type":"boolean"},"clockwise":{"type":"boolean"},"halfSteps":{"type":"boolean"},"level":{"type":"string"},"direction":{"type":"string"},"directionKind":{"type":"string"},"follow":{"type":"boolean"},"ignore":{"type":"boolean"},"step":{"type":"string"}}}'));
         tools.Add(MakeTool("FocusCamera", "Focus the editor camera on a world position using E++ camera animation.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"distance":{"type":"number"}},"required":["x","y","z"]}'));
         tools.Add(MakeTool("TakeScreenshot", "Trigger a built-in viewport screenshot and return the game ScreenShots folder to inspect.", '{"type":"object","properties":{"format":{"type":"string"}}}'));
         tools.Add(MakeTool("GetBlocks", "Get blocks by optional grid/world radius, model query, and freeblock filter.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"radius":{"type":"number"},"world":{"type":"boolean"},"query":{"type":"string"},"isFree":{"type":"boolean"},"limit":{"type":"integer"}}}'));
@@ -605,13 +920,19 @@ namespace TmMcp {
         tools.Add(MakeTool("GetNamedMacroblock", "Inspect an in-memory named macroblock and return stored block/item specs.", '{"type":"object","properties":{"name":{"type":"string"},"limit":{"type":"integer"},"includeItems":{"type":"boolean"}},"required":["name"]}'));
         tools.Add(MakeTool("ListNamedMacroblocks", "List in-memory named macroblocks.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("ClearNamedMacroblock", "Clear one in-memory named macroblock, or all with all=true.", '{"type":"object","properties":{"name":{"type":"string"},"all":{"type":"boolean"}}}'));
-        tools.Add(MakeTool("AddBlockToNamedMacroblock", "Add a free block spec to an in-memory named macroblock. Rotation defaults to degrees.", '{"type":"object","properties":{"name":{"type":"string"},"blockName":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"pitchRad":{"type":"number"},"yawRad":{"type":"number"},"rollRad":{"type":"number"},"variant":{"type":"integer"},"create":{"type":"boolean"}},"required":["name","blockName","x","y","z"]}'));
+        tools.Add(MakeTool("AddBlockToNamedMacroblock", "Add a free block spec to an in-memory named macroblock. Rotation defaults to degrees; optional bgSkin/fgSkin are applied after placement.", '{"type":"object","properties":{"name":{"type":"string"},"blockName":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"pitchRad":{"type":"number"},"yawRad":{"type":"number"},"rollRad":{"type":"number"},"variant":{"type":"integer"},"bgSkin":{"type":"string"},"fgSkin":{"type":"string"},"skin":{"type":"string"},"create":{"type":"boolean"}},"required":["name","blockName","x","y","z"]}'));
+        tools.Add(MakeTool("AddBlocksToNamedMacroblock", "Add many free block specs to an in-memory named macroblock in one MCP request.", '{"type":"object","properties":{"name":{"type":"string"},"blocks":{"type":"array","items":{"type":"object"}},"create":{"type":"boolean"},"continueOnError":{"type":"boolean"}},"required":["name","blocks"]}'));
         tools.Add(MakeTool("AddItemToNamedMacroblock", "Add a flying item spec to an in-memory named macroblock by inventory item path. Rotation defaults to degrees.", '{"type":"object","properties":{"name":{"type":"string"},"itemPath":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"pitchRad":{"type":"number"},"yawRad":{"type":"number"},"rollRad":{"type":"number"},"variant":{"type":"integer"},"create":{"type":"boolean"}},"required":["name","itemPath","x","y","z"]}'));
+        tools.Add(MakeTool("AddItemsToNamedMacroblock", "Add many flying item specs to an in-memory named macroblock in one MCP request.", '{"type":"object","properties":{"name":{"type":"string"},"items":{"type":"array","items":{"type":"object"}},"create":{"type":"boolean"},"continueOnError":{"type":"boolean"}},"required":["name","items"]}'));
         tools.Add(MakeTool("PlaceNamedMacroblock", "Place an in-memory named macroblock through Editor++ macroblock placement with optional position offset, rotation around pivot, and mapPre/mapPost metadata.", '{"type":"object","properties":{"name":{"type":"string"},"offsetX":{"type":"number"},"offsetY":{"type":"number"},"offsetZ":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"pitchRad":{"type":"number"},"yawRad":{"type":"number"},"rollRad":{"type":"number"},"pivotX":{"type":"number"},"pivotY":{"type":"number"},"pivotZ":{"type":"number"},"addUndo":{"type":"boolean"},"autofocus":{"type":"boolean"},"autofocusDistance":{"type":"number"}},"required":["name"]}'));
+        tools.Add(MakeTool("CanPlaceBlock", "Check whether a normal grid/terrain block can be placed without mutating the map.", '{"type":"object","properties":{"blockName":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"allowDestruction":{"type":"boolean"}},"required":["blockName","x","y","z"]}'));
         tools.Add(MakeTool("PlaceBlock", "Place a block in the editor and return mapPre/mapPost metadata.", '{"type":"object","properties":{"blockName":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"allowDestruction":{"type":"boolean"}},"required":["blockName","x","y","z"]}'));
         tools.Add(MakeTool("PlaceBlockViaEditorPlusPlus", "Place one or more free blocks through Editor++ macroblock placement and return mapPre/mapPost metadata. Rotation defaults to degrees; use pitchRad/yawRad/rollRad for radians.", '{"type":"object","properties":{"blockName":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"pitchRad":{"type":"number"},"yawRad":{"type":"number"},"rollRad":{"type":"number"},"repeat":{"type":"integer"},"spacingX":{"type":"number"},"spacingY":{"type":"number"},"spacingZ":{"type":"number"},"addUndo":{"type":"boolean"},"autofocus":{"type":"boolean"},"autofocusDistance":{"type":"number"}},"required":["blockName","x","y","z"]}'));
         tools.Add(MakeTool("PlaceItemViaEditorPlusPlus", "Place one or more flying items through Editor++ item placement and return mapPre/mapPost metadata. Rotation defaults to degrees.", '{"type":"object","properties":{"itemPath":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"pitchRad":{"type":"number"},"yawRad":{"type":"number"},"rollRad":{"type":"number"},"repeat":{"type":"integer"},"spacingX":{"type":"number"},"spacingY":{"type":"number"},"spacingZ":{"type":"number"},"variant":{"type":"integer"},"addUndo":{"type":"boolean"},"autofocus":{"type":"boolean"},"autofocusDistance":{"type":"number"}},"required":["itemPath","x","y","z"]}'));
         tools.Add(MakeTool("RemoveBlock", "Remove a block at grid coordinates.", '{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"}},"required":["x","y","z"]}'));
+        tools.Add(MakeTool("ClearBlocks", "Remove all map blocks through the editor PluginMapType RemoveAllBlocks method.", '{"type":"object","properties":{"autosave":{"type":"boolean"}}}'));
+        tools.Add(MakeTool("ClearItems", "Remove all map items/objects through the editor PluginMapType RemoveAllObjects method.", '{"type":"object","properties":{"autosave":{"type":"boolean"}}}'));
+        tools.Add(MakeTool("ClearMapContent", "Remove all map blocks and items through editor PluginMapType remove-all methods.", '{"type":"object","properties":{"autosave":{"type":"boolean"},"includeTerrain":{"type":"boolean"}}}'));
         tools.Add(MakeTool("RemoveRecentBlocks", "Delete the last N map blocks through Editor++ deletion and return mapPre/mapPost metadata.", '{"type":"object","properties":{"count":{"type":"integer"},"addUndo":{"type":"boolean"}}}'));
         tools.Add(MakeTool("RemoveRecentItems", "Delete the last N map items through Editor++ deletion and return mapPre/mapPost metadata. Direct buffer fallback is opt-in.", '{"type":"object","properties":{"count":{"type":"integer"},"addUndo":{"type":"boolean"},"forceBufferFallback":{"type":"boolean"}}}'));
         tools.Add(MakeTool("RemoveBlocksByIndex", "Delete explicit map block indices through Editor++ deletion and return mapPre/mapPost metadata.", '{"type":"object","properties":{"index":{"type":"integer"},"indices":{"type":"array","items":{"type":"integer"}},"addUndo":{"type":"boolean"}}}'));
@@ -759,6 +1080,115 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
+    Json::Value@ ControlValidation(Json::Value &in input) {
+        auto editor = GetEditor();
+        auto pmt = editor is null ? null : cast<CGameEditorPluginMapMapType>(editor.PluginMapType);
+        if (pmt is null) return MakeError("editor map type plugin not available");
+
+        string action = input.HasKey("action") ? string(input["action"]) : "status";
+        Json::Value before = ValidationToJson(pmt);
+        Json::Value actions = Json::Array();
+        try {
+            if (action == "status") {
+                actions.Add("status");
+            } else if (action == "validate") {
+                pmt.Validate();
+                actions.Add("validate");
+            } else if (action == "requestEnterPlayground") {
+                pmt.RequestEnterPlayground();
+                actions.Add("requestEnterPlayground");
+            } else if (action == "requestLeavePlayground") {
+                pmt.RequestLeavePlayground();
+                actions.Add("requestLeavePlayground");
+            } else if (action == "testFromStart") {
+                pmt.TestMapFromStart();
+                actions.Add("testFromStart");
+            } else if (action == "testFromCoord") {
+                if (!input.HasKey("x") || !input.HasKey("y") || !input.HasKey("z")) {
+                    return MakeError("testFromCoord requires x, y, z");
+                }
+                auto coord = int3(int(input["x"]), int(input["y"]), int(input["z"]));
+                string dirName = input.HasKey("dir") ? string(input["dir"]) : "North";
+                pmt.TestMapFromCoord(coord, DirFromString(dirName));
+                actions.Add("testFromCoord:" + dirName);
+            } else {
+                return MakeError("action must be one of: status, validate, requestEnterPlayground, requestLeavePlayground, testFromStart, testFromCoord");
+            }
+        } catch {
+            return MakeError("validation action failed: " + getExceptionInfo());
+        }
+
+        yield();
+        Json::Value output = Json::Object();
+        output["action"] = action;
+        output["actions"] = actions;
+        output["before"] = before;
+        output["after"] = ValidationToJson(pmt);
+        return MakeSuccess(output);
+    }
+
+    Json::Value@ ControlSelection(Json::Value &in input) {
+        auto editor = GetEditor();
+        auto pmt = editor is null ? null : cast<CGameEditorPluginMapMapType>(editor.PluginMapType);
+        if (pmt is null) return MakeError("editor map type plugin not available");
+
+        string action = input.HasKey("action") ? string(input["action"]) : "status";
+        uint limit = input.HasKey("limit") ? uint(Math::Max(0, int(input["limit"]))) : 20;
+        if (limit > 200) limit = 200;
+
+        Json::Value before = SelectionToJson(pmt, limit);
+        Json::Value actions = Json::Array();
+        try {
+            if (action == "status") {
+                actions.Add("status");
+            } else if (action == "showCustom") {
+                pmt.ShowCustomSelection();
+                actions.Add("showCustom");
+            } else if (action == "hideCustom") {
+                pmt.HideCustomSelection();
+                actions.Add("hideCustom");
+            } else if (action == "resetSelection") {
+                pmt.CopyPaste_ResetSelection();
+                actions.Add("resetSelection");
+            } else if (action == "selectAll") {
+                pmt.CopyPaste_SelectAll();
+                actions.Add("selectAll");
+            } else if (action == "addSelection") {
+                if (!input.HasKey("x1") || !input.HasKey("y1") || !input.HasKey("z1")
+                    || !input.HasKey("x2") || !input.HasKey("y2") || !input.HasKey("z2")) {
+                    return MakeError("addSelection requires x1, y1, z1, x2, y2, z2");
+                }
+                auto startCoord = int3(int(input["x1"]), int(input["y1"]), int(input["z1"]));
+                auto endCoord = int3(int(input["x2"]), int(input["y2"]), int(input["z2"]));
+                pmt.CopyPaste_AddOrSubSelection(startCoord, endCoord);
+                actions.Add("addSelection");
+            } else if (action == "copy") {
+                pmt.CopyPaste_Copy();
+                actions.Add("copy");
+            } else if (action == "cut") {
+                pmt.CopyPaste_Cut();
+                actions.Add("cut");
+            } else if (action == "remove") {
+                pmt.CopyPaste_Remove();
+                actions.Add("remove");
+            } else if (action == "symmetrize") {
+                actions.Add(pmt.CopyPaste_Symmetrize() ? "symmetrize:true" : "symmetrize:false");
+            } else {
+                return MakeError("action must be one of: status, showCustom, hideCustom, resetSelection, selectAll, addSelection, copy, cut, remove, symmetrize");
+            }
+        } catch {
+            return MakeError("selection action failed: " + getExceptionInfo());
+        }
+
+        yield();
+        Json::Value output = Json::Object();
+        output["action"] = action;
+        output["actions"] = actions;
+        output["before"] = before;
+        output["after"] = SelectionToJson(pmt, limit);
+        return MakeSuccess(output);
+    }
+
     Json::Value@ GetCursor(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.Cursor is null) return MakeError("editor cursor not available");
@@ -775,6 +1205,88 @@ namespace TmMcp {
             output["blockName"] = blockInfo.Name;
             output["blockIdName"] = blockInfo.IdName;
         }
+        return MakeSuccess(output);
+    }
+
+    Json::Value@ ControlCursor(Json::Value &in input) {
+        auto editor = GetEditor();
+        if (editor is null || editor.PluginMapType is null || editor.PluginMapType.Cursor is null) {
+            return MakeError("editor cursor API not available");
+        }
+
+        auto pmt = editor.PluginMapType;
+        auto cursor = pmt.Cursor;
+        string action = input.HasKey("action") ? string(input["action"]) : "status";
+        int count = input.HasKey("count") ? int(input["count"]) : 1;
+        if (count < 1) count = 1;
+        if (count > 20) count = 20;
+
+        Json::Value before = CursorApiToJson(pmt);
+        Json::Value actions = Json::Array();
+        try {
+            if (action == "status") {
+                actions.Add("status");
+            } else if (action == "raise") {
+                for (int i = 0; i < count; i++) actions.Add(cursor.Raise() ? "raise:true" : "raise:false");
+            } else if (action == "lower") {
+                for (int i = 0; i < count; i++) actions.Add(cursor.Lower() ? "lower:true" : "lower:false");
+            } else if (action == "rotate") {
+                bool clockwise = input.HasKey("clockwise") ? bool(input["clockwise"]) : true;
+                for (int i = 0; i < count; i++) {
+                    cursor.Rotate(clockwise);
+                    actions.Add(clockwise ? "rotate:clockwise" : "rotate:counterclockwise");
+                }
+            } else if (action == "move") {
+                string dir = input.HasKey("direction") ? string(input["direction"]) : "Forward";
+                string kind = input.HasKey("directionKind") ? string(input["directionKind"]) : "relative";
+                for (int i = 0; i < count; i++) {
+                    if (kind == "cardinal") {
+                        cursor.Move(DirFromString(dir));
+                    } else if (kind == "cardinal8") {
+                        cursor.Move(Dir8FromString(dir));
+                    } else {
+                        cursor.Move(RelativeDirFromString(dir));
+                    }
+                    actions.Add("move:" + kind + ":" + dir);
+                }
+            } else if (action == "moveToCameraTarget") {
+                cursor.MoveToCameraTarget();
+                actions.Add("moveToCameraTarget");
+            } else if (action == "followCamera") {
+                bool follow = input.HasKey("follow") ? bool(input["follow"]) : true;
+                cursor.FollowCameraTarget(follow);
+                actions.Add(follow ? "followCamera:true" : "followCamera:false");
+            } else if (action == "disableMouseDetection") {
+                bool disable = input.HasKey("disable") ? bool(input["disable"]) : true;
+                cursor.DisableMouseDetection(disable);
+                actions.Add(disable ? "disableMouseDetection:true" : "disableMouseDetection:false");
+            } else if (action == "releaseLock") {
+                cursor.ReleaseLock();
+                actions.Add("releaseLock");
+            } else if (action == "resetRGB") {
+                cursor.ResetCustomRGB();
+                actions.Add("resetRGB");
+            } else if (action == "setRGB") {
+                cursor.SetCustomRGB(vec3(
+                    InputFloatOr(input, "r", 1.0),
+                    InputFloatOr(input, "g", 1.0),
+                    InputFloatOr(input, "b", 1.0)
+                ));
+                actions.Add("setRGB");
+            } else {
+                return MakeError("action must be one of: status, raise, lower, rotate, move, moveToCameraTarget, followCamera, disableMouseDetection, releaseLock, resetRGB, setRGB");
+            }
+        } catch {
+            return MakeError("cursor action failed: " + getExceptionInfo());
+        }
+
+        yield();
+        Json::Value output = Json::Object();
+        output["action"] = action;
+        output["count"] = count;
+        output["actions"] = actions;
+        output["before"] = before;
+        output["after"] = CursorApiToJson(pmt);
         return MakeSuccess(output);
     }
 
@@ -820,6 +1332,97 @@ namespace TmMcp {
         Json::Value output = CameraToJson(editor);
         output["animated"] = animated;
         output["animateRequested"] = animate;
+        return MakeSuccess(output);
+    }
+
+    Json::Value@ ControlCamera(Json::Value &in input) {
+        auto editor = GetEditor();
+        if (editor is null || editor.PluginMapType is null || editor.PluginMapType.Camera is null) {
+            return MakeError("editor camera API not available");
+        }
+
+        auto pmt = editor.PluginMapType;
+        auto camera = pmt.Camera;
+        string action = input.HasKey("action") ? string(input["action"]) : "status";
+        bool smooth = input.HasKey("smooth") ? bool(input["smooth"]) : true;
+
+        Json::Value before = CameraToJson(editor);
+        before["api"] = CameraApiToJson(pmt);
+        Json::Value actions = Json::Array();
+        try {
+            if (action == "status") {
+                actions.Add("status");
+            } else if (action == "centerOnCursor") {
+                camera.CenterOnCursor(smooth);
+                actions.Add("centerOnCursor");
+            } else if (action == "moveToMapCenter") {
+                camera.MoveToMapCenter(smooth);
+                actions.Add("moveToMapCenter");
+            } else if (action == "watchWholeMap") {
+                camera.WatchWholeMap(smooth);
+                actions.Add("watchWholeMap");
+            } else if (action == "watchStart") {
+                camera.WatchStart(smooth);
+                actions.Add("watchStart");
+            } else if (action == "watchClosestFinishLine") {
+                camera.WatchClosestFinishLine(smooth);
+                actions.Add("watchClosestFinishLine");
+            } else if (action == "watchClosestCheckpoint") {
+                camera.WatchClosestCheckpoint(smooth);
+                actions.Add("watchClosestCheckpoint");
+            } else if (action == "zoom") {
+                string level = input.HasKey("level") ? string(input["level"]) : "Medium";
+                camera.Zoom(ZoomLevelFromString(level), smooth);
+                actions.Add("zoom:" + level);
+            } else if (action == "zoomIn") {
+                bool loop = input.HasKey("loop") ? bool(input["loop"]) : false;
+                camera.ZoomIn(loop, smooth);
+                actions.Add(loop ? "zoomIn:loop" : "zoomIn");
+            } else if (action == "zoomOut") {
+                bool loop = input.HasKey("loop") ? bool(input["loop"]) : false;
+                camera.ZoomOut(loop, smooth);
+                actions.Add(loop ? "zoomOut:loop" : "zoomOut");
+            } else if (action == "look") {
+                string dir = input.HasKey("direction") ? string(input["direction"]) : "North";
+                string kind = input.HasKey("directionKind") ? string(input["directionKind"]) : "cardinal";
+                if (kind == "cardinal8") {
+                    camera.Look(Dir8FromString(dir), smooth);
+                } else {
+                    camera.Look(DirFromString(dir), smooth);
+                }
+                actions.Add("look:" + kind + ":" + dir);
+            } else if (action == "followCursor") {
+                bool follow = input.HasKey("follow") ? bool(input["follow"]) : true;
+                camera.FollowCursor(follow);
+                actions.Add(follow ? "followCursor:true" : "followCursor:false");
+            } else if (action == "ignoreCollisions") {
+                bool ignore = input.HasKey("ignore") ? bool(input["ignore"]) : true;
+                camera.IgnoreCameraCollisions(ignore);
+                actions.Add(ignore ? "ignoreCollisions:true" : "ignoreCollisions:false");
+            } else if (action == "releaseLock") {
+                camera.ReleaseLock();
+                actions.Add("releaseLock");
+            } else if (action == "setVStep") {
+                string step = input.HasKey("step") ? string(input["step"]) : "Medium";
+                camera.SetVStep(CameraVStepFromString(step));
+                actions.Add("setVStep:" + step);
+            } else {
+                return MakeError("action must be one of: status, centerOnCursor, moveToMapCenter, watchWholeMap, watchStart, watchClosestFinishLine, watchClosestCheckpoint, zoom, zoomIn, zoomOut, look, followCursor, ignoreCollisions, releaseLock, setVStep");
+            }
+        } catch {
+            return MakeError("camera action failed: " + getExceptionInfo());
+        }
+
+        yield();
+        Json::Value after = CameraToJson(editor);
+        after["api"] = CameraApiToJson(pmt);
+
+        Json::Value output = Json::Object();
+        output["action"] = action;
+        output["smooth"] = smooth;
+        output["actions"] = actions;
+        output["before"] = before;
+        output["after"] = after;
         return MakeSuccess(output);
     }
 
@@ -1122,9 +1725,11 @@ namespace TmMcp {
         auto mb = Editor::MakeMacroblockSpec();
         if (index >= 0) {
             @g_NamedMacroblocks[index] = mb;
+            @g_NamedMacroblockSkins[index] = NewNamedMacroblockSkinList();
         } else {
             g_NamedMacroblockNames.InsertLast(name);
             g_NamedMacroblocks.InsertLast(mb);
+            g_NamedMacroblockSkins.InsertLast(NewNamedMacroblockSkinList());
         }
         return MakeSuccess(NamedMacroblockSummary(name, mb));
     }
@@ -1171,6 +1776,7 @@ namespace TmMcp {
         Json::Value output = NamedMacroblockSummary(name, mb);
         output["blocks"] = blocks;
         output["items"] = items;
+        output["postSkins"] = NamedMacroblockSkinsToJson(GetNamedMacroblockSkins(name), limit);
         output["limit"] = limit;
         output["includeItems"] = includeItems;
         return MakeSuccess(output);
@@ -1182,6 +1788,7 @@ namespace TmMcp {
             int count = int(g_NamedMacroblockNames.Length);
             g_NamedMacroblockNames.RemoveRange(0, g_NamedMacroblockNames.Length);
             g_NamedMacroblocks.RemoveRange(0, g_NamedMacroblocks.Length);
+            g_NamedMacroblockSkins.RemoveRange(0, g_NamedMacroblockSkins.Length);
             Json::Value output = Json::Object();
             output["clearedAll"] = true;
             output["count"] = count;
@@ -1194,6 +1801,7 @@ namespace TmMcp {
         if (index < 0) return MakeError("named macroblock not found: " + name);
         g_NamedMacroblockNames.RemoveAt(index);
         g_NamedMacroblocks.RemoveAt(index);
+        g_NamedMacroblockSkins.RemoveAt(index);
 
         Json::Value output = Json::Object();
         output["cleared"] = true;
@@ -1216,6 +1824,7 @@ namespace TmMcp {
             @mb = Editor::MakeMacroblockSpec();
             g_NamedMacroblockNames.InsertLast(name);
             g_NamedMacroblocks.InsertLast(mb);
+            g_NamedMacroblockSkins.InsertLast(NewNamedMacroblockSkinList());
         }
         if (mb is null) return MakeError("named macroblock not found: " + name);
 
@@ -1232,10 +1841,16 @@ namespace TmMcp {
         spec.isGhost = false;
         spec.variant = input.HasKey("variant") ? uint(input["variant"]) : 0;
         bool variantOk = spec.EnsureValidVariant();
+        uint blockIndex = mb.blocks.Length;
         mb.blocks.InsertLast(spec);
+        string fgSkin = input.HasKey("fgSkin") ? string(input["fgSkin"]) : "";
+        string bgSkin = input.HasKey("bgSkin") ? string(input["bgSkin"]) : "";
+        if (!input.HasKey("fgSkin") && input.HasKey("skin")) fgSkin = string(input["skin"]);
+        AddPostSkinToNamedMacroblock(name, blockIndex, fgSkin, bgSkin);
 
         Json::Value output = NamedMacroblockSummary(name, mb);
         output["added"] = true;
+        output["blockIndex"] = int(blockIndex);
         output["variantOk"] = variantOk;
         output["blockName"] = blockName;
         output["modelName"] = blockInfo.Name;
@@ -1243,6 +1858,43 @@ namespace TmMcp {
         output["pos"] = Vec3ToJson(pos);
         output["rot"] = Vec3ToJson(rot);
         output["rotDeg"] = Vec3DegToJson(rot);
+        output["fgSkin"] = fgSkin;
+        output["bgSkin"] = bgSkin;
+        return MakeSuccess(output);
+    }
+
+    Json::Value@ AddBlocksToNamedMacroblock(Json::Value &in input) {
+        if (!input.HasKey("name") || !input.HasKey("blocks")) return MakeError("missing name or blocks");
+        auto blocks = input["blocks"];
+        if (blocks.GetType() != Json::Type::Array) return MakeError("blocks must be an array");
+        string name = string(input["name"]);
+        bool create = input.HasKey("create") ? bool(input["create"]) : true;
+        bool continueOnError = input.HasKey("continueOnError") ? bool(input["continueOnError"]) : false;
+
+        Json::Value errors = Json::Array();
+        int added = 0;
+        for (uint i = 0; i < blocks.Length; i++) {
+            Json::Value block = blocks[i];
+            block["name"] = name;
+            block["create"] = create;
+            auto result = AddBlockToNamedMacroblock(block);
+            if (bool(result["success"])) {
+                added++;
+                continue;
+            }
+            Json::Value err = Json::Object();
+            err["index"] = int(i);
+            err["error"] = string(result["error"]);
+            errors.Add(err);
+            if (!continueOnError) break;
+        }
+
+        auto mb = GetNamedMacroblock(name);
+        Json::Value output = mb is null ? Json::Object() : NamedMacroblockSummary(name, mb);
+        output["requested"] = int(blocks.Length);
+        output["added"] = added;
+        output["errors"] = errors;
+        output["ok"] = errors.Length == 0;
         return MakeSuccess(output);
     }
 
@@ -1261,6 +1913,7 @@ namespace TmMcp {
             @mb = Editor::MakeMacroblockSpec();
             g_NamedMacroblockNames.InsertLast(name);
             g_NamedMacroblocks.InsertLast(mb);
+            g_NamedMacroblockSkins.InsertLast(NewNamedMacroblockSkinList());
         }
         if (mb is null) return MakeError("named macroblock not found: " + name);
 
@@ -1285,6 +1938,41 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
+    Json::Value@ AddItemsToNamedMacroblock(Json::Value &in input) {
+        if (!input.HasKey("name") || !input.HasKey("items")) return MakeError("missing name or items");
+        auto items = input["items"];
+        if (items.GetType() != Json::Type::Array) return MakeError("items must be an array");
+        string name = string(input["name"]);
+        bool create = input.HasKey("create") ? bool(input["create"]) : true;
+        bool continueOnError = input.HasKey("continueOnError") ? bool(input["continueOnError"]) : false;
+
+        Json::Value errors = Json::Array();
+        int added = 0;
+        for (uint i = 0; i < items.Length; i++) {
+            Json::Value item = items[i];
+            item["name"] = name;
+            item["create"] = create;
+            auto result = AddItemToNamedMacroblock(item);
+            if (bool(result["success"])) {
+                added++;
+                continue;
+            }
+            Json::Value err = Json::Object();
+            err["index"] = int(i);
+            err["error"] = string(result["error"]);
+            errors.Add(err);
+            if (!continueOnError) break;
+        }
+
+        auto mb = GetNamedMacroblock(name);
+        Json::Value output = mb is null ? Json::Object() : NamedMacroblockSummary(name, mb);
+        output["requested"] = int(items.Length);
+        output["added"] = added;
+        output["errors"] = errors;
+        output["ok"] = errors.Length == 0;
+        return MakeSuccess(output);
+    }
+
     Json::Value@ PlaceNamedMacroblock(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available");
@@ -1305,6 +1993,7 @@ namespace TmMcp {
             : mb.Duplicate();
 
         Json::Value mapPre = MapSummary(editor);
+        int blockBaseIndex = int(editor.Challenge.Blocks.Length);
         bool placed = false;
         string error = "";
         try {
@@ -1313,8 +2002,27 @@ namespace TmMcp {
             error = getExceptionInfo();
         }
 
+        Json::Value skinApplication = Json::Object();
+        skinApplication["requested"] = 0;
+        bool skinsApplied = false;
+        string skinError = "";
+        auto postSkins = GetNamedMacroblockSkins(name);
+        int skinsRequested = postSkins is null ? 0 : int(postSkins.Length);
+        if (placed && skinsRequested > 0) {
+            try {
+                skinApplication = ApplyNamedMacroblockSkinsDirect(editor.PluginMapType, name, blockBaseIndex);
+                skinsApplied = bool(skinApplication["ok"]);
+                for (uint i = 0; i < 5; i++) yield();
+            } catch {
+                skinError = getExceptionInfo();
+            }
+        }
+
         Json::Value output = NamedMacroblockSummary(name, mb);
         output["placed"] = placed;
+        output["skinsRequested"] = skinsRequested;
+        output["skinsApplied"] = skinsApplied;
+        output["skinApplication"] = skinApplication;
         output["addUndo"] = addUndo;
         output["transformed"] = transformed;
         output["offset"] = Vec3ToJson(offset);
@@ -1324,6 +2032,7 @@ namespace TmMcp {
         output["mapPre"] = mapPre;
         output["mapPost"] = MapSummary(editor);
         if (error.Length > 0) output["error"] = error;
+        if (skinError.Length > 0) output["skinError"] = skinError;
         output["autofocus"] = false;
         if (placed && autofocus && (placedMb.blocks.Length > 0 || placedMb.items.Length > 0)) {
             vec3 bMin = vec3(1e18, 1e18, 1e18);
@@ -1342,7 +2051,7 @@ namespace TmMcp {
             vec3 diag = bMax - bMin;
             float diagonal = Math::Sqrt(diag.x * diag.x + diag.y * diag.y + diag.z * diag.z);
             float autofocusDistance = input.HasKey("autofocusDistance") ? float(input["autofocusDistance"]) : Math::Max(60.0, diagonal * 2.0);
-            output["autofocus"] = FocusCameraOn(center, autofocusDistance);
+            output["autofocus"] = AutofocusCameraOn(center, autofocusDistance);
             output["autofocusTarget"] = Vec3ToJson(center);
             output["autofocusDistance"] = autofocusDistance;
         }
@@ -1399,6 +2108,48 @@ namespace TmMcp {
         output["dir"] = dirName;
         output["mapPre"] = mapPre;
         output["mapPost"] = MapSummary(editor);
+        return MakeSuccess(output);
+    }
+
+    Json::Value@ CanPlaceBlock(Json::Value &in input) {
+        auto editor = GetEditor();
+        if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available");
+        if (!input.HasKey("blockName") || !input.HasKey("x") || !input.HasKey("y") || !input.HasKey("z")) {
+            return MakeError("missing blockName, x, y, z");
+        }
+
+        string blockName = string(input["blockName"]);
+        bool isTerrain = false;
+        auto blockInfo = ResolveBlockModel(editor.PluginMapType, blockName, isTerrain);
+        if (blockInfo is null) return MakeError("block not found: " + blockName);
+
+        string dirName = input.HasKey("dir") ? string(input["dir"]) : "North";
+        auto coord = int3(int(input["x"]), int(input["y"]), int(input["z"]));
+        bool allowDestruction = input.HasKey("allowDestruction") ? bool(input["allowDestruction"]) : false;
+        auto dir = DirFromString(dirName);
+        bool canPlace = false;
+        try {
+            canPlace = isTerrain
+                ? editor.PluginMapType.CanPlaceTerrainBlocks(blockInfo, coord, coord)
+                : (
+                    allowDestruction
+                        ? editor.PluginMapType.CanPlaceBlock(blockInfo, coord, dir, false, 0)
+                        : editor.PluginMapType.CanPlaceBlock_NoDestruction(blockInfo, coord, dir, false, 0)
+                );
+        } catch {
+            return MakeError("CanPlaceBlock failed: " + getExceptionInfo());
+        }
+
+        Json::Value output = Json::Object();
+        output["canPlace"] = canPlace;
+        output["allowDestruction"] = allowDestruction;
+        output["blockName"] = blockName;
+        output["modelName"] = blockInfo.Name;
+        output["modelIdName"] = blockInfo.IdName;
+        output["isTerrain"] = isTerrain;
+        output["coord"] = Int3ToJson(coord);
+        output["dir"] = dirName;
+        output["map"] = MapSummary(editor);
         return MakeSuccess(output);
     }
 
@@ -1491,7 +2242,7 @@ namespace TmMcp {
         output["autofocus"] = false;
         if (autofocus && placements.Length > 0) {
             vec3 focusPos = basePos + spacing * float(repeat - 1);
-            output["autofocus"] = FocusCameraOn(focusPos, autofocusDistance);
+            output["autofocus"] = AutofocusCameraOn(focusPos, autofocusDistance);
             output["autofocusTarget"] = Vec3ToJson(focusPos);
             output["autofocusDistance"] = autofocusDistance;
         }
@@ -1581,7 +2332,7 @@ namespace TmMcp {
         output["autofocus"] = false;
         if (autofocus && placements.Length > 0) {
             vec3 focusPos = basePos + spacing * float(repeat - 1);
-            output["autofocus"] = FocusCameraOn(focusPos, autofocusDistance);
+            output["autofocus"] = AutofocusCameraOn(focusPos, autofocusDistance);
             output["autofocusTarget"] = Vec3ToJson(focusPos);
             output["autofocusDistance"] = autofocusDistance;
         }
@@ -1598,6 +2349,91 @@ namespace TmMcp {
         Json::Value output = Json::Object();
         output["removed"] = removed;
         output["coord"] = Int3ToJson(coord);
+        return MakeSuccess(output);
+    }
+
+    Json::Value@ ClearBlocks(Json::Value &in input) {
+        auto editor = GetEditor();
+        if (editor is null || editor.Challenge is null || editor.PluginMapType is null) return MakeError("editor not available");
+        bool autosave = input.HasKey("autosave") ? bool(input["autosave"]) : true;
+
+        Json::Value mapPre = MapSummary(editor);
+        int beforeBlocks = int(editor.Challenge.Blocks.Length);
+        try {
+            editor.PluginMapType.RemoveAllBlocks();
+            for (uint i = 0; i < 30 && int(editor.Challenge.Blocks.Length) == beforeBlocks; i++) yield();
+            if (autosave) editor.PluginMapType.AutoSave();
+        } catch {
+            return MakeError("RemoveAllBlocks failed: " + getExceptionInfo());
+        }
+
+        Json::Value output = Json::Object();
+        output["method"] = "PluginMapType.RemoveAllBlocks";
+        output["autosave"] = autosave;
+        output["mapPre"] = mapPre;
+        output["mapPost"] = MapSummary(editor);
+        return MakeSuccess(output);
+    }
+
+    Json::Value@ ClearItems(Json::Value &in input) {
+        auto editor = GetEditor();
+        if (editor is null || editor.Challenge is null || editor.PluginMapType is null) return MakeError("editor not available");
+        bool autosave = input.HasKey("autosave") ? bool(input["autosave"]) : true;
+
+        Json::Value mapPre = MapSummary(editor);
+        int beforeItems = int(editor.Challenge.AnchoredObjects.Length);
+        try {
+            editor.PluginMapType.RemoveAllObjects();
+            for (uint i = 0; i < 30 && int(editor.Challenge.AnchoredObjects.Length) == beforeItems; i++) yield();
+            if (autosave) editor.PluginMapType.AutoSave();
+        } catch {
+            return MakeError("RemoveAllObjects failed: " + getExceptionInfo());
+        }
+
+        Json::Value output = Json::Object();
+        output["method"] = "PluginMapType.RemoveAllObjects";
+        output["autosave"] = autosave;
+        output["mapPre"] = mapPre;
+        output["mapPost"] = MapSummary(editor);
+        return MakeSuccess(output);
+    }
+
+    Json::Value@ ClearMapContent(Json::Value &in input) {
+        auto editor = GetEditor();
+        if (editor is null || editor.Challenge is null || editor.PluginMapType is null) return MakeError("editor not available");
+        bool autosave = input.HasKey("autosave") ? bool(input["autosave"]) : true;
+        bool includeTerrain = input.HasKey("includeTerrain") ? bool(input["includeTerrain"]) : false;
+
+        Json::Value mapPre = MapSummary(editor);
+        int beforeBlocks = int(editor.Challenge.Blocks.Length);
+        int beforeItems = int(editor.Challenge.AnchoredObjects.Length);
+        string method = includeTerrain
+            ? "PluginMapType.RemoveAllBlocksAndTerrain + RemoveAllObjects"
+            : "PluginMapType.RemoveAllBlocks + RemoveAllObjects";
+        try {
+            if (includeTerrain) {
+                editor.PluginMapType.RemoveAllObjects();
+                editor.PluginMapType.RemoveAllBlocksAndTerrain();
+            } else {
+                editor.PluginMapType.RemoveAllObjects();
+                editor.PluginMapType.RemoveAllBlocks();
+            }
+            for (uint i = 0; i < 30
+                    && int(editor.Challenge.Blocks.Length) == beforeBlocks
+                    && int(editor.Challenge.AnchoredObjects.Length) == beforeItems; i++) {
+                yield();
+            }
+            if (autosave) editor.PluginMapType.AutoSave();
+        } catch {
+            return MakeError(method + " failed: " + getExceptionInfo());
+        }
+
+        Json::Value output = Json::Object();
+        output["method"] = method;
+        output["autosave"] = autosave;
+        output["includeTerrain"] = includeTerrain;
+        output["mapPre"] = mapPre;
+        output["mapPost"] = MapSummary(editor);
         return MakeSuccess(output);
     }
 
