@@ -54,13 +54,10 @@ namespace TmMcp {
                         Json::Value@ typeVal = propDef["type"];
                         if (typeVal !is null && typeVal.GetType() == Json::Type::String) {
                             typeStr = string(typeVal);
-                        } else if (typeVal !is null && typeVal.GetType() == Json::Type::Array && typeVal.Length > 0) {
-                            // e.g. ["string","integer"] — use first element.
-                            Json::Value@ first = typeVal[0];
-                            if (first !is null && first.GetType() == Json::Type::String) {
-                                typeStr = string(first);
-                            }
                         }
+                        // Union types (e.g. ["string","integer"] in DevSafeRead.ptr) leave
+                        // typeStr empty so the validator skips the type check for that key
+                        // while still enforcing unknown-key / required-key rules.
                     }
                     rec.allowedKeyTypes.InsertLast(typeStr);
                 }
