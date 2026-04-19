@@ -923,7 +923,7 @@ namespace TmMcp {
         tools.Add(MakeTool("FindControlsByLabel", "Search across main-menu UI layers for Label controls whose Value contains the given substring. Case-insensitive by default. Returns layerIndex, layerName, controlId, raw label, displayText (translation prefix stripped), classes, absPos, size.", '{"type":"object","properties":{"substring":{"type":"string"},"caseInsensitive":{"type":"boolean"},"onlyVisible":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxResults":{"type":"integer"}},"required":["substring"]}'));
         tools.Add(MakeTool("GetLayerXml", "Read a slice of a UI layer's Manialink XML, or substring-grep it. Either {layerIndex, find, context?=120, maxHits?=20, caseInsensitive?=false} to grep, or {layerIndex, offset?=0, length?=2048} to slice. Use instead of dumping the whole 10-50 KB XML for a layer.", '{"type":"object","properties":{"layerIndex":{"type":"integer"},"find":{"type":"string"},"context":{"type":"integer"},"maxHits":{"type":"integer"},"caseInsensitive":{"type":"boolean"},"offset":{"type":"integer"},"length":{"type":"integer"}},"required":["layerIndex"]}'));
         tools.Add(MakeTool("BackToMainMenu", "Unwind out of whatever module the game is currently in (Editor, Race) and return to the main menu. Works from a live race, self-hosted solo, or the editor. Async — poll GetMode until mode=='Menu'.", '{"type":"object","properties":{}}'));
-        tools.Add(MakeTool("ClickMenuButton", "DISABLED — calling TriggerPageAction from Angelscript crashes openplanet.dll natively. Kept as a surfaced error so callers learn the constraint. Use SetMenuPage for nav routes; EditNewMap/BackToMainMenu for terminal actions.", '{"type":"object","properties":{"action":{"type":"string"},"controlId":{"type":"string"}}}'));
+        tools.Add(MakeTool("ClickMenuButton", "High-level click on a Nadeo main-menu nav-item. Resolve with {controlId} (e.g. 'button-map-editor') or {indexPath, layerIndex|layerName}. Descends to the component-navigation-item-zone leaf and invokes its CControlBase::OnAction — the same dispatch a real click uses. Works across button templates (expendable-button, Trackmania_Button). For non-nav controls without the nav-zone class, use TriggerControlOnAction directly. After firing, poll GetActiveMenuPages / GetMode / GetDialog to observe the route change.", '{"type":"object","properties":{"controlId":{"type":"string"},"indexPath":{"type":"string"},"layerIndex":{"type":"integer"},"layerName":{"type":"string"}}}'));
         tools.Add(MakeTool("InspectMenuControl", "Probe: resolve a ControlId on the active Page_* (or named layer) via LocalPage.GetFirstChild and MainFrame.GetFirstChild. Returns type, classes, visibility, position, plus two path encodings from MainFrame: 'path' is slash-joined child indexes (e.g. '3/0' = MainFrame.Controls[3].Controls[0]), 'idPath' is slash-joined ControlIds (e.g. 'frame-global/button-create'). Includes up to 32 children if the match is a frame. Read-only — safe to call from Angelscript.", '{"type":"object","properties":{"controlId":{"type":"string"},"layerName":{"type":"string"}},"required":["controlId"]}'));
         tools.Add(MakeTool("SetMenuControlVisible", "Call Show()/Hide() on a menu control. Resolve either by {controlId} (global search) or {indexPath, layerIndex|layerName} (direct walk from MainFrame). visible=true calls Show; false calls Hide. Menu may re-render and reset visibility on the next tick — re-observe after to confirm. Works from Angelscript (unlike TriggerPageAction).", '{"type":"object","properties":{"controlId":{"type":"string"},"indexPath":{"type":"string"},"layerIndex":{"type":"integer"},"layerName":{"type":"string"},"visible":{"type":"boolean"}},"required":["visible"]}'));
         tools.Add(MakeTool("TriggerControlOnAction", "Click a menu control by invoking its underlying CControlBase.OnAction() — the same dispatch the game uses when a button is activated. Resolve via {controlId} (global search) or {indexPath, layerIndex|layerName}. For Nadeo expendable-button nav-items (e.g. button-create on Page_HomePage) the click target is the leaf nav-zone at Controls[0]/[4]/[0]; pass that indexPath explicitly. Safe from Angelscript (OnAction is on CControlBase, not the script-handler).", '{"type":"object","properties":{"controlId":{"type":"string"},"indexPath":{"type":"string"},"layerIndex":{"type":"integer"},"layerName":{"type":"string"}}}'));
@@ -969,14 +969,6 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
-    Json::Value@ ClickMenuButton(Json::Value &in input) {
-        // UNSAFE. Calling ManialinkScriptHandlerMenus.TriggerPageAction(...) from the
-        // Angelscript thread crashes openplanet.dll natively (observed 2026-04-20).
-        // Left stubbed in place so the tool name surfaces the safety note instead of
-        // silently disappearing; see research/MenuManialinkLayers.md.
-        return MakeError("ClickMenuButton is disabled: calling TriggerPageAction from Angelscript crashes openplanet.dll. Use SetMenuPage for nav routes and terminal tools (e.g. EditNewMap) for action buttons. See research/MenuManialinkLayers.md.");
-    }
-
     bool _IsDangerousMenuRoute(const string &in route) {
         // Routes observed to auto-launch a playground instead of only swapping a Page_*.
         // See research/MenuManialinkLayers.md "Routes with side-effects".
@@ -988,6 +980,9 @@ namespace TmMcp {
 #if DEPENDENCY_MLHOOK
         if (!input.HasKey("route")) return MakeError("missing route");
         string route = string(input["route"]);
+        if (route.Length == 0 || route.SubStr(0, 1) != "/") {
+            return MakeError("route must start with '/': got '" + route + "'. Known routes begin with '/' (e.g. '/home', '/create'). Router_Push silently wedges the menu into Page_LoadingScreen on an invalid route.");
+        }
         string extra = input.HasKey("extra") ? string(input["extra"]) : "{}";
         string history = input.HasKey("history") ? string(input["history"]) : "{}";
         bool allowPlaygroundLaunch = input.HasKey("allowPlaygroundLaunch")

@@ -494,6 +494,59 @@ namespace TmMcp {
         return ctrl;
     }
 
+    // DFS for the first descendant with class `component-navigation-item-zone`.
+    // That class marks the click-hitbox quad inside any Nadeo nav-item button
+    // (expendable-button, Trackmania_Button, etc. — both templates end at a
+    // quad with this class). Returns root itself if it carries the class.
+    CGameManialinkControl@ _FindNavZoneInSubtree(CGameManialinkControl@ root, int maxDepth) {
+        if (root is null || maxDepth < 0) return null;
+        if (_ControlHasClass(root, "component-navigation-item-zone")) return root;
+        auto frame = cast<CGameManialinkFrame>(root);
+        if (frame is null) return null;
+        uint n = 0;
+        try { n = frame.Controls.Length; } catch { n = 0; }
+        for (uint i = 0; i < n; i++) {
+            CGameManialinkControl@ c = null;
+            try { @c = frame.Controls[i]; } catch { @c = null; }
+            if (c is null) continue;
+            auto hit = _FindNavZoneInSubtree(c, maxDepth - 1);
+            if (hit !is null) return hit;
+        }
+        return null;
+    }
+
+    // High-level click: resolve a nav-item by {controlId} (global search) or
+    // {indexPath, layerIndex|layerName}, descend to its
+    // component-navigation-item-zone leaf, then OnAction() its CControlBase.
+    // This is what a real mouse click does. If the resolved control already
+    // has the nav-zone class it is used directly (so callers may pass the
+    // leaf indexPath too).
+    Json::Value@ ClickMenuButton(Json::Value &in input) {
+        string err;
+        auto navItem = _ResolveControlFromInput(input, err);
+        if (navItem is null) return MakeError(err);
+        auto zone = _FindNavZoneInSubtree(navItem, 10);
+        if (zone is null) {
+            string navId = "?";
+            try { navId = string(navItem.ControlId); } catch { /* swallow */ }
+            return MakeError("no component-navigation-item-zone descendant under '" + navId + "'; for non-nav buttons use TriggerControlOnAction directly");
+        }
+        CControlBase@ base = null;
+        try { @base = zone.Control; } catch { return MakeError("reading .Control threw: " + getExceptionInfo()); }
+        if (base is null) return MakeError("zone.Control is null");
+        string baseTy = "?";
+        try { baseTy = Reflection::TypeOf(base).Name; } catch { /* swallow */ }
+        try { base.OnAction(); } catch { return MakeError("OnAction() threw: " + getExceptionInfo()); }
+        Json::Value output = Json::Object();
+        try { output["navItemControlId"] = string(navItem.ControlId); } catch { /* swallow */ }
+        try { output["navItemType"] = Reflection::TypeOf(navItem).Name; } catch { /* swallow */ }
+        try { output["zoneControlId"] = string(zone.ControlId); } catch { /* swallow */ }
+        try { output["zoneType"] = Reflection::TypeOf(zone).Name; } catch { /* swallow */ }
+        output["zoneControlBaseType"] = baseTy;
+        output["note"] = "Fired CControlBase::OnAction() on the nav-zone leaf. Observe via GetActiveMenuPages / GetMode / GetDialog.";
+        return MakeSuccess(output);
+    }
+
     // Invoke CControlBase::OnAction() on the resolved control. OnAction is
     // the low-level click-dispatch that the UI itself calls when a button is
     // activated — living on CControlBase (Openplanet.h:13548) without the
