@@ -2,6 +2,7 @@ namespace Editor {
     import vec3 GetBlockLocation(CGameCtnBlock@ block, bool forceFree = false) from "Editor";
     import vec3 GetBlockRotation(CGameCtnBlock@ block) from "Editor";
     import bool IsBlockFree(CGameCtnBlock@ block) from "Editor";
+    // GetNodPointer is provided by Editor's Exports/Functions.as, no need to re-import.
 }
 
 namespace TmMcp {
@@ -108,6 +109,9 @@ namespace TmMcp {
         output["nbBlocks"] = int(map.Blocks.Length);
         output["nbBakedBlocks"] = int(map.BakedBlocks.Length);
         output["nbItems"] = int(map.AnchoredObjects.Length);
+        if (editor.PluginMapType !is null) {
+            output["nbScriptItems"] = int(editor.PluginMapType.Items.Length);
+        }
         output["vertexCount"] = int(map.VertexCount);
         if (map.MapInfo !is null) {
             output["fileName"] = map.MapInfo.FileName;
@@ -699,6 +703,10 @@ namespace TmMcp {
             || name == "ListMacroblockInstances"
             || name == "FindBlockModels"
             || name == "RunGizmoApplyBlock"
+            || name == "RunComputeItemsDiagnostic"
+            || name == "DevSafeRead"
+            || name == "DevGetPointers"
+            || name == "DevComputeItemsPointers"
             || name == "CreateNamedMacroblock"
             || name == "GetNamedMacroblock"
             || name == "ListNamedMacroblocks"
@@ -757,6 +765,10 @@ namespace TmMcp {
         if (name == "ListMacroblockInstances") return ListMacroblockInstances(input);
         if (name == "FindBlockModels") return FindBlockModels(input);
         if (name == "RunGizmoApplyBlock") return RunGizmoApplyBlock(input);
+        if (name == "RunComputeItemsDiagnostic") return RunComputeItemsDiagnostic(input);
+        if (name == "DevSafeRead") return RunDevSafeRead(input);
+        if (name == "DevGetPointers") return RunDevGetPointers(input);
+        if (name == "DevComputeItemsPointers") return RunDevComputeItemsPointers(input);
         if (name == "CreateNamedMacroblock") return CreateNamedMacroblock(input);
         if (name == "GetNamedMacroblock") return GetNamedMacroblockTool(input);
         if (name == "ListNamedMacroblocks") return ListNamedMacroblocks(input);
@@ -817,6 +829,10 @@ namespace TmMcp {
         tools.Add(MakeTool("ListMacroblockInstances", "List placed map macroblock instances with coord, order, user data, size, unit coords, and model metadata.", '{"type":"object","properties":{"limit":{"type":"integer"},"offset":{"type":"integer"},"recent":{"type":"boolean"},"unitCoordLimit":{"type":"integer"}}}'));
         tools.Add(MakeTool("FindBlockModels", "Search loaded editor block models.", '{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"},"includeTerrain":{"type":"boolean"},"terrainOnly":{"type":"boolean"}}}'));
         tools.Add(MakeTool("RunGizmoApplyBlock", "DEV diagnostic: apply a free block through E++'s actual gizmo apply path, with mapPre/mapPost and recent block readback.", '{"type":"object","properties":{"blockName":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"variant":{"type":"integer"},"autofocus":{"type":"boolean"},"autofocusDistance":{"type":"number"}},"required":["blockName","x","y","z"]}'));
+        tools.Add(MakeTool("RunComputeItemsDiagnostic", "DEV diagnostic: create a CGameEditorMapMacroBlockInstance at the given grid coord for a macroblock file, call ComputeItemsForMacroblockInstance, and report wrapper pointers + live AnchoredObject matches. Optional testSkin={itemIndex,bgSkin,fgSkin} tries SetItemSkin(s) on the wrapper and reports pre/post skin persistence.", '{"type":"object","properties":{"mbPath":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"force":{"type":"boolean"},"testSkin":{"type":"object","properties":{"itemIndex":{"type":"integer"},"bgSkin":{"type":"string"},"fgSkin":{"type":"string"}}}},"required":["mbPath","x","y","z"]}'));
+        tools.Add(MakeTool("DevSafeRead", "Read memory at an arbitrary address using Dev::SafeRead*. ptr accepts hex string \"0x...\" or integer. Optional offset/offsets (array of ints) are summed. kind: u8|u16|u32|u64|i8|i16|i32|i64|f32|vec2|vec3|vec4|cstr|bytes. For cstr/bytes, len caps bytes read (default 256/64, bytes max 4096). Reports probe result, value, and readError on faults.", '{"type":"object","properties":{"ptr":{"type":["string","integer"]},"offset":{"type":"integer"},"offsets":{"type":"array","items":{"type":"integer"}},"kind":{"type":"string"},"len":{"type":"integer"}},"required":["ptr"]}'));
+        tools.Add(MakeTool("DevGetPointers", "Return raw pointers for the current editor, PluginMapType, Challenge, Cursor, and App, with per-nod vtable/refcount peeks. Optional listAnchoredObjects, listBlocks, and listPmtItems include map items/blocks/pmt.Items pointers (capped by *Limit params, default 20). listPmtItems exposes healthy CGameCtnEditorScriptAnchoredObject wrappers for memory comparison against compute-path wrappers.", '{"type":"object","properties":{"listAnchoredObjects":{"type":"boolean"},"anchoredObjectsLimit":{"type":"integer"},"listBlocks":{"type":"boolean"},"blocksLimit":{"type":"integer"},"listPmtItems":{"type":"boolean"},"pmtItemsLimit":{"type":"integer"}}}'));
+        tools.Add(MakeTool("DevComputeItemsPointers", "Like RunComputeItemsDiagnostic but NEVER accesses wrapper fields (Position/ItemModel). Returns raw pointers + vtable/refcount peeks for each MacroblockInstanceItemsResults entry so you can inspect layout via DevSafeRead without crashing.", '{"type":"object","properties":{"mbPath":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"force":{"type":"boolean"}},"required":["mbPath","x","y","z"]}'));
         tools.Add(MakeTool("CreateNamedMacroblock", "Create or replace an in-memory named macroblock.", '{"type":"object","properties":{"name":{"type":"string"},"replace":{"type":"boolean"}},"required":["name"]}'));
         tools.Add(MakeTool("GetNamedMacroblock", "Inspect an in-memory named macroblock and return stored block/item specs.", '{"type":"object","properties":{"name":{"type":"string"},"limit":{"type":"integer"},"includeItems":{"type":"boolean"}},"required":["name"]}'));
         tools.Add(MakeTool("ListNamedMacroblocks", "List in-memory named macroblocks.", '{"type":"object","properties":{}}'));
