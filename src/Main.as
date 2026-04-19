@@ -1,4 +1,5 @@
 void Main() {
+    TmMcp::InitToolSchemas();
     TmMcp::Start();
 }
 

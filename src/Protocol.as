@@ -63,6 +63,11 @@ namespace TmMcp {
             return MakeResponse(id, route, null, "input must be a JSON object");
         }
 
+        string validationErr = ValidateToolInput(tool, input);
+        if (validationErr.Length > 0) {
+            return MakeResponse(id, route, null, "invalid input for " + tool + ": " + validationErr);
+        }
+
         Json::Value@ result = CallTool(tool, input);
         if (result is null) {
             return MakeResponse(id, route, null, "unknown tool: " + tool);
