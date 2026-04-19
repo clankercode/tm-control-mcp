@@ -738,7 +738,8 @@ namespace TmMcp {
             || name == "GetMenuPage"
             || name == "ListKnownMenuRoutes"
             || name == "ListGuides"
-            || name == "GetGuide";
+            || name == "GetGuide"
+            || name == "EditNewMap";
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
@@ -807,6 +808,7 @@ namespace TmMcp {
         if (name == "ListKnownMenuRoutes") return ListKnownMenuRoutes(input);
         if (name == "ListGuides") return ListGuides(input);
         if (name == "GetGuide") return GetGuide(input);
+        if (name == "EditNewMap") return EditNewMapTool(input);
         return null;
     }
 
@@ -877,6 +879,7 @@ namespace TmMcp {
         tools.Add(MakeTool("ListKnownMenuRoutes", "Return a hardcoded catalogue of main-menu Router_Push routes known to work (sourced from tm-menu-page-manager).", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("ListGuides", "List available self-documentation guides. Each has a short title; call GetGuide {topic} to fetch the full body.", '{"type":"object","properties":{}}'));
         tools.Add(MakeTool("GetGuide", "Fetch the full body of a named guide. Use ListGuides to see topics.", '{"type":"object","properties":{"topic":{"type":"string"}},"required":["topic"]}'));
+        tools.Add(MakeTool("EditNewMap", "Create a new map in the editor with a specific Environment + Decoration (vista). Defaults: Stadium / 48x48Day / TrackMania TM_Race. See the map-vistas guide for decoration strings. Call returns immediately; poll GetMode until mode becomes Editor.", '{"type":"object","properties":{"environment":{"type":"string"},"decoration":{"type":"string"},"mapType":{"type":"string"}}}'));
         return tools;
     }
 
@@ -922,6 +925,39 @@ namespace TmMcp {
 #else
         return MakeError("MLHook dependency not compiled in");
 #endif
+    }
+
+    void _EditNewMapCoroutine(string environment, string decoration, string mapType) {
+        if (!Permissions::OpenAdvancedMapEditor()) {
+            warn("TM Control MCP EditNewMap: missing advanced map editor permission");
+            return;
+        }
+        auto app = cast<CGameManiaPlanet>(GetApp());
+        if (app is null || app.ManiaTitleControlScriptAPI is null) {
+            warn("TM Control MCP EditNewMap: title control API not available");
+            return;
+        }
+        app.BackToMainMenu();
+        while (!app.ManiaTitleControlScriptAPI.IsReady) yield();
+        while (app.Switcher.ModuleStack.Length < 1 || cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0]) is null) yield();
+        yield();
+        app.ManiaTitleControlScriptAPI.EditNewMap2(environment, decoration, "", "", mapType, false, "", "");
+    }
+
+    Json::Value@ EditNewMapTool(Json::Value &in input) {
+        string environment = input.HasKey("environment") ? string(input["environment"]) : "Stadium";
+        string decoration = input.HasKey("decoration") ? string(input["decoration"]) : "48x48Day";
+        string mapType = input.HasKey("mapType") ? string(input["mapType"]) : "TrackMania\\TM_Race";
+        startnew(function(ref@ ctx) {
+            auto args = cast<array<string>>(ctx);
+            _EditNewMapCoroutine(args[0], args[1], args[2]);
+        }, array<string> = { environment, decoration, mapType });
+        Json::Value output = Json::Object();
+        output["environment"] = environment;
+        output["decoration"] = decoration;
+        output["mapType"] = mapType;
+        output["note"] = "EditNewMap2 called asynchronously; poll GetMode until it returns Editor.";
+        return MakeSuccess(output);
     }
 
     Json::Value@ ListKnownMenuRoutes(Json::Value &in input) {
