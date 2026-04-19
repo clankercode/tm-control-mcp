@@ -105,6 +105,32 @@ namespace TmMcp {
         return null;
     }
 
+    // Cache of URL -> CSystemPackDesc@ scoped to a single ApplyNamedMacroblockSkinsDirect
+    // call. Each cached entry holds ONE strong ref; we release them all after the batch
+    // finishes. Items that adopt a skin take their own MwAddRef inside SetItemSkinsRaw,
+    // so there is no handoff leak.
+    class _PdCache {
+        string[] urls;
+        CSystemPackDesc@[] descs;
+        CSystemPackDesc@ Lookup(const string &in url) {
+            if (url.Length == 0) return null;
+            for (uint i = 0; i < urls.Length; i++) {
+                if (urls[i] == url) return descs[i];
+            }
+            auto pd = Editor::GetPackDesc(url);
+            urls.InsertLast(url);
+            descs.InsertLast(pd);
+            return pd;
+        }
+        void ReleaseAll() {
+            for (uint i = 0; i < descs.Length; i++) {
+                if (descs[i] !is null) descs[i].MwRelease();
+            }
+            urls.Resize(0);
+            descs.Resize(0);
+        }
+    }
+
     Json::Value ApplyNamedMacroblockSkinsDirect(CGameEditorPluginMapMapType@ pmt, const string &in name, int blockBaseIndex, int itemBaseIndex) {
         Json::Value output = Json::Object();
         Json::Value applied = Json::Array();
@@ -118,15 +144,17 @@ namespace TmMcp {
             return output;
         }
 
+        _PdCache cache;
         for (uint i = 0; i < skins.Length; i++) {
             auto skin = skins[i];
             if (skin is null) continue;
             if (skin.isItem) {
-                ApplyNamedMacroblockItemSkin(pmt, skin, itemBaseIndex, applied, errors);
+                ApplyNamedMacroblockItemSkin(pmt, skin, itemBaseIndex, applied, errors, cache);
             } else {
                 ApplyNamedMacroblockBlockSkin(pmt, skin, blockBaseIndex, applied, errors);
             }
         }
+        cache.ReleaseAll();
 
         output["requested"] = int(skins.Length);
         output["applied"] = applied;
@@ -140,7 +168,8 @@ namespace TmMcp {
         NamedMacroblockSkin@ skin,
         int itemBaseIndex,
         Json::Value &inout applied,
-        Json::Value &inout errors
+        Json::Value &inout errors,
+        _PdCache@ cache
     ) {
         int itemMapIndex = itemBaseIndex + int(skin.itemIndex);
         if (itemMapIndex < 0 || itemMapIndex >= int(pmt.Map.AnchoredObjects.Length)) {
@@ -161,11 +190,9 @@ namespace TmMcp {
             return;
         }
 
-        CSystemPackDesc@ bgPd = null;
-        CSystemPackDesc@ fgPd = null;
         try {
-            if (skin.bgSkin.Length > 0) @bgPd = Editor::GetPackDesc(skin.bgSkin);
-            if (skin.fgSkin.Length > 0) @fgPd = Editor::GetPackDesc(skin.fgSkin);
+            auto bgPd = cache.Lookup(skin.bgSkin);
+            auto fgPd = cache.Lookup(skin.fgSkin);
             if ((skin.bgSkin.Length > 0 && bgPd is null) || (skin.fgSkin.Length > 0 && fgPd is null)) {
                 Json::Value err = NamedMacroblockSkinToJson(skin);
                 err["error"] = "failed to resolve skin URL(s) to pack desc";
@@ -191,8 +218,6 @@ namespace TmMcp {
             err["mapIndex"] = itemMapIndex;
             errors.Add(err);
         }
-        if (bgPd !is null) bgPd.MwRelease();
-        if (fgPd !is null) fgPd.MwRelease();
     }
 
     void ApplyNamedMacroblockBlockSkin(

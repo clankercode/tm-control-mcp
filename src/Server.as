@@ -5,7 +5,7 @@ int S_TmMcpPort = 30006;
 string S_TmMcpHost = "127.0.0.1";
 
 [Setting category="Server" name="Startup Delay (ms)" description="Delay server socket startup after plugin load. This helps isolate Openplanet startup crashes from socket listener startup."]
-int S_TmMcpStartupDelayMs = 200;
+int S_TmMcpStartupDelayMs = 100;
 
 [Setting category="Server" name="Trace Requests" description="Log request and response payloads to Openplanet.log."]
 bool S_TmMcpTraceRequests = false;
