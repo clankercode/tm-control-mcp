@@ -709,6 +709,7 @@ namespace TmMcp {
             || name == "ListMacroblockInstances"
             || name == "FindBlockModels"
             || name == "RunGizmoApplyBlock"
+            || name == "RunRandomFuzz"
             || name == "RunComputeItemsDiagnostic"
             || name == "DevSafeRead"
             || name == "DevGetPointers"
@@ -793,6 +794,7 @@ namespace TmMcp {
         if (name == "ListMacroblockInstances") return ListMacroblockInstances(input);
         if (name == "FindBlockModels") return FindBlockModels(input);
         if (name == "RunGizmoApplyBlock") return RunGizmoApplyBlock(input);
+        if (name == "RunRandomFuzz") return RunRandomFuzz(input);
         if (name == "RunComputeItemsDiagnostic") return RunComputeItemsDiagnostic(input);
         if (name == "DevSafeRead") return RunDevSafeRead(input);
         if (name == "DevGetPointers") return RunDevGetPointers(input);
@@ -879,6 +881,7 @@ namespace TmMcp {
         tools.Add(MakeTool("ListMacroblockInstances", "List placed map macroblock instances with coord, order, user data, size, unit coords, and model metadata.", '{"type":"object","properties":{"limit":{"type":"integer"},"offset":{"type":"integer"},"recent":{"type":"boolean"},"unitCoordLimit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("FindBlockModels", "Search loaded editor block models.", '{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"},"includeTerrain":{"type":"boolean"},"terrainOnly":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("RunGizmoApplyBlock", "DEV diagnostic: apply a free block through E++'s actual gizmo apply path, with mapPre/mapPost and recent block readback.", '{"type":"object","properties":{"blockName":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"variant":{"type":"integer"},"autofocus":{"type":"boolean"},"autofocusDistance":{"type":"number"}},"required":["blockName","x","y","z"],"additionalProperties":false}'));
+        tools.Add(MakeTool("RunRandomFuzz", "DEV fuzz test: place N random blocks and items (picked from editor inventory) at random positions/rotations within a bounding box. Exercises the Editor++ free-placement path (PlaceBlocks/PlaceItems routed through PlaceMacroblock donor). bbox coords are world-space. blockRatio in 0..1 (default 0.6). Reports placed/attempted counts, exceptions, and mapPre/mapPost summaries.", '{"type":"object","properties":{"bboxMin":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"bboxMax":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"iterations":{"type":"integer"},"blockRatio":{"type":"number"}},"required":["bboxMin","bboxMax","iterations"],"additionalProperties":false}'));
         tools.Add(MakeTool("RunComputeItemsDiagnostic", "DEV diagnostic: create a CGameEditorMapMacroBlockInstance at the given grid coord for a macroblock file, call ComputeItemsForMacroblockInstance, and report wrapper pointers + live AnchoredObject matches. Optional testSkin={itemIndex,bgSkin,fgSkin} tries SetItemSkin(s) on the wrapper and reports pre/post skin persistence.", '{"type":"object","properties":{"mbPath":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"force":{"type":"boolean"},"testSkin":{"type":"object","properties":{"itemIndex":{"type":"integer"},"bgSkin":{"type":"string"},"fgSkin":{"type":"string"}}}},"required":["mbPath","x","y","z"],"additionalProperties":false}'));
         tools.Add(MakeTool("DevSafeRead", "Read memory at an arbitrary address using Dev::SafeRead*. ptr accepts hex string \"0x...\" or integer. Optional offset/offsets (array of ints) are summed. kind: u8|u16|u32|u64|i8|i16|i32|i64|f32|vec2|vec3|vec4|cstr|bytes. For cstr/bytes, len caps bytes read (default 256/64, bytes max 4096). Reports probe result, value, and readError on faults.", '{"type":"object","properties":{"ptr":{"type":["string","integer"]},"offset":{"type":"integer"},"offsets":{"type":"array","items":{"type":"integer"}},"kind":{"type":"string"},"len":{"type":"integer"}},"required":["ptr"],"additionalProperties":false}'));
         tools.Add(MakeTool("DevGetPointers", "Return raw pointers for the current editor, PluginMapType, Challenge, Cursor, and App, with per-nod vtable/refcount peeks. Optional listAnchoredObjects, listBlocks, and listPmtItems include map items/blocks/pmt.Items pointers (capped by *Limit params, default 20). listPmtItems exposes healthy CGameCtnEditorScriptAnchoredObject wrappers for memory comparison against compute-path wrappers.", '{"type":"object","properties":{"listAnchoredObjects":{"type":"boolean"},"anchoredObjectsLimit":{"type":"integer"},"listBlocks":{"type":"boolean"},"blocksLimit":{"type":"integer"},"listPmtItems":{"type":"boolean"},"pmtItemsLimit":{"type":"integer"}},"additionalProperties":false}'));
@@ -966,9 +969,44 @@ namespace TmMcp {
     Json::Value@ BackToMainMenu(Json::Value &in input) {
         auto app = cast<CGameManiaPlanet>(GetApp());
         if (app is null) return MakeError("app not available");
+        uint readyWaitedMs = 0;
+        bool editorWasReady = true;
+        auto editor = cast<CGameCtnEditorFree>(app.Editor);
+        if (editor !is null && editor.PluginMapType !is null) {
+            // Wait for the editor to quiesce before tearing down; calling
+            // BackToMainMenu mid-operation (e.g. right after a burst of
+            // PlaceMacroblock) can deadlock the unwind.
+            editorWasReady = editor.PluginMapType.IsEditorReadyForRequest;
+            uint64 t0 = Time::Now;
+            while (!editor.PluginMapType.IsEditorReadyForRequest && readyWaitedMs < 5000) {
+                yield();
+                readyWaitedMs = uint(Time::Now - t0);
+            }
+            @editor = null;
+        }
         app.BackToMainMenu();
+        uint menuWaitedMs = 0;
+        bool reachedMenu = false;
+        uint64 t1 = Time::Now;
+        while (menuWaitedMs < 10000) {
+            if (app.Switcher.ModuleStack.Length > 0
+                && cast<CTrackManiaMenus>(app.Switcher.ModuleStack[app.Switcher.ModuleStack.Length - 1]) !is null) {
+                reachedMenu = true;
+                break;
+            }
+            yield();
+            menuWaitedMs = uint(Time::Now - t1);
+        }
         Json::Value output = Json::Object();
-        output["note"] = "BackToMainMenu() called; unwind is async. Poll GetMode until it returns 'Menu'.";
+        output["editorWasReady"] = editorWasReady;
+        output["readyWaitedMs"] = int(readyWaitedMs);
+        output["menuWaitedMs"] = int(menuWaitedMs);
+        output["reachedMenu"] = reachedMenu;
+        if (!reachedMenu) {
+            output["note"] = "BackToMainMenu() issued but menu module not on top after 10s; poll GetMode manually.";
+        } else {
+            output["note"] = "BackToMainMenu() complete; menu module on top of stack.";
+        }
         return MakeSuccess(output);
     }
 

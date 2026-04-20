@@ -52,4 +52,59 @@ namespace TmMcp {
         }
         return MakeSuccess(output);
     }
+
+    vec3 Vec3FromJsonArray(Json::Value@ arr) {
+        return vec3(float(arr[0]), float(arr[1]), float(arr[2]));
+    }
+
+    Json::Value@ RunRandomFuzz(Json::Value &in input) {
+        auto editor = GetEditor();
+        if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available");
+        if (!input.HasKey("bboxMin") || !input.HasKey("bboxMax") || !input.HasKey("iterations")) {
+            return MakeError("missing bboxMin, bboxMax, or iterations");
+        }
+        vec3 bbMin = Vec3FromJsonArray(input["bboxMin"]);
+        vec3 bbMax = Vec3FromJsonArray(input["bboxMax"]);
+        uint iterations = uint(int(input["iterations"]));
+        float blockRatio = input.HasKey("blockRatio") ? float(input["blockRatio"]) : 0.6;
+        if (iterations == 0) return MakeError("iterations must be >= 1");
+        if (iterations > 2000) return MakeError("iterations capped at 2000; pick a smaller N");
+
+        Json::Value mapPre = MapSummary(editor);
+        string error = "";
+        uint totalPlaced = 0;
+        try {
+            totalPlaced = Editor::Dev_RunRandomFuzz(bbMin, bbMax, iterations, blockRatio);
+        } catch {
+            error = getExceptionInfo();
+        }
+
+        Json::Value output = Json::Object();
+        output["bboxMin"] = Vec3ToJson(bbMin);
+        output["bboxMax"] = Vec3ToJson(bbMax);
+        output["iterations"] = int(Editor::Dev_RandomFuzz_GetIterations());
+        output["blockRatio"] = blockRatio;
+        output["collection"] = Editor::Dev_RandomFuzz_GetCollection();
+        output["attemptedBlock"] = int(Editor::Dev_RandomFuzz_GetAttemptedBlock());
+        output["attemptedItem"] = int(Editor::Dev_RandomFuzz_GetAttemptedItem());
+        output["placedBlock"] = int(Editor::Dev_RandomFuzz_GetPlacedBlock());
+        output["placedItem"] = int(Editor::Dev_RandomFuzz_GetPlacedItem());
+        output["placedTotal"] = int(totalPlaced);
+        output["skippedNoInventory"] = int(Editor::Dev_RandomFuzz_GetSkippedNoInv());
+        output["skippedBadModel"] = int(Editor::Dev_RandomFuzz_GetSkippedBadModel());
+        output["skippedVariant"] = int(Editor::Dev_RandomFuzz_GetSkippedVariant());
+        output["exceptions"] = int(Editor::Dev_RandomFuzz_GetExceptions());
+        string firstEx = Editor::Dev_RandomFuzz_GetFirstException();
+        if (firstEx.Length > 0) output["firstException"] = firstEx;
+        Json::Value mapDelta = Json::Object();
+        mapDelta["blocksBefore"] = int(Editor::Dev_RandomFuzz_GetBlocksBefore());
+        mapDelta["blocksAfter"] = int(Editor::Dev_RandomFuzz_GetBlocksAfter());
+        mapDelta["itemsBefore"] = int(Editor::Dev_RandomFuzz_GetItemsBefore());
+        mapDelta["itemsAfter"] = int(Editor::Dev_RandomFuzz_GetItemsAfter());
+        output["mapDelta"] = mapDelta;
+        output["mapPre"] = mapPre;
+        output["mapPost"] = MapSummary(editor);
+        if (error.Length > 0) output["error"] = error;
+        return MakeSuccess(output);
+    }
 }
