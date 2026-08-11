@@ -208,6 +208,9 @@ namespace TmMcp {
         if (limit < 1) limit = 1;
         if (limit > 500) limit = 500;
 
+        auto editor = GetEditor();
+        bool liveResolutionAvailable = editor !is null && editor.Challenge !is null;
+
         Json::Value entries = Json::Array();
         for (uint i = 0; i < g_TaggedObjects.Length && entries.Length < uint(limit); i++) {
             auto obj = g_TaggedObjects[i];
@@ -220,7 +223,27 @@ namespace TmMcp {
             e["pos"] = Vec3ToJson(vec3(obj.x, obj.y, obj.z));
             e["placedAtMs"] = int(obj.placedAtMs);
             e["lastKnownIndex"] = obj.lastKnownIndex;
+            e["lastKnownIndexStatus"] = "stale-hint";
             e["trackIndex"] = int(i);
+            e["resolvedIndex"] = -1;
+            e["candidateCount"] = 0;
+            if (!liveResolutionAvailable) {
+                e["resolution"] = "unavailable";
+            } else if (obj.kind == "item") {
+                int candidateCount = 0;
+                int resolvedIndex = FindLiveItemIndex(editor, obj.idName, obj.x, obj.y, obj.z, MCP_TAG_POS_EPS, candidateCount);
+                e["resolvedIndex"] = resolvedIndex;
+                e["candidateCount"] = candidateCount;
+                e["resolution"] = resolvedIndex >= 0 ? "unique" : (candidateCount > 1 ? "ambiguous" : "missing");
+            } else if (obj.kind == "block") {
+                int candidateCount = 0;
+                int resolvedIndex = FindLiveBlockIndex(editor, obj.idName, obj.x, obj.y, obj.z, MCP_TAG_POS_EPS, candidateCount);
+                e["resolvedIndex"] = resolvedIndex;
+                e["candidateCount"] = candidateCount;
+                e["resolution"] = resolvedIndex >= 0 ? "unique" : (candidateCount > 1 ? "ambiguous" : "missing");
+            } else {
+                e["resolution"] = "unsupported-kind";
+            }
             entries.Add(e);
         }
         Json::Value output = Json::Object();
@@ -230,6 +253,7 @@ namespace TmMcp {
         output["defaultTag"] = g_DefaultAgentTag;
         output["filter"] = filter;
         output["prefix"] = prefix;
+        output["liveResolutionAvailable"] = liveResolutionAvailable;
         return MakeSuccess(output);
     }
 
@@ -371,8 +395,10 @@ namespace TmMcp {
         }
 
         Json::Value output = Json::Object();
+        bool targeted = itemsToDelete.Length > 0 || blocksToDelete.Length > 0;
         output["dryRun"] = dryRun;
-        output["deleted"] = !dryRun && itemsOk && blocksOk;
+        output["deleted"] = !dryRun && targeted && itemsOk && blocksOk;
+        output["targeted"] = targeted;
         output["itemsMatched"] = int(itemsToDelete.Length);
         output["blocksMatched"] = int(blocksToDelete.Length);
         output["matched"] = matched;
