@@ -40,9 +40,17 @@ namespace TmMcp {
         }
     }
 
+    void AddNamedMbLoadError(Json::Value &inout errors, const string &in kind, int index, const string &in error) {
+        Json::Value e = Json::Object();
+        e["kind"] = kind;
+        e["index"] = index;
+        e["error"] = error;
+        errors.Add(e);
+    }
+
     Json::Value NamedMbToDiskJson(const string &in name, Editor::MacroblockSpec@ mb) {
         Json::Value root = Json::Object();
-        root["format"] = "tm-control-mcp-named-mb-v1";
+        root["format"] = "tm-control-mcp-named-mb-v2";
         root["name"] = name;
         root["savedAtMs"] = int(Time::Now);
         Json::Value blocks = Json::Array();
@@ -87,7 +95,9 @@ namespace TmMcp {
                 auto s = skinList[i];
                 if (s is null) continue;
                 Json::Value o = Json::Object();
-                o["blockIndex"] = int(s.blockIndex);
+                o["isItem"] = s.isItem;
+                if (s.isItem) o["itemIndex"] = int(s.itemIndex);
+                else o["blockIndex"] = int(s.blockIndex);
                 o["fgSkin"] = s.fgSkin;
                 o["bgSkin"] = s.bgSkin;
                 skins.Add(o);
@@ -215,10 +225,41 @@ namespace TmMcp {
             auto skins = root["postSkins"];
             for (uint i = 0; i < skins.Length; i++) {
                 auto s = skins[i];
-                if (!s.HasKey("blockIndex")) continue;
+                if (s is null || s.GetType() != Json::Type::Object) {
+                    AddNamedMbLoadError(errors, "postSkin", int(i), "skin row must be an object");
+                    continue;
+                }
+                bool isItem = false; // v1 rows were block-only and omit isItem
+                if (s.HasKey("isItem")) {
+                    if (s["isItem"].GetType() != Json::Type::Boolean) {
+                        AddNamedMbLoadError(errors, "postSkin", int(i), "isItem must be boolean");
+                        continue;
+                    }
+                    isItem = bool(s["isItem"]);
+                }
+                if (s.HasKey("fgSkin") && s["fgSkin"].GetType() != Json::Type::String) {
+                    AddNamedMbLoadError(errors, "postSkin", int(i), "fgSkin must be string");
+                    continue;
+                }
+                if (s.HasKey("bgSkin") && s["bgSkin"].GetType() != Json::Type::String) {
+                    AddNamedMbLoadError(errors, "postSkin", int(i), "bgSkin must be string");
+                    continue;
+                }
                 string fg = s.HasKey("fgSkin") ? string(s["fgSkin"]) : "";
                 string bg = s.HasKey("bgSkin") ? string(s["bgSkin"]) : "";
-                AddPostSkinToNamedMacroblock(name, uint(s["blockIndex"]), fg, bg);
+                string indexKey = isItem ? "itemIndex" : "blockIndex";
+                if (!s.HasKey(indexKey) || s[indexKey].GetType() != Json::Type::Number) {
+                    AddNamedMbLoadError(errors, "postSkin", int(i), indexKey + " must be a number");
+                    continue;
+                }
+                int skinIndex = int(s[indexKey]);
+                int targetCount = isItem ? int(mb.items.Length) : int(mb.blocks.Length);
+                if (skinIndex < 0 || skinIndex >= targetCount) {
+                    AddNamedMbLoadError(errors, "postSkin", int(i), indexKey + " is out of range");
+                    continue;
+                }
+                if (isItem) AddPostItemSkinToNamedMacroblock(name, uint(skinIndex), fg, bg);
+                else AddPostSkinToNamedMacroblock(name, uint(skinIndex), fg, bg);
             }
         }
 
