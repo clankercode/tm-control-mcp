@@ -697,6 +697,7 @@ namespace TmMcp {
             || name == "OpenMapInEditor"
             || name == "GetMapInfo"
             || name == "GetMapEnvironment"
+            || name == "ControlMapObjectives"
             || name == "SaveMapAs"
             || name == "GetDialog"
             || name == "RespondDialog"
@@ -806,6 +807,7 @@ namespace TmMcp {
         if (name == "OpenMapInEditor") return OpenMapInEditor(input);
         if (name == "GetMapInfo") return GetMapInfo(input);
         if (name == "GetMapEnvironment") return GetMapEnvironment(input);
+        if (name == "ControlMapObjectives") return ControlMapObjectives(input);
         if (name == "SaveMapAs") return SaveMapAs(input);
         if (name == "GetDialog") return GetDialog(input);
         if (name == "RespondDialog") return RespondDialog(input);
@@ -917,6 +919,7 @@ namespace TmMcp {
         tools.Add(MakeTool("OpenMapInEditor", "Open a local map file in the editor.", '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapInfo", "Get current editor map name and counts.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapEnvironment", "Read map collection, decoration, map type/style, mood, and collection-unit metadata.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("ControlMapObjectives", "Get or set race objectives on the current editor map: NbClones (clone mode), NbLaps / IsLapRace. action=get|set. For set: optional nbClones (0-64), nbLaps (1-99), isLapRace (bool). Uses E++ offset writes for const API fields.", '{"type":"object","properties":{"action":{"type":"string"},"nbClones":{"type":"integer"},"nbLaps":{"type":"integer"},"isLapRace":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
         tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx.", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetDialog", "Inspect Trackmania's current BasicDialogs state and active dialog frame.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("RespondDialog", "Respond to Trackmania BasicDialogs. action: yes, no, cancel, ok, validate, hide.", '{"type":"object","properties":{"action":{"type":"string"}},"required":["action"],"additionalProperties":false}'));
@@ -1269,7 +1272,67 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
-    Json::Value@ GetMapInfo(Json::Value &in input) {
+    Json::Value@ ControlMapObjectives(Json::Value &in input) {
+        auto editor = cast<CGameCtnEditorFree>(GetApp().Editor);
+        if (editor is null || editor.Challenge is null) return MakeError("Not in editor with a map", "wrong_mode", false, "editor");
+        auto map = editor.Challenge;
+        string action = input.HasKey("action") ? string(input["action"]) : "get";
+        action = action.ToLower();
+
+        if (action == "set") {
+            Json::Value applied = Json::Object();
+            if (input.HasKey("nbClones")) {
+                uint n = uint(Math::Clamp(int(input["nbClones"]), 0, 64));
+                bool ok = Editor::SetMapNbClones(map, n);
+                applied["nbClones"] = int(n);
+                applied["nbClonesOk"] = ok;
+                if (!ok) return MakeError("SetMapNbClones failed (readback mismatch)", "write_failed", true, "editor");
+            }
+            if (input.HasKey("isLapRace")) {
+                bool isLap = bool(input["isLapRace"]);
+                bool ok = Editor::SetMapIsLapRace(map, isLap);
+                applied["isLapRace"] = isLap;
+                applied["isLapRaceOk"] = ok;
+                if (!ok) return MakeError("SetMapIsLapRace failed", "write_failed", true, "editor");
+            }
+            if (input.HasKey("nbLaps")) {
+                uint n = uint(Math::Clamp(int(input["nbLaps"]), 1, 99));
+                bool ok = Editor::SetMapNbLaps(map, n);
+                applied["nbLaps"] = int(n);
+                applied["nbLapsOk"] = ok;
+                if (!ok) return MakeError("SetMapNbLaps failed", "write_failed", true, "editor");
+            }
+            Json::Value result = Json::Object();
+            result["ok"] = true;
+            result["action"] = "set";
+            result["applied"] = applied;
+            result["nbClones"] = int(Editor::GetMapNbClones(map));
+            result["nbLaps"] = int(Editor::GetMapNbLaps(map));
+            result["isLapRace"] = Editor::GetMapIsLapRace(map);
+            if (map.MapInfo !is null) result["mapInfoNbClones"] = int(map.MapInfo.TMObjective_NbClones);
+            return MakeSuccess(result);
+        }
+
+        // get (default)
+        Json::Value result = Json::Object();
+        result["ok"] = true;
+        result["action"] = "get";
+        result["nbClones"] = int(Editor::GetMapNbClones(map));
+        result["nbLaps"] = int(Editor::GetMapNbLaps(map));
+        result["isLapRace"] = Editor::GetMapIsLapRace(map);
+        result["authorTime"] = int(map.TMObjective_AuthorTime);
+        result["goldTime"] = int(map.TMObjective_GoldTime);
+        result["silverTime"] = int(map.TMObjective_SilverTime);
+        result["bronzeTime"] = int(map.TMObjective_BronzeTime);
+        if (map.MapInfo !is null) {
+            result["mapInfoNbClones"] = int(map.MapInfo.TMObjective_NbClones);
+            result["mapInfoIsLapRace"] = map.MapInfo.TMObjective_IsLapRace;
+            result["mapInfoNbLaps"] = int(map.MapInfo.TMObjective_NbLaps);
+        }
+        return MakeSuccess(result);
+    }
+
+Json::Value@ GetMapInfo(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         return MakeSuccess(MapSummary(editor));
