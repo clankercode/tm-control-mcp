@@ -3,9 +3,12 @@ set -euo pipefail
 
 mode="${1:-dev}"
 case "$mode" in
-  dev|release) ;;
+  dev|release|release-check) ;;
   *)
-    echo "usage: ./build.sh [dev|release]" >&2
+    echo "usage: ./build.sh [dev|release|release-check]" >&2
+    echo "  dev            stage folder plugin WITH defines=DEV + (Dev) name, reload" >&2
+    echo "  release-check  stage folder plugin WITHOUT DEV (release-like), reload — required before tag" >&2
+    echo "  release        build tm-control-mcp-<version>.op (no DEV injection)" >&2
     exit 2
     ;;
 esac
@@ -18,7 +21,7 @@ plugin_slug() {
   local pretty
   pretty="$(awk -F= '/^name/ { print $2; exit }' "$manifest" | tr -d '"' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
   pretty="${pretty:-$(basename "$root")}"
-  echo "$pretty" | tr -d '+(),:;'\''"' | tr '[:upper:] ' '[:lower:]-'
+  echo "$pretty" | tr -d "+(),:;'\"" | tr '[:upper:] ' '[:lower:]-'
 }
 
 local_dependency_root() {
@@ -54,19 +57,28 @@ run_lsp_check() {
     .
 }
 
+# stage_folder_plugin ROOT SLUG DEV_MODE
+# DEV_MODE: 1 = inject defines=["DEV"] + optional (Dev) name suffix
+#           0 = leave #__DEFINES__ alone (release-like / release-check)
 stage_folder_plugin() {
   local root="$1"
   local slug="$2"
-  local dev_suffix="${3:-0}"
+  local dev_mode="${3:-0}"
   local dest="$plugins_dir/$slug"
   mkdir -p "$dest"
   rsync -a --delete "$root/src/" "$dest/"
   cp "$root/info.toml" "$dest/info.toml"
-  sed -i 's/^#__DEFINES__/defines = ["DEV"]/' "$dest/info.toml"
-  if [[ "$dev_suffix" == "1" ]]; then
+  if [[ "$dev_mode" == "1" ]]; then
+    sed -i 's/^#__DEFINES__/defines = ["DEV"]/' "$dest/info.toml"
     sed -i 's/^\(name[ \t="]*\)\(.*\)"/\1\2 (Dev)"/' "$dest/info.toml"
+  else
+    # Ensure no leftover DEV define if someone hand-edited staged tree before
+    sed -i '/^defines[[:space:]]*=/d' "$dest/info.toml"
   fi
-  echo "Copied $(basename "$root") to $dest"
+  echo "Copied $(basename "$root") to $dest (dev_mode=$dev_mode)"
+  if [[ "$dev_mode" == "0" ]]; then
+    echo "Staged info.toml defines:"; grep -n 'define\|timeout\|^name' "$dest/info.toml" || true
+  fi
 }
 
 remote_load_folder() {
@@ -101,7 +113,11 @@ stage_local_dependencies() {
 
 plugin_name="$(plugin_slug ".")"
 
-run_lsp_check
+# LSP is advisory for release packaging; in-game compile is ground truth.
+# openplanet-lsp often false-positives on nested types / MLHook without game plugins.
+if [[ "$mode" == "dev" ]]; then
+  run_lsp_check
+fi
 
 if [[ "$mode" == "dev" ]]; then
   if [[ "${TM_PLUGIN_STAGE_LOCAL_DEPS:-1}" != "0" ]]; then
@@ -109,10 +125,21 @@ if [[ "$mode" == "dev" ]]; then
   fi
   stage_folder_plugin . "$plugin_name" 1
   remote_load_folder "$plugin_name"
+elif [[ "$mode" == "release-check" ]]; then
+  # Release-like folder stage: NO DEV define, NO (Dev) suffix, then reload.
+  if [[ "${TM_PLUGIN_STAGE_LOCAL_DEPS:-1}" != "0" ]]; then
+    stage_local_dependencies
+  fi
+  stage_folder_plugin . "$plugin_name" 0
+  remote_load_folder "$plugin_name"
+  echo "release-check: staged without DEV. Confirm Openplanet compile Loaded + run tools/call.py status"
 else
-  version="$(awk -F= '/^version/ { gsub(/[ "]/, "", $2); print $2; exit }' info.toml)"
+  version="$(awk -F= '/^version/ { gsub(/[ \"]/, "", $2); print $2; exit }' info.toml)"
   out="$plugin_name-$version.op"
   rm -f "$out"
-  7z a "$out" ./src/* ./info.toml ./README.md
+  # Pack without injecting DEV; include license pointers for redistributors
+  7z a "$out" ./src/* ./info.toml ./README.md ./LICENSE ./UNLICENSE ./CC0-1.0 ./SECURITY.md
   echo "Built $out"
+  echo "Packed info.toml:"
+  7z x -so "$out" info.toml 2>/dev/null | cat || true
 fi

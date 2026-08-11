@@ -14,13 +14,16 @@ themselves — without clicking the UI by hand.
 | **Protocol** | One newline-terminated JSON request per TCP connection; newline JSON response; socket closes |
 | **Platform** | Trackmania (current) + [Openplanet](https://openplanet.dev/) |
 | **Hard deps** | [Editor++](https://openplanet.dev/plugin/editor) (`Editor`) · [MLHook](https://openplanet.dev/plugin/mlhook) |
-| **License** | Dual **[Unlicense](./UNLICENSE)** **or** **[CC0 1.0](./CC0-1.0)** — public domain / no attribution required |
+| **License** | Dual **[Unlicense](./UNLICENSE)** **or** **[CC0 1.0](./CC0-1.0)** — public domain / no attribution required (GitHub may show “Other”) |
 | **Status** | Active development (`info.toml` `0.1.0`) — powerful, not yet a polished “1.0 product” |
 | **Script timeout** | `15000` ms (`info.toml` `[script] timeout`) — long menu/place/wait tools need headroom |
+| **Security** | Localhost JSON, **no auth** → [SECURITY.md](./SECURITY.md) |
+| **Releasing** | Agent checklist → [RELEASE.md](./RELEASE.md) · history → [CHANGELOG.md](./CHANGELOG.md) |
 
-> **Safety:** the control socket is **localhost-only by design**. It can mutate
-> maps, clear content, and drive menus. Do not bind it to a public interface.
-> Treat it like a local debugger attached to your game.
+![Editor viewport capture via TakeScreenshot](docs/images/editor-demo.jpg)
+
+> **Safety:** the control socket is **localhost-only by design** and has **no auth**.
+> Do not bind it to a public interface. Details: [SECURITY.md](./SECURITY.md).
 
 ---
 
@@ -75,7 +78,7 @@ Pointer peeks, safe memory reads, gizmo/fuzz helpers, macroblock header dumps �
 for plugin authors and crash investigation, not required for normal map building.
 
 **Ground truth tool list:** `{"route":"tools"}` at runtime, or every
-`MakeTool("…")` in `src/McpTools.as` (**106 tools** at last count).
+`MakeTool("…")` in `src/McpTools.as` (**107 tools** at last count).
 
 ---
 
@@ -276,7 +279,7 @@ python3 tools/call.py EditNewMap '{"environment":"Stadium","decoration":"48x48Da
 
 ---
 
-## Current tools (106)
+## Current tools (107)
 
 Ground truth: every `MakeTool("…")` registration in `src/McpTools.as`.
 Prefer `{"route":"tools"}` at runtime if this list drifts.
@@ -289,6 +292,7 @@ Prefer `{"route":"tools"}` at runtime if this list drifts.
 | `OpenMapInEditor` | Open a local map file in the editor (`path`). |
 | `GetMapInfo` | Current editor map name and counts (+ bounds). |
 | `GetMapEnvironment` | Collection, decoration, map type/style, mood, collection-unit metadata. |
+| `ControlMapObjectives` | Get/set race objectives: `nbClones`, `nbLaps`, `isLapRace` (E++). |
 | `SaveMapAs` | Save under user Maps (`name`+`folder` or `fileName`; `overwrite`). |
 | `GetDialog` | Inspect `BasicDialogs` state / active frame. |
 | `RespondDialog` | Respond: `yes`, `no`, `cancel`, `ok`, `validate`, `hide`, … |
@@ -507,12 +511,12 @@ In-game Openplanet compile is the ground truth if LSP reports nested-enum / depe
 
 ---
 
-## Security model
+## Security
 
-- Default bind: **`127.0.0.1` only** (Openplanet setting; do not expose WAN).
-- No auth on the socket — **anyone on the machine** can call tools while the plugin is loaded.
-- Tools can **destroy map content**, drive menus, and inject ManiaScript.
-- DEV memory tools (`DevSafeRead`, etc.) are for local RE; leave them for trusted environments.
+**Localhost-only control socket with no authentication.** Anyone on the machine
+can mutate maps, drive menus, and call DEV tools while the plugin is loaded.
+Keep **Socket Host = `127.0.0.1`**. Full threat model and hardening:
+**[SECURITY.md](./SECURITY.md)**.
 
 ---
 

@@ -7,3 +7,4 @@ __pycache__/
 op-next-formatted.json
 *.log
 .DS_Store
+.hermes/
