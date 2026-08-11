@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for call.py wait helpers (no live game required)."""
-import json
 import sys
-import types
 from pathlib import Path
 from unittest import mock
 
@@ -85,6 +83,41 @@ def test_wait_until_ready_request_shape():
     assert captured["request"]["input"]["condition"] == "readiness"
     assert captured["request"]["input"]["want"] == "editor"
     assert call_mod.tool_result_output(resp)["ok"] is False
+
+
+def test_wait_timeout_zero_is_an_immediate_check():
+    captured = {}
+
+    def fake_send(host, port, timeout, request):
+        captured["request"] = request
+        return {"ok": True, "data": {"result": {"success": True, "output": {"ok": True}}}}
+
+    with mock.patch.object(call_mod, "send_request", side_effect=fake_send):
+        call_mod.wait_until_ready("127.0.0.1", 30006, 5.0, "editor", 0.0)
+    assert captured["request"]["input"]["timeoutMs"] == 0
+
+
+def test_wait_socket_timeout_respects_server_ceiling():
+    assert call_mod.wait_socket_timeout(5.0, 120_000) == 62.0
+    assert call_mod.wait_socket_timeout(5.0, -1) == 5.0
+
+
+def test_standalone_wait_prints_wait_response(capsys):
+    response = {"ok": True, "data": {"result": {"success": True, "output": {"ok": True}}}}
+    with (
+        mock.patch.object(call_mod, "send_request", return_value=response),
+        mock.patch.object(sys, "argv", ["call.py", "--skip-process-check", "--until-ready", "editor"]),
+    ):
+        assert call_mod.main() == 0
+    assert capsys.readouterr().out.strip() == '{"ok":true,"data":{"result":{"success":true,"output":{"ok":true}}}}'
+
+
+def test_wait_timeout_out_of_range_is_rejected(capsys):
+    with mock.patch.object(sys, "argv", ["call.py", "--wait-timeout", "61", "GetMode"]):
+        with pytest.raises(SystemExit) as exc_info:
+            call_mod.main()
+    assert exc_info.value.code == 2
+    assert "must be between 0 and 60" in capsys.readouterr().err
 
 
 if __name__ == "__main__":

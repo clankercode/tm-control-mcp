@@ -119,6 +119,7 @@ def attach_screenshot_path(response: object, screenshot_info: dict) -> None:
 
 CACHE_PATH = Path.home() / ".cache/tm-control-mcp/schemas.json"
 CACHE_TTL_SECONDS = 24 * 60 * 60
+MAX_WAIT_TIMEOUT_SECONDS = 60.0
 
 
 def send_request(host: str, port: int, timeout: float, request: dict) -> dict:
@@ -225,11 +226,20 @@ def tool_result_output(response: dict) -> dict | None:
     return output if isinstance(output, dict) else None
 
 
+def wait_socket_timeout(timeout: float, timeout_ms: object) -> float:
+    """Return a socket deadline matching WaitUntil's 0-60 second server budget."""
+    try:
+        budget_s = float(timeout_ms) / 1000.0
+    except (TypeError, ValueError):
+        return timeout
+    return max(timeout, min(MAX_WAIT_TIMEOUT_SECONDS, max(0.0, budget_s)) + 2.0)
+
+
 def wait_until_mode(host: str, port: int, timeout: float, mode: str, budget_s: float) -> dict:
     """Client-side wait via WaitUntil tool. Returns the tool response dict."""
-    timeout_ms = max(50, int(budget_s * 1000))
+    timeout_ms = int(budget_s * 1000)
     # Socket timeout must cover the full WaitUntil duration plus slack.
-    sock_timeout = max(timeout, budget_s + 2.0)
+    sock_timeout = wait_socket_timeout(timeout, timeout_ms)
     return send_request(
         host,
         port,
@@ -248,8 +258,8 @@ def wait_until_mode(host: str, port: int, timeout: float, mode: str, budget_s: f
 
 
 def wait_until_ready(host: str, port: int, timeout: float, want: str, budget_s: float) -> dict:
-    timeout_ms = max(50, int(budget_s * 1000))
-    sock_timeout = max(timeout, budget_s + 2.0)
+    timeout_ms = int(budget_s * 1000)
+    sock_timeout = wait_socket_timeout(timeout, timeout_ms)
     return send_request(
         host,
         port,
@@ -269,7 +279,7 @@ def wait_until_ready(host: str, port: int, timeout: float, want: str, budget_s: 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Call the TM Control MCP Openplanet plugin")
-    parser.add_argument("route_or_tool", help="Route name or tool name")
+    parser.add_argument("route_or_tool", nargs="?", help="Route name or tool name")
     parser.add_argument("input_json", nargs="?", default="{}")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=30006)
@@ -280,8 +290,13 @@ def main() -> int:
     parser.add_argument("--refresh-schemas", action="store_true", help="Force refetch of tool schemas (implies --strict)")
     parser.add_argument("--wait-mode", default="", help="Before the call, WaitUntil mode equals this (Editor|Menu|Race)")
     parser.add_argument("--until-ready", default="", help="Before the call, WaitUntil readiness want=editor|menu|any|race")
-    parser.add_argument("--wait-timeout", type=float, default=30.0, help="Budget seconds for --wait-mode / --until-ready (default 30)")
+    parser.add_argument("--wait-timeout", type=float, default=30.0, help="Budget seconds for --wait-mode / --until-ready, 0-60 (default 30)")
     args = parser.parse_args()
+
+    if not 0.0 <= args.wait_timeout <= MAX_WAIT_TIMEOUT_SECONDS:
+        parser.error("--wait-timeout must be between 0 and 60 seconds")
+    if args.route_or_tool is None and not (args.wait_mode or args.until_ready):
+        parser.error("route_or_tool is required unless --wait-mode or --until-ready is provided")
 
     try:
         input_data = json.loads(args.input_json)
@@ -301,6 +316,7 @@ def main() -> int:
             return 3
 
     # Pre-call waits (client-side convenience)
+    wait_resp: dict | None = None
     if args.wait_mode:
         try:
             wait_resp = wait_until_mode(args.host, args.port, args.timeout, args.wait_mode, args.wait_timeout)
@@ -341,6 +357,13 @@ def main() -> int:
             )
             return 13
 
+    if args.route_or_tool is None:
+        # A wait flag is useful on its own as a synchronization primitive.
+        # Return the final WaitUntil response in the usual compact JSON shape.
+        assert wait_resp is not None
+        print_json(wait_resp, args.pretty)
+        return 0
+
     if args.route_or_tool in {"status", "tools"}:
         request = {"route": args.route_or_tool}
     else:
@@ -380,10 +403,7 @@ def main() -> int:
     # Long-running tools need a bigger socket timeout
     call_timeout = args.timeout
     if args.route_or_tool == "WaitUntil" and isinstance(input_data, dict):
-        try:
-            call_timeout = max(call_timeout, float(input_data.get("timeoutMs", 0)) / 1000.0 + 2.0)
-        except (TypeError, ValueError):
-            pass
+        call_timeout = wait_socket_timeout(call_timeout, input_data.get("timeoutMs", 0))
     if args.route_or_tool == "RunManialinkScript" and isinstance(input_data, dict):
         try:
             extra = float(input_data.get("waitMs", 0)) + float(input_data.get("collectMs", 0))
