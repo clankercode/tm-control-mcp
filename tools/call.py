@@ -212,6 +212,61 @@ def validate_input(tool: str, data: object, schema: dict) -> str:
     return ""
 
 
+def tool_result_output(response: dict) -> dict | None:
+    data = response.get("data")
+    if not isinstance(data, dict):
+        return None
+    result = data.get("result")
+    if not isinstance(result, dict):
+        return None
+    if not result.get("success", False):
+        return None
+    output = result.get("output")
+    return output if isinstance(output, dict) else None
+
+
+def wait_until_mode(host: str, port: int, timeout: float, mode: str, budget_s: float) -> dict:
+    """Client-side wait via WaitUntil tool. Returns the tool response dict."""
+    timeout_ms = max(50, int(budget_s * 1000))
+    # Socket timeout must cover the full WaitUntil duration plus slack.
+    sock_timeout = max(timeout, budget_s + 2.0)
+    return send_request(
+        host,
+        port,
+        sock_timeout,
+        {
+            "route": "call",
+            "tool": "WaitUntil",
+            "input": {
+                "condition": "mode",
+                "equals": mode,
+                "timeoutMs": timeout_ms,
+                "pollMs": 100,
+            },
+        },
+    )
+
+
+def wait_until_ready(host: str, port: int, timeout: float, want: str, budget_s: float) -> dict:
+    timeout_ms = max(50, int(budget_s * 1000))
+    sock_timeout = max(timeout, budget_s + 2.0)
+    return send_request(
+        host,
+        port,
+        sock_timeout,
+        {
+            "route": "call",
+            "tool": "WaitUntil",
+            "input": {
+                "condition": "readiness",
+                "want": want,
+                "timeoutMs": timeout_ms,
+                "pollMs": 100,
+            },
+        },
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Call the TM Control MCP Openplanet plugin")
     parser.add_argument("route_or_tool", help="Route name or tool name")
@@ -223,6 +278,9 @@ def main() -> int:
     parser.add_argument("--skip-process-check", action="store_true", help="Do not check for Trackmania.exe before connecting")
     parser.add_argument("--strict", action="store_true", help="Validate input against fetched tool schemas before sending")
     parser.add_argument("--refresh-schemas", action="store_true", help="Force refetch of tool schemas (implies --strict)")
+    parser.add_argument("--wait-mode", default="", help="Before the call, WaitUntil mode equals this (Editor|Menu|Race)")
+    parser.add_argument("--until-ready", default="", help="Before the call, WaitUntil readiness want=editor|menu|any|race")
+    parser.add_argument("--wait-timeout", type=float, default=30.0, help="Budget seconds for --wait-mode / --until-ready (default 30)")
     args = parser.parse_args()
 
     try:
@@ -241,6 +299,47 @@ def main() -> int:
                 hint="Start Trackmania/Openplanet before calling the MCP socket, or pass --skip-process-check for raw socket debugging.",
             )
             return 3
+
+    # Pre-call waits (client-side convenience)
+    if args.wait_mode:
+        try:
+            wait_resp = wait_until_mode(args.host, args.port, args.timeout, args.wait_mode, args.wait_timeout)
+        except (ConnectionRefusedError, TimeoutError, socket.timeout, OSError, json.JSONDecodeError) as exc:
+            print_json_error(
+                f"wait-mode failed contacting {args.host}:{args.port}: {exc}",
+                args.pretty,
+                trackmaniaPids=pids,
+            )
+            return 10
+        out = tool_result_output(wait_resp) if isinstance(wait_resp, dict) else None
+        if out is None or not out.get("ok", False):
+            print_json_error(
+                f"wait-mode {args.wait_mode!r} did not become ready within {args.wait_timeout}s",
+                args.pretty,
+                trackmaniaPids=pids,
+                wait=wait_resp,
+            )
+            return 11
+
+    if args.until_ready:
+        try:
+            wait_resp = wait_until_ready(args.host, args.port, args.timeout, args.until_ready, args.wait_timeout)
+        except (ConnectionRefusedError, TimeoutError, socket.timeout, OSError, json.JSONDecodeError) as exc:
+            print_json_error(
+                f"until-ready failed contacting {args.host}:{args.port}: {exc}",
+                args.pretty,
+                trackmaniaPids=pids,
+            )
+            return 12
+        out = tool_result_output(wait_resp) if isinstance(wait_resp, dict) else None
+        if out is None or not out.get("ok", False):
+            print_json_error(
+                f"until-ready want={args.until_ready!r} not ready within {args.wait_timeout}s",
+                args.pretty,
+                trackmaniaPids=pids,
+                wait=wait_resp,
+            )
+            return 13
 
     if args.route_or_tool in {"status", "tools"}:
         request = {"route": args.route_or_tool}
@@ -278,9 +377,23 @@ def main() -> int:
     if args.route_or_tool == "TakeScreenshot":
         screenshot_before = screenshot_candidates(screenshot_ext)
 
+    # Long-running tools need a bigger socket timeout
+    call_timeout = args.timeout
+    if args.route_or_tool == "WaitUntil" and isinstance(input_data, dict):
+        try:
+            call_timeout = max(call_timeout, float(input_data.get("timeoutMs", 0)) / 1000.0 + 2.0)
+        except (TypeError, ValueError):
+            pass
+    if args.route_or_tool == "RunManialinkScript" and isinstance(input_data, dict):
+        try:
+            extra = float(input_data.get("waitMs", 0)) + float(input_data.get("collectMs", 0))
+            call_timeout = max(call_timeout, extra / 1000.0 + 2.0)
+        except (TypeError, ValueError):
+            pass
+
     try:
-        with socket.create_connection((args.host, args.port), timeout=args.timeout) as sock:
-            sock.settimeout(args.timeout)
+        with socket.create_connection((args.host, args.port), timeout=call_timeout) as sock:
+            sock.settimeout(call_timeout)
             request_bytes = (json.dumps(request, separators=(",", ":")) + "\n").encode()
             sock.sendall(request_bytes)
             sock.shutdown(socket.SHUT_WR)
@@ -324,6 +437,22 @@ def main() -> int:
 
     if screenshot_before is not None:
         attach_screenshot_path(response, find_new_screenshot(screenshot_before, screenshot_ext, args.timeout))
+
+    # Surface structured tool errors on stderr lightly when present
+    if isinstance(response, dict):
+        data = response.get("data")
+        if isinstance(data, dict):
+            result = data.get("result")
+            if isinstance(result, dict) and result.get("success") is False:
+                code = result.get("code")
+                hint = result.get("hint")
+                if code or hint:
+                    bits = []
+                    if code:
+                        bits.append(f"code={code}")
+                    if hint:
+                        bits.append(f"hint={hint}")
+                    print("[tm-control-mcp] " + " ".join(bits), file=sys.stderr)
 
     print_json(response, args.pretty)
     return 0

@@ -24,9 +24,23 @@ namespace TmMcp {
     }
 
     Json::Value@ MakeError(const string &in err) {
+        return MakeError(err, "", false, "", "");
+    }
+
+    Json::Value@ MakeError(
+        const string &in err,
+        const string &in code,
+        bool retryable = false,
+        const string &in requiredMode = "",
+        const string &in hint = ""
+    ) {
         Json::Value result = Json::Object();
         result["success"] = false;
         result["error"] = err;
+        if (code.Length > 0) result["code"] = code;
+        if (retryable) result["retryable"] = true;
+        if (requiredMode.Length > 0) result["requiredMode"] = requiredMode;
+        if (hint.Length > 0) result["hint"] = hint;
         return result;
     }
 
@@ -762,7 +776,21 @@ namespace TmMcp {
             || name == "SetMenuControlVisible"
             || name == "TriggerControlOnAction"
             || name == "CreateMapViaMenu"
-            || name == "RunManialinkScript";
+            || name == "RunManialinkScript"
+            || name == "GetReadiness"
+            || name == "WaitUntil"
+            || name == "SetAgentTag"
+            || name == "ListTagged"
+            || name == "RemoveByTag"
+            || name == "ClearTagIndex"
+            || name == "ControlEditMode"
+            || name == "SelectItemModel"
+            || name == "SelectMacroblockModel"
+            || name == "ControlInventory"
+            || name == "SaveNamedMacroblock"
+            || name == "LoadNamedMacroblock"
+            || name == "ListSavedNamedMacroblocks"
+            || name == "AssertPlacement";
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
@@ -850,6 +878,20 @@ namespace TmMcp {
         if (name == "TriggerControlOnAction") return TriggerControlOnAction(input);
         if (name == "CreateMapViaMenu") return CreateMapViaMenu(input);
         if (name == "RunManialinkScript") return RunManialinkScript(input);
+        if (name == "GetReadiness") return GetReadiness(input);
+        if (name == "WaitUntil") return WaitUntil(input);
+        if (name == "SetAgentTag") return SetAgentTag(input);
+        if (name == "ListTagged") return ListTagged(input);
+        if (name == "RemoveByTag") return RemoveByTag(input);
+        if (name == "ClearTagIndex") return ClearTagIndex(input);
+        if (name == "ControlEditMode") return ControlEditMode(input);
+        if (name == "SelectItemModel") return SelectItemModel(input);
+        if (name == "SelectMacroblockModel") return SelectMacroblockModel(input);
+        if (name == "ControlInventory") return ControlInventory(input);
+        if (name == "SaveNamedMacroblock") return SaveNamedMacroblock(input);
+        if (name == "LoadNamedMacroblock") return LoadNamedMacroblock(input);
+        if (name == "ListSavedNamedMacroblocks") return ListSavedNamedMacroblocks(input);
+        if (name == "AssertPlacement") return AssertPlacement(input);
         return null;
     }
 
@@ -938,7 +980,22 @@ namespace TmMcp {
         tools.Add(MakeTool("SetMenuControlVisible", "Call Show()/Hide() on a menu control. Resolve either by {controlId} (global search) or {indexPath, layerIndex|layerName} (direct walk from MainFrame). visible=true calls Show; false calls Hide. Menu may re-render and reset visibility on the next tick — re-observe after to confirm. Works from Angelscript (unlike TriggerPageAction).", '{"type":"object","properties":{"controlId":{"type":"string"},"indexPath":{"type":"string"},"layerIndex":{"type":"integer"},"layerName":{"type":"string"},"visible":{"type":"boolean"}},"required":["visible"],"additionalProperties":false}'));
         tools.Add(MakeTool("TriggerControlOnAction", "Click a menu control by invoking its underlying CControlBase.OnAction() — the same dispatch the game uses when a button is activated. Resolve via {controlId} (global search) or {indexPath, layerIndex|layerName}. For Nadeo expendable-button nav-items (e.g. button-create on Page_HomePage) the click target is the leaf nav-zone at Controls[0]/[4]/[0]; pass that indexPath explicitly. Safe from Angelscript (OnAction is on CControlBase, not the script-handler). Set recursive=true to fire OnAction on every descendant (DFS) — useful when a single nav-zone click does not advance the state machine; tune with maxDepth (default 10), maxFires (default 128), onlyVisible (default true).", '{"type":"object","properties":{"controlId":{"type":"string"},"indexPath":{"type":"string"},"layerIndex":{"type":"integer"},"layerName":{"type":"string"},"recursive":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxFires":{"type":"integer"},"onlyVisible":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("CreateMapViaMenu", "Single-call tool: navigate Page_MapEditorSettings and launch the editor for a chosen map type, environment, mood, input device, and difficulty. Drives the full 7-step click-chain (SetMenuPage + 6 OnAction clicks), polling for each intermediate frame transition. Returns {ok, finalMode, elapsedMs, steps} on success or {ok:false, failedAt, expectedFrame, lastObserved, elapsedMs, steps} on failure. Requires QuickStart disabled (MapEditorUseQuickstart off). Click-chain verified 2026-04-20.", '{"type":"object","properties":{"mapType":{"type":"string","description":"race | royal | stunt | platform"},"environment":{"type":"string","description":"Stadium | RedIsland | GreenCoast | BlueBay | WhiteShore"},"mood":{"type":"string","description":"Sunrise | Day | Sunset | Night"},"inputDevice":{"type":"string","description":"mouse | gamepad"},"difficulty":{"type":"string","description":"simple | advanced"},"timeoutMs":{"type":"integer","description":"Final poll timeout waiting for Editor mode (default 10000ms)"}},"required":["mapType","environment","mood","inputDevice","difficulty","timeoutMs"],"additionalProperties":false}'));
-        tools.Add(MakeTool("RunManialinkScript", "Inject ad-hoc ManiaScript via MLHook into a UI layer (same three contexts as MLHook's UILayers browser). script: raw ManiaScript or inner manialink fragment — do NOT wrap with outer <manialink> tags (MLHook adds MLHook_<pageUid>). context: current (default, auto from GetMode-like detection) | menu | in-map | in-editor. Optional pageUid (default McpAdHoc), replace (default true), persist (default true; false blanks the layer after waitMs), waitMs (default 150, max 10000) to yield while inject queue runs. Fire-and-forget — no return channel unless the script emits events. Manialink pages are sandboxed from each other; useful for TitleControl calls, reading local game objects, limited UI influence. Bad scripts can force game recovery restart.", '{"type":"object","properties":{"script":{"type":"string"},"context":{"type":"string","description":"current | menu | in-map | in-editor"},"pageUid":{"type":"string"},"replace":{"type":"boolean"},"persist":{"type":"boolean"},"waitMs":{"type":"integer"}},"required":["script"],"additionalProperties":false}'));
+        tools.Add(MakeTool("RunManialinkScript", "Inject ad-hoc ManiaScript via MLHook (menu/in-map/in-editor). script without outer <manialink>. Optional collectMs>0 registers a result hook: script should SendCustomEvent(\"MLHook_Event_McpAdHoc_Result\", [payload...]) (or resultEvent). Also pageUid/replace/persist/waitMs.", '{"type":"object","properties":{"script":{"type":"string"},"context":{"type":"string"},"pageUid":{"type":"string"},"replace":{"type":"boolean"},"persist":{"type":"boolean"},"waitMs":{"type":"integer"},"collectMs":{"type":"integer"},"resultEvent":{"type":"string"}},"required":["script"],"additionalProperties":false}'));
+
+        tools.Add(MakeTool("GetReadiness", "Composite preflight: mode/dialog/editor-ready/inventory/map checks. want=editor|menu|any|race.", '{"type":"object","properties":{"want":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("WaitUntil", "Poll until condition is true. condition=mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness. Returns ok/timedOut (not a hard error on timeout).", '{"type":"object","properties":{"condition":{"type":"string"},"equals":{"type":"string"},"page":{"type":"string"},"op":{"type":"string"},"count":{"type":"integer"},"want":{"type":"string"},"timeoutMs":{"type":"integer"},"pollMs":{"type":"integer"}},"required":["condition"],"additionalProperties":false}'));
+        tools.Add(MakeTool("SetAgentTag", "Set default provenance tag for subsequent Place* calls. Empty tag clears.", '{"type":"object","properties":{"tag":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("ListTagged", "List tracked tagged placements. tag filter; prefix=true or tag ending with ':' for prefix match.", '{"type":"object","properties":{"tag":{"type":"string"},"prefix":{"type":"boolean"},"limit":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("RemoveByTag", "Delete live map objects matching tracked tag (re-resolve by pos+idName). Prefer over ClearMapContent for agent cleanup.", '{"type":"object","properties":{"tag":{"type":"string"},"prefix":{"type":"boolean"},"addUndo":{"type":"boolean"},"eps":{"type":"number"},"dryRun":{"type":"boolean"}},"required":["tag"],"additionalProperties":false}'));
+        tools.Add(MakeTool("ClearTagIndex", "Drop provenance sidecar entries only (does not mutate map). all=true clears everything.", '{"type":"object","properties":{"tag":{"type":"string"},"prefix":{"type":"boolean"},"all":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("ControlEditMode", "Inspect/set editor EditMode and PlaceMode. actions: status, set, setEdit, setPlace. Optional blockName/itemPath/macroblock select after set.", '{"type":"object","properties":{"action":{"type":"string"},"editMode":{"type":"string"},"placeMode":{"type":"string"},"blockName":{"type":"string"},"itemPath":{"type":"string"},"macroblock":{"type":"string"},"macroblockName":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("SelectItemModel", "Select item model in editor picker (inventory SelectArticle when found).", '{"type":"object","properties":{"itemPath":{"type":"string"},"path":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("SelectMacroblockModel", "Select macroblock model in editor picker when inventory article is found.", '{"type":"object","properties":{"name":{"type":"string"},"macroblock":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("ControlInventory", "Inventory picker control. actions: status, select, openFolder. type=block|item|macroblock. Path-place remains preferred for headless placement.", '{"type":"object","properties":{"action":{"type":"string"},"type":{"type":"string"},"root":{"type":"string"},"path":{"type":"string"},"query":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("SaveNamedMacroblock", "Persist an in-memory named macroblock to Openplanet data folder as JSON.", '{"type":"object","properties":{"name":{"type":"string"},"fileName":{"type":"string"}},"required":["name"],"additionalProperties":false}'));
+        tools.Add(MakeTool("LoadNamedMacroblock", "Load a saved named-macroblock JSON into memory (resolves models; requires editor).", '{"type":"object","properties":{"name":{"type":"string"},"fileName":{"type":"string"},"replace":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("ListSavedNamedMacroblocks", "List durable named-macroblock JSON files under the plugin data folder.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("AssertPlacement", "Verify recent placement: expectItemsDelta/expectBlocksDelta, near{x,y,z,radius}+itemPath/blockName, tag/tagMinCount.", '{"type":"object","properties":{"expectItemsDelta":{"type":"integer"},"expectBlocksDelta":{"type":"integer"},"near":{"type":"object"},"itemPath":{"type":"string"},"blockName":{"type":"string"},"mapPre":{"type":"object"},"tag":{"type":"string"},"tagMinCount":{"type":"integer"}},"additionalProperties":false}'));
         return tools;
     }
 
@@ -974,7 +1031,7 @@ namespace TmMcp {
 
     Json::Value@ BackToMainMenu(Json::Value &in input) {
         auto app = cast<CGameManiaPlanet>(GetApp());
-        if (app is null) return MakeError("app not available");
+        if (app is null) return MakeError("app not available", "UNKNOWN", true);
         uint readyWaitedMs = 0;
         bool editorWasReady = true;
         auto editor = cast<CGameCtnEditorFree>(app.Editor);
@@ -1035,7 +1092,7 @@ namespace TmMcp {
         bool allowPlaygroundLaunch = input.HasKey("allowPlaygroundLaunch")
             ? bool(input["allowPlaygroundLaunch"]) : false;
         auto app = cast<CGameManiaPlanet>(GetApp());
-        if (app is null) return MakeError("app not available");
+        if (app is null) return MakeError("app not available", "UNKNOWN", true);
         if (app.Switcher.ModuleStack.Length == 0) {
             return MakeError("not in menu; Switcher.ModuleStack is empty");
         }
@@ -1190,14 +1247,14 @@ namespace TmMcp {
 
     Json::Value@ GetMapInfo(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available");
+        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         return MakeSuccess(MapSummary(editor));
     }
 
     Json::Value@ SaveMapAs(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.PluginMapType is null || editor.Challenge is null) {
-            return MakeError("editor not available");
+            return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         }
 
         string fileName = NormalizeMapSaveFileName(input);
@@ -1271,7 +1328,7 @@ namespace TmMcp {
     Json::Value@ ControlValidation(Json::Value &in input) {
         auto editor = GetEditor();
         auto pmt = editor is null ? null : cast<CGameEditorPluginMapMapType>(editor.PluginMapType);
-        if (pmt is null) return MakeError("editor map type plugin not available");
+        if (pmt is null) return MakeError("editor map type plugin not available", "NOT_IN_EDITOR", true, "Editor");
 
         string action = input.HasKey("action") ? string(input["action"]) : "status";
         Json::Value before = ValidationToJson(pmt);
@@ -1318,7 +1375,7 @@ namespace TmMcp {
     Json::Value@ ControlSelection(Json::Value &in input) {
         auto editor = GetEditor();
         auto pmt = editor is null ? null : cast<CGameEditorPluginMapMapType>(editor.PluginMapType);
-        if (pmt is null) return MakeError("editor map type plugin not available");
+        if (pmt is null) return MakeError("editor map type plugin not available", "NOT_IN_EDITOR", true, "Editor");
 
         string action = input.HasKey("action") ? string(input["action"]) : "status";
         uint limit = input.HasKey("limit") ? uint(Math::Max(0, int(input["limit"]))) : 20;
@@ -1480,13 +1537,13 @@ namespace TmMcp {
 
     Json::Value@ GetEditorCamera(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         return MakeSuccess(CameraToJson(editor));
     }
 
     Json::Value@ SetEditorCamera(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         bool hasTarget = input.HasKey("x") && input.HasKey("y") && input.HasKey("z");
         bool hasDistance = input.HasKey("distance");
         bool hasH = input.HasKey("hAngle") || input.HasKey("hAngleRad");
@@ -1616,7 +1673,7 @@ namespace TmMcp {
 
     Json::Value@ FocusCamera(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         if (!input.HasKey("x") || !input.HasKey("y") || !input.HasKey("z")) return MakeError("missing x, y, z");
         vec3 target = PositionInput(input);
         float distance = input.HasKey("distance") ? float(input["distance"]) : 60.0;
@@ -1664,7 +1721,7 @@ namespace TmMcp {
 
     Json::Value@ GetBlocks(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available");
+        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         bool hasCenter = input.HasKey("x") && input.HasKey("y") && input.HasKey("z");
         bool world = input.HasKey("world") ? bool(input["world"]) : false;
         float radius = input.HasKey("radius") ? float(input["radius"]) : (world ? 50.0 : 10.0);
@@ -1721,7 +1778,7 @@ namespace TmMcp {
 
     Json::Value@ GetRecentBlocks(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available");
+        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         int count = input.HasKey("count") ? int(input["count"]) : 10;
         if (count < 1) count = 1;
         if (count > 100) count = 100;
@@ -1745,7 +1802,7 @@ namespace TmMcp {
 
     Json::Value@ GetBlockAt(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         if (!input.HasKey("x") || !input.HasKey("y") || !input.HasKey("z")) return MakeError("missing x, y, z");
         auto coord = int3(int(input["x"]), int(input["y"]), int(input["z"]));
         auto block = editor.PluginMapType.GetBlock(coord);
@@ -1757,7 +1814,7 @@ namespace TmMcp {
 
     Json::Value@ GetItems(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available");
+        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         bool hasCenter = input.HasKey("x") && input.HasKey("y") && input.HasKey("z");
         vec3 center = hasCenter ? PositionInput(input) : vec3();
         float radius = input.HasKey("radius") ? float(input["radius"]) : 50.0;
@@ -1791,7 +1848,7 @@ namespace TmMcp {
 
     Json::Value@ GetRecentItems(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available");
+        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         int count = input.HasKey("count") ? int(input["count"]) : 10;
         if (count < 1) count = 1;
         if (count > 100) count = 100;
@@ -1815,7 +1872,7 @@ namespace TmMcp {
 
     Json::Value@ FindBlockModels(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         string query = input.HasKey("query") ? string(input["query"]).ToLower() : "";
         int limit = input.HasKey("limit") ? int(input["limit"]) : 25;
         if (limit < 1) limit = 1;
@@ -1846,13 +1903,13 @@ namespace TmMcp {
 
     Json::Value@ GetInventorySummary(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         return MakeSuccess(InventorySummary(editor.PluginMapType));
     }
 
     Json::Value@ FindInventory(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         string query = input.HasKey("query") ? string(input["query"]).ToLower() : "";
         string requestedType = input.HasKey("type") ? string(input["type"]).ToLower() : "all";
         int limit = input.HasKey("limit") ? int(input["limit"]) : 25;
@@ -1904,7 +1961,7 @@ namespace TmMcp {
 
     Json::Value@ RefreshInventory(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         uint preCount = Editor::GetInventoryNbItems();
         Editor::RefreshInventoryCache();
         Json::Value output = Json::Object();
@@ -2011,7 +2068,7 @@ namespace TmMcp {
 
     Json::Value@ AddBlockToNamedMacroblock(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         if (!input.HasKey("name") || !input.HasKey("blockName") || !input.HasKey("x") || !input.HasKey("y") || !input.HasKey("z")) {
             return MakeError("missing name, blockName, x, y, z");
         }
@@ -2100,7 +2157,7 @@ namespace TmMcp {
 
     Json::Value@ AddItemToNamedMacroblock(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         if (!input.HasKey("name") || !input.HasKey("itemPath") || !input.HasKey("x") || !input.HasKey("y") || !input.HasKey("z")) {
             return MakeError("missing name, itemPath, x, y, z");
         }
@@ -2183,7 +2240,7 @@ namespace TmMcp {
 
     Json::Value@ PlaceNamedMacroblock(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         if (!input.HasKey("name")) return MakeError("missing name");
         string name = string(input["name"]);
         auto mb = GetNamedMacroblock(name);
@@ -2269,7 +2326,7 @@ namespace TmMcp {
 
     Json::Value@ PlaceBlock(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         if (!input.HasKey("blockName") || !input.HasKey("x") || !input.HasKey("y") || !input.HasKey("z")) {
             return MakeError("missing blockName, x, y, z");
         }
@@ -2322,7 +2379,7 @@ namespace TmMcp {
 
     Json::Value@ CanPlaceBlock(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         if (!input.HasKey("blockName") || !input.HasKey("x") || !input.HasKey("y") || !input.HasKey("z")) {
             return MakeError("missing blockName, x, y, z");
         }
@@ -2364,7 +2421,7 @@ namespace TmMcp {
 
     Json::Value@ PlaceBlockViaEditorPlusPlus(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         if (!input.HasKey("blockName") || !input.HasKey("x") || !input.HasKey("y") || !input.HasKey("z")) {
             return MakeError("missing blockName, x, y, z");
         }
@@ -2455,12 +2512,16 @@ namespace TmMcp {
             output["autofocusTarget"] = Vec3ToJson(focusPos);
             output["autofocusDistance"] = autofocusDistance;
         }
+        RememberMapDelta("PlaceBlockViaEditorPlusPlus", mapPre, output["mapPost"]);
+        RecordTaggedPlacementsFromPlaceBlock(input, output, blockName);
+        string _tagB = ResolvePlacementTag(input);
+        if (_tagB.Length > 0) output["agentTag"] = _tagB;
         return MakeSuccess(output);
     }
 
     Json::Value@ PlaceItemViaEditorPlusPlus(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         if (!input.HasKey("itemPath") || !input.HasKey("x") || !input.HasKey("y") || !input.HasKey("z")) {
             return MakeError("missing itemPath, x, y, z");
         }
@@ -2545,12 +2606,16 @@ namespace TmMcp {
             output["autofocusTarget"] = Vec3ToJson(focusPos);
             output["autofocusDistance"] = autofocusDistance;
         }
+        RememberMapDelta("PlaceItemViaEditorPlusPlus", mapPre, output["mapPost"]);
+        RecordTaggedPlacementsFromPlaceItem(input, output, itemPath);
+        string _tag = ResolvePlacementTag(input);
+        if (_tag.Length > 0) output["agentTag"] = _tag;
         return MakeSuccess(output);
     }
 
     Json::Value@ RemoveBlock(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         if (!input.HasKey("x") || !input.HasKey("y") || !input.HasKey("z")) return MakeError("missing x, y, z");
         auto coord = int3(int(input["x"]), int(input["y"]), int(input["z"]));
         bool removed = editor.PluginMapType.RemoveBlock(coord);
@@ -2563,7 +2628,7 @@ namespace TmMcp {
 
     Json::Value@ ClearBlocks(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null || editor.PluginMapType is null) return MakeError("editor not available");
+        if (editor is null || editor.Challenge is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         bool autosave = input.HasKey("autosave") ? bool(input["autosave"]) : true;
 
         Json::Value mapPre = MapSummary(editor);
@@ -2586,7 +2651,7 @@ namespace TmMcp {
 
     Json::Value@ ClearItems(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null || editor.PluginMapType is null) return MakeError("editor not available");
+        if (editor is null || editor.Challenge is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         bool autosave = input.HasKey("autosave") ? bool(input["autosave"]) : true;
 
         Json::Value mapPre = MapSummary(editor);
@@ -2609,7 +2674,7 @@ namespace TmMcp {
 
     Json::Value@ ClearMapContent(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null || editor.PluginMapType is null) return MakeError("editor not available");
+        if (editor is null || editor.Challenge is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         bool autosave = input.HasKey("autosave") ? bool(input["autosave"]) : true;
         bool includeTerrain = input.HasKey("includeTerrain") ? bool(input["includeTerrain"]) : false;
 
@@ -2648,7 +2713,7 @@ namespace TmMcp {
 
     Json::Value@ RemoveRecentBlocks(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available");
+        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
 
         int count = input.HasKey("count") ? int(input["count"]) : 1;
         if (count < 1) count = 1;
@@ -2708,7 +2773,7 @@ namespace TmMcp {
 
     Json::Value@ RemoveRecentItems(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available");
+        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
 
         int count = input.HasKey("count") ? int(input["count"]) : 1;
         if (count < 1) count = 1;
@@ -2796,7 +2861,7 @@ namespace TmMcp {
 
     Json::Value@ RemoveBlocksByIndex(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available");
+        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
 
         array<int> indices;
         string err;
@@ -2853,7 +2918,7 @@ namespace TmMcp {
 
     Json::Value@ RemoveItemsByIndex(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available");
+        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
 
         array<int> indices;
         string err;
@@ -2914,7 +2979,7 @@ namespace TmMcp {
 
     Json::Value@ SelectBlockModel(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         if (!input.HasKey("blockName")) return MakeError("missing blockName");
         string blockName = string(input["blockName"]);
         bool isTerrain = false;
@@ -2948,7 +3013,7 @@ namespace TmMcp {
 
     Json::Value@ Undo(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         Json::Value output = Json::Object();
         output["undone"] = editor.PluginMapType.Undo();
         return MakeSuccess(output);
@@ -2956,7 +3021,7 @@ namespace TmMcp {
 
     Json::Value@ Redo(Json::Value &in input) {
         auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available");
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
         Json::Value output = Json::Object();
         output["redone"] = editor.PluginMapType.Redo();
         return MakeSuccess(output);

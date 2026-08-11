@@ -277,6 +277,23 @@ python3 tools/call.py CreateMapViaMenu '{"mapType":"race","environment":"Stadium
 python3 tools/call.py RunManialinkScript '{"script":"main() {}","context":"current"}'
 ```
 
+
+## Tier A agent ergonomics (2026-08-12)
+
+| Tool | Role |
+|------|------|
+| `GetReadiness` | Composite preflight (`want=editor\|menu\|any\|race`) |
+| `WaitUntil` | Poll mode/dialog/editorReady/pageVisible/map counts/readiness (`timedOut` on budget) |
+| `SetAgentTag` / `ListTagged` / `RemoveByTag` / `ClearTagIndex` | Provenance tags + safe cleanup |
+| `ControlEditMode` | Set EditMode/PlaceMode; optional model select |
+| `SelectItemModel` / `SelectMacroblockModel` | Picker helpers |
+| `ControlInventory` | `status` / `select` / `openFolder` via inventory API |
+| `SaveNamedMacroblock` / `LoadNamedMacroblock` / `ListSavedNamedMacroblocks` | Durable named-MB JSON |
+| `AssertPlacement` | Verify deltas / near / tags after place |
+| `RunManialinkScript` | + `collectMs` / `resultEvent` result channel |
+
+`tools/call.py`: `--wait-mode`, `--until-ready`, `--wait-timeout`.
+
 ## Behavioral notes
 
 ### Placement and map metadata

@@ -171,16 +171,16 @@ namespace TmMcp {
             + "Parameters:\n"
             + "- script (required): raw ManiaScript body or inner fragment. Do NOT include"
             + "  outer <manialink> tags — MLHook wraps as name=MLHook_<pageUid>.\n"
-            + "- context: current (default) | menu | in-map | in-editor. current uses"
-            + "  Editor > playground > menu detection.\n"
+            + "- context: current (default) | menu | in-map | in-editor.\n"
             + "- pageUid default McpAdHoc; replace default true; persist default true;"
-            + "  waitMs default 150 (yield while inject queue runs).\n"
+            + "  waitMs default 150.\n"
+            + "- collectMs (optional): when >0, registers a result hook for resultEvent"
+            + "  (default McpAdHoc_Result). From script:\n"
+            + "    SendCustomEvent(\"MLHook_Event_McpAdHoc_Result\", [\"ping\", \"data\"]);\n"
+            + "  Response includes results[] with type/data/dataParts (capped).\n"
             + "\n"
             + "Notes:\n"
-            + "- Fire-and-forget: no result channel unless your script emits events a"
-            + "  hook observes.\n"
-            + "- Manialink pages are sandboxed from each other; influence on other UI is"
-            + "  limited.\n"
+            + "- Manialink pages are sandboxed from each other.\n"
             + "- Bad syntax can trigger the game recovery restart — keep scripts small.\n"
             + "- Prefer this over inventing one-off MCP tools when agents need custom"
             + "  TitleControl / local-state access.");
@@ -222,15 +222,35 @@ namespace TmMcp {
             + " and works even when pmt.Items / AnchorData are empty (no MLHook needed)."
             + " Prefer forceBufferFallback=false (default).\n"
             + "\n"
-            + "forceBufferFallback=true is cleanup-only: AnchoredObjects.RemoveRange*"
-            + " (undoSupported=false, can desync the editor change counter, UAF risk if used"
-            + " while scene holds the nod — never for gizmo). RemoveRecentBlocks has no"
-            + " buffer fallback and uses DeleteFreeblocks / DeleteBlocks.\n"
+            + "Agent-friendly cleanup (preferred for smoke/fuzz):\n"
+            + "1. SetAgentTag {tag:'run:smoke-1'} before placing\n"
+            + "2. PlaceItemViaEditorPlusPlus / PlaceBlockViaEditorPlusPlus (auto-tags)\n"
+            + "3. RemoveByTag {tag:'run:smoke-1'} — re-resolves by pos+idName, DeleteItems/DeleteBlocks\n"
+            + "4. ClearTagIndex only drops the sidecar, not the map.\n"
             + "\n"
-            + "After forceBufferFallback cleanup, save-reload is the cheapest full reset."
-            + " Smoke: PlaceItemViaEditorPlusPlus ObstaclePillar2m then"
-            + " RemoveRecentItems {count:1, forceBufferFallback:false} → deleted=true,"
-            + " method=DeleteItems.");
+            + "forceBufferFallback=true is cleanup-only: AnchoredObjects.RemoveRange*"
+            + " (undoSupported=false). After forceBufferFallback cleanup, save-reload is cheapest.");
+
+        _RegisterGuide("readiness",
+            "GetReadiness + WaitUntil",
+            "GetReadiness {want:editor|menu|any|race} returns ready + checks"
+            + " (modeOk, dialogClear, editorReadyForRequest, inventoryReady, hasChallenge)"
+            + " and blockingReasons. Prefer this before mutating.\n"
+            + "\n"
+            + "WaitUntil {condition, timeoutMs, pollMs, ...} polls in-plugin.\n"
+            + "conditions: mode (+equals), dialogClear, editorReady, pageVisible (+page),"
+            + " mapItems/mapBlocks (+op eq|gte|lte, count), readiness (+want).\n"
+            + "Timeout returns success with timedOut=true/ok=false (not a hard tool error).\n"
+            + "\n"
+            + "call.py: --wait-mode Editor --until-ready editor --wait-timeout 30");
+
+        _RegisterGuide("agent-cleanup",
+            "Provenance tags for safe multi-step cleanup",
+            "SetAgentTag sets the default tag applied to PlaceBlock/PlaceItem E++ tools"
+            + " (also accept per-call input.tag). ListTagged / RemoveByTag / ClearTagIndex.\n"
+            + "Matching uses idName + world position ±eps (default 0.08m), not stale indices.\n"
+            + "Tags are in-memory until plugin reload; they do not survive game restart.");
+
     }
 
     Json::Value@ ListGuides(Json::Value &in input) {
