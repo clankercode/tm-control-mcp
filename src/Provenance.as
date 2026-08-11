@@ -115,61 +115,84 @@ namespace TmMcp {
         return dx * dx + dy * dy + dz * dz;
     }
 
-    int FindLiveItemIndex(CGameCtnEditorFree@ editor, const string &in idName, float x, float y, float z, float eps) {
-        if (editor is null || editor.Challenge is null) return -1;
-        float eps2 = eps * eps;
+    bool LiveItemMatches(CGameCtnEditorFree@ editor, int index, const string &in idName, float x, float y, float z, float eps) {
+        if (editor is null || editor.Challenge is null || index < 0 || uint(index) >= editor.Challenge.AnchoredObjects.Length) return false;
+        auto item = editor.Challenge.AnchoredObjects[uint(index)];
+        if (item is null || item.ItemModel is null) return false;
+        string name = string(item.ItemModel.IdName);
+        string n2 = string(item.ItemModel.Name);
         string idLower = idName.ToLower();
-        int best = -1;
-        float bestD = eps2 + 1.0;
-        for (uint i = 0; i < editor.Challenge.AnchoredObjects.Length; i++) {
-            auto item = editor.Challenge.AnchoredObjects[i];
-            if (item is null || item.ItemModel is null) continue;
-            string name = string(item.ItemModel.IdName);
-            string n2 = string(item.ItemModel.Name);
-            if (idLower.Length > 0) {
-                if (!name.ToLower().Contains(idLower) && !n2.ToLower().Contains(idLower) && idLower != name.ToLower() && idLower != n2.ToLower()) {
-                    // also allow full path suffix match
-                    if (!idLower.EndsWith(name.ToLower()) && !name.ToLower().EndsWith(idLower)) continue;
-                }
-            }
-            vec3 pos = item.AbsolutePositionInMap;
-            float d = PosDist2(pos, x, y, z);
-            if (d <= eps2 && d < bestD) {
-                bestD = d;
-                best = int(i);
+        if (idLower.Length > 0) {
+            if (!name.ToLower().Contains(idLower) && !n2.ToLower().Contains(idLower) && idLower != name.ToLower() && idLower != n2.ToLower()) {
+                if (!idLower.EndsWith(name.ToLower()) && !name.ToLower().EndsWith(idLower)) return false;
             }
         }
-        return best;
+        return PosDist2(item.AbsolutePositionInMap, x, y, z) <= eps * eps;
     }
 
-    int FindLiveBlockIndex(CGameCtnEditorFree@ editor, const string &in idName, float x, float y, float z, float eps) {
+    int FindLiveItemIndex(CGameCtnEditorFree@ editor, const string &in idName, float x, float y, float z, float eps, int preferredIndex, int &out candidateCount) {
         if (editor is null || editor.Challenge is null) return -1;
-        float eps2 = eps * eps;
-        string idLower = idName.ToLower();
-        int best = -1;
-        float bestD = eps2 + 1.0;
-        for (uint i = 0; i < editor.Challenge.Blocks.Length; i++) {
-            auto block = editor.Challenge.Blocks[i];
-            if (block is null || block.BlockInfo is null) continue;
-            string name = string(block.BlockInfo.IdName);
-            string n2 = string(block.BlockInfo.Name);
-            if (idLower.Length > 0) {
-                if (name.ToLower() != idLower && n2.ToLower() != idLower
-                    && !name.ToLower().Contains(idLower) && !n2.ToLower().Contains(idLower)) continue;
-            }
-            vec3 pos;
-            try {
-                pos = Editor::GetBlockLocation(block, true);
-            } catch {
-                pos = vec3(float(block.Coord.x) * 32.0, (float(block.Coord.y) - 8.0) * 8.0, float(block.Coord.z) * 32.0);
-            }
-            float d = PosDist2(pos, x, y, z);
-            if (d <= eps2 && d < bestD) {
-                bestD = d;
-                best = int(i);
-            }
+        candidateCount = 0;
+        if (LiveItemMatches(editor, preferredIndex, idName, x, y, z, eps)) {
+            candidateCount = 1;
+            return preferredIndex;
         }
-        return best;
+        int match = -1;
+        for (uint i = 0; i < editor.Challenge.AnchoredObjects.Length; i++) {
+            if (!LiveItemMatches(editor, int(i), idName, x, y, z, eps)) continue;
+            match = int(i);
+            candidateCount++;
+        }
+        return candidateCount == 1 ? match : -1;
+    }
+
+    bool LiveBlockMatches(CGameCtnEditorFree@ editor, int index, const string &in idName, float x, float y, float z, float eps) {
+        if (editor is null || editor.Challenge is null || index < 0 || uint(index) >= editor.Challenge.Blocks.Length) return false;
+        auto block = editor.Challenge.Blocks[uint(index)];
+        if (block is null || block.BlockInfo is null) return false;
+        string name = string(block.BlockInfo.IdName);
+        string n2 = string(block.BlockInfo.Name);
+        string idLower = idName.ToLower();
+        if (idLower.Length > 0 && name.ToLower() != idLower && n2.ToLower() != idLower
+            && !name.ToLower().Contains(idLower) && !n2.ToLower().Contains(idLower)) return false;
+        vec3 pos;
+        try {
+            pos = Editor::GetBlockLocation(block, true);
+        } catch {
+            pos = vec3(float(block.Coord.x) * 32.0, (float(block.Coord.y) - 8.0) * 8.0, float(block.Coord.z) * 32.0);
+        }
+        return PosDist2(pos, x, y, z) <= eps * eps;
+    }
+
+    int FindLiveBlockIndex(CGameCtnEditorFree@ editor, const string &in idName, float x, float y, float z, float eps, int preferredIndex, int &out candidateCount) {
+        if (editor is null || editor.Challenge is null) return -1;
+        candidateCount = 0;
+        if (LiveBlockMatches(editor, preferredIndex, idName, x, y, z, eps)) {
+            candidateCount = 1;
+            return preferredIndex;
+        }
+        int match = -1;
+        for (uint i = 0; i < editor.Challenge.Blocks.Length; i++) {
+            if (!LiveBlockMatches(editor, int(i), idName, x, y, z, eps)) continue;
+            match = int(i);
+            candidateCount++;
+        }
+        return candidateCount == 1 ? match : -1;
+    }
+
+    void RecordTaggedNamedMacroblock(Json::Value &in input, Editor::MacroblockSpec@ placedMb, int blockBaseIndex, int itemBaseIndex) {
+        string tag = ResolvePlacementTag(input);
+        if (tag.Length == 0 || placedMb is null) return;
+        for (uint i = 0; i < placedMb.blocks.Length; i++) {
+            auto block = placedMb.blocks[i];
+            if (block is null) continue;
+            RecordTaggedPlacement(tag, "block", block.name, block.pos - MacroblockInternalOffset(), blockBaseIndex + int(i));
+        }
+        for (uint i = 0; i < placedMb.items.Length; i++) {
+            auto item = placedMb.items[i];
+            if (item is null) continue;
+            RecordTaggedPlacement(tag, "item", item.name, item.pos - MacroblockInternalOffset(), itemBaseIndex + int(i));
+        }
     }
 
     Json::Value@ SetAgentTag(Json::Value &in input) {
@@ -274,9 +297,12 @@ namespace TmMcp {
             row["pos"] = Vec3ToJson(vec3(obj.x, obj.y, obj.z));
 
             if (obj.kind == "item") {
-                int idx = FindLiveItemIndex(editor, obj.idName, obj.x, obj.y, obj.z, eps);
+                int candidateCount = 0;
+                int idx = FindLiveItemIndex(editor, obj.idName, obj.x, obj.y, obj.z, eps, obj.lastKnownIndex, candidateCount);
                 row["resolvedIndex"] = idx;
+                row["candidateCount"] = candidateCount;
                 if (idx < 0) {
+                    row["reason"] = candidateCount > 1 ? "ambiguous live match" : "no matching live object";
                     missed.Add(row);
                     continue;
                 }
@@ -294,9 +320,12 @@ namespace TmMcp {
                 matched.Add(row);
                 removeTrackIdx.InsertLast(i);
             } else if (obj.kind == "block") {
-                int idx = FindLiveBlockIndex(editor, obj.idName, obj.x, obj.y, obj.z, eps);
+                int candidateCount = 0;
+                int idx = FindLiveBlockIndex(editor, obj.idName, obj.x, obj.y, obj.z, eps, obj.lastKnownIndex, candidateCount);
                 row["resolvedIndex"] = idx;
+                row["candidateCount"] = candidateCount;
                 if (idx < 0) {
+                    row["reason"] = candidateCount > 1 ? "ambiguous live match" : "no matching live object";
                     missed.Add(row);
                     continue;
                 }

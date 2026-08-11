@@ -220,7 +220,7 @@ string g_DefaultTag; // set via SetAgentTag
 | `RemoveByTag` | resolve live indices via pos+idName match (±ε), call DeleteItems/DeleteBlocks; report deleted/missed |
 | `ClearTagIndex` | drop sidecar only (not map) |
 
-**Match algorithm (items):** scan `AnchoredObjects` for `idName` + position within ε (default 0.05 m).  
+**Match algorithm (items):** scan `AnchoredObjects` for `idName` + position within ε (default 0.05 m).
 **Blocks:** freeblocks by pos; grid blocks by coord+model.
 
 ### Files
@@ -366,7 +366,7 @@ Prove one inject in editor that emits event MCP receives (copy pattern from `tm-
 Named macroblocks survive reload; agents get one-shot placement verification.
 
 ### Durable named-MB
-**Format:** JSON under Openplanet data folder, e.g.  
+**Format:** JSON under Openplanet data folder, e.g.
 `IO::FromDataFolder("tm-control-mcp/named-mb/<name>.json")`
 
 Contents: blocks/items arrays mirroring AddBlock/AddItem specs (blockName/itemPath, x,y,z, rot, variant, skins).

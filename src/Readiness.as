@@ -90,11 +90,10 @@ namespace TmMcp {
         if (!dialogClear) blocking.InsertLast("dialog active");
         if (want == "editor" && !editorReadyForRequest) blocking.InsertLast("editor not ready for request");
         if (want == "editor" && !hasChallenge) blocking.InsertLast("no challenge/map loaded");
-        if (want == "editor" && !inventoryReady) blocking.InsertLast("inventory still scanning items");
         if (want == "menu" && !menuOk) blocking.InsertLast("menu module not on stack");
 
-        // Inventory scanning is soft for ready=false only when want=editor (already above).
-        // For any/menu we still report the check.
+        Json::Value warnings = Json::Array();
+        if (want == "editor" && !inventoryReady) warnings.Add("inventory still scanning items");
 
         Json::Value checks = Json::Object();
         checks["socketAlive"] = true;
@@ -124,6 +123,7 @@ namespace TmMcp {
         output["map"] = map;
         output["inventory"] = inventory;
         output["blockingReasons"] = reasons;
+        output["warnings"] = warnings;
         return output;
     }
 

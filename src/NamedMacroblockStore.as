@@ -318,16 +318,31 @@ namespace TmMcp {
             if (near.GetType() != Json::Type::Object) {
                 failures.Add("near must be object with x,y,z,radius?");
                 ok = false;
+            } else if (!near.HasKey("x") || !near.HasKey("y") || !near.HasKey("z")) {
+                failures.Add("near must include x, y, and z");
+                ok = false;
+            } else if (near["x"].GetType() != Json::Type::Number || near["y"].GetType() != Json::Type::Number || near["z"].GetType() != Json::Type::Number) {
+                failures.Add("near x, y, and z must be numbers");
+                ok = false;
+            } else if (near.HasKey("radius") && near["radius"].GetType() != Json::Type::Number) {
+                failures.Add("near radius must be a number");
+                ok = false;
             } else {
                 float x = float(near["x"]);
                 float y = float(near["y"]);
                 float z = float(near["z"]);
                 float radius = near.HasKey("radius") ? float(near["radius"]) : 1.0;
+                if (radius < 0) {
+                    failures.Add("near radius must be nonnegative");
+                    ok = false;
+                } else {
                 float r2 = radius * radius;
                 string itemPath = input.HasKey("itemPath") ? string(input["itemPath"]).ToLower() : "";
                 string blockName = input.HasKey("blockName") ? string(input["blockName"]).ToLower() : "";
                 bool any = false;
-                if (itemPath.Length > 0 || (!input.HasKey("blockName") && itemPath.Length == 0 && blockName.Length == 0)) {
+                bool scanItems = itemPath.Length > 0 || (itemPath.Length == 0 && blockName.Length == 0);
+                bool scanBlocks = blockName.Length > 0 || (itemPath.Length == 0 && blockName.Length == 0);
+                if (scanItems) {
                     // scan items when itemPath given or neither model filter
                     for (uint i = 0; i < editor.Challenge.AnchoredObjects.Length; i++) {
                         auto item = editor.Challenge.AnchoredObjects[i];
@@ -341,8 +356,6 @@ namespace TmMcp {
                             if (!id.Contains(itemPath) && !nm.Contains(itemPath) && !itemPath.Contains(id) && !itemPath.EndsWith(id)) continue;
                         } else if (itemPath.Length > 0) {
                             continue;
-                        } else if (blockName.Length > 0) {
-                            continue; // only looking for blocks
                         }
                         any = true;
                         Json::Value f = Json::Object();
@@ -353,7 +366,7 @@ namespace TmMcp {
                         found.Add(f);
                     }
                 }
-                if (blockName.Length > 0 || (itemPath.Length == 0 && blockName.Length == 0 && input.HasKey("blockName"))) {
+                if (scanBlocks) {
                     for (uint i = 0; i < editor.Challenge.Blocks.Length; i++) {
                         auto block = editor.Challenge.Blocks[i];
                         if (block is null || block.BlockInfo is null) continue;
@@ -377,12 +390,10 @@ namespace TmMcp {
                         found.Add(f);
                     }
                 }
-                if (!any && (itemPath.Length > 0 || blockName.Length > 0 || input.HasKey("near"))) {
-                    // If only near without model filter, any object counts — handled above with item scan
-                    if (itemPath.Length > 0 || blockName.Length > 0) {
-                        failures.Add("no matching object near (" + x + "," + y + "," + z + ") r=" + radius);
-                        ok = false;
-                    }
+                if (!any) {
+                    failures.Add("no matching object near (" + x + "," + y + "," + z + ") r=" + radius);
+                    ok = false;
+                }
                 }
             }
         }
