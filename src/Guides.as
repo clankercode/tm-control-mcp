@@ -141,13 +141,49 @@ namespace TmMcp {
             + "  \"ShowParentPage\":false,\"ExcludeOverlays\":[]}. These go in the THIRD"
             + "  MLHook event slot — currently hardcoded to '{}' in SetMenuPage.\n"
             + "\n"
+            + "Clicking buttons (LANDED):\n"
+            + "- ClickMenuButton {controlId} descends to the nav-zone leaf and calls"
+            + "  CControlBase::OnAction — safe from Angelscript. TriggerControlOnAction"
+            + "  is the lower-level primitive (optional recursive DFS).\n"
+            + "- NEVER use CGameManialinkScriptHandler::TriggerPageAction — native"
+            + "  openplanet.dll crash.\n"
+            + "- CreateMapViaMenu drives the full Page_MapEditorSettings chain"
+            + "  (requires MapEditor QuickStart OFF).\n"
+            + "\n"
+            + "Ad-hoc ManiaScript:\n"
+            + "- RunManialinkScript {script, context?} injects via MLHook into menu /"
+            + "  in-map / in-editor (default context=current). Same idea as MLHook's"
+            + "  UILayers browser Create button. No outer <manialink> tags. Pages are"
+            + "  sandboxed; useful for TitleControl and local game-object access.\n"
+            + "\n"
             + "Limitations:\n"
-            + "- Buttons whose handler does not call Router_Push (e.g. button-ubi-connect)"
-            + "  cannot be triggered via Router_Push; simulating a real mouse click is"
-            + "  unexplored.\n"
-            + "- For creating a new map with a chosen vista, the faster path is calling"
-            + "  app.ManiaTitleControlScriptAPI.EditNewMap2(Environment, Decoration, ...)"
-            + "  directly (exposed via EditNewMap tool).");
+            + "- Buttons whose handler does not call Router_Push still need OnAction"
+            + "  (or custom ML), not SetMenuPage alone.\n"
+            + "- For creating a new map with a chosen vista, prefer EditNewMap or"
+            + "  CreateMapViaMenu over hand-rolled click chains.");
+
+        _RegisterGuide("manialink-runner",
+            "RunManialinkScript via MLHook",
+            "RunManialinkScript injects ad-hoc ManiaScript the same way MLHook's developer"
+            + " UILayers browser creates a layer: UILayerCreate + ManialinkPage assign, via"
+            + " InjectManialinkToMenu / InjectManialinkToPlayground / InjectManialinkToEditor.\n"
+            + "\n"
+            + "Parameters:\n"
+            + "- script (required): raw ManiaScript body or inner fragment. Do NOT include"
+            + "  outer <manialink> tags — MLHook wraps as name=MLHook_<pageUid>.\n"
+            + "- context: current (default) | menu | in-map | in-editor. current uses"
+            + "  Editor > playground > menu detection.\n"
+            + "- pageUid default McpAdHoc; replace default true; persist default true;"
+            + "  waitMs default 150 (yield while inject queue runs).\n"
+            + "\n"
+            + "Notes:\n"
+            + "- Fire-and-forget: no result channel unless your script emits events a"
+            + "  hook observes.\n"
+            + "- Manialink pages are sandboxed from each other; influence on other UI is"
+            + "  limited.\n"
+            + "- Bad syntax can trigger the game recovery restart — keep scripts small.\n"
+            + "- Prefer this over inventing one-off MCP tools when agents need custom"
+            + "  TitleControl / local-state access.");
 
         _RegisterGuide("map-vistas",
             "Environment / decoration (vista) selection",
@@ -180,13 +216,21 @@ namespace TmMcp {
 
         _RegisterGuide("item-placement-debris",
             "Cleaning up test items / blocks",
-            "RemoveRecentItems {count} tries pmt.RemoveItem first (undo-safe). If that no-ops"
-            + " (common when pmt.Items is empty), forceBufferFallback=true switches to"
-            + " AnchoredObjects.RemoveRangeTail (undo-NOT-safe, no notification to the editor)."
-            + " RemoveRecentBlocks has no buffer fallback and relies on the public API.\n"
+            "RemoveRecentItems / RemoveItemsByIndex call Editor::DeleteItems (E++), which"
+            + " builds a donor macroblock and RemoveMacroblock after setting"
+            + " Initialized=true and Connected=true. That path is undo-safe when addUndo=true"
+            + " and works even when pmt.Items / AnchorData are empty (no MLHook needed)."
+            + " Prefer forceBufferFallback=false (default).\n"
             + "\n"
-            + "After forceBufferFallback cleanup, the editor's change counter may be out of"
-            + " sync with map content. Save-reload is the cheapest full reset.");
+            + "forceBufferFallback=true is cleanup-only: AnchoredObjects.RemoveRange*"
+            + " (undoSupported=false, can desync the editor change counter, UAF risk if used"
+            + " while scene holds the nod — never for gizmo). RemoveRecentBlocks has no"
+            + " buffer fallback and uses DeleteFreeblocks / DeleteBlocks.\n"
+            + "\n"
+            + "After forceBufferFallback cleanup, save-reload is the cheapest full reset."
+            + " Smoke: PlaceItemViaEditorPlusPlus ObstaclePillar2m then"
+            + " RemoveRecentItems {count:1, forceBufferFallback:false} → deleted=true,"
+            + " method=DeleteItems.");
     }
 
     Json::Value@ ListGuides(Json::Value &in input) {

@@ -39,6 +39,7 @@ namespace TmMcp {
             } catch {}
             @g_socket = null;
         }
+        CleanupAdHocManialink();
     }
 
     void StartServerAfterDelay() {

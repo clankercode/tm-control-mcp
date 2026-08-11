@@ -1,6 +1,30 @@
 # Main-Menu Manialink Layer Reference
 
-Source: live introspection via `tm-control-mcp GetUILayers` on Trackmania build 3.3.0 / 2026-02-02, running through Proton. 78 layers on top-level `/home`.
+> **STATUS — 2026-08-12**
+>
+> ### Settled
+> - **`CControlBase::OnAction()` is the live, Angelscript-safe click primitive.** Not marked `// Maniascript`; callable from Openplanet. Every `CGameManialinkControl` exposes `.Control` → `CControlBase*`.
+> - **`TriggerControlOnAction`** (low-level) and **`ClickMenuButton`** (high-level nav-item) are **LIVE** MCP tools. `ClickMenuButton` resolves a nav-item, DFS-finds the `component-navigation-item-zone` leaf, and fires `OnAction` on it. Works for both `CMGame_ExpendableButton` and `Trackmania_Button` templates. Verified commits: `a418089` (OnAction), `bb4c88a` (ClickMenuButton).
+> - **`CreateMapViaMenu`** drives the full Page_MapEditorSettings click-chain (SetMenuPage + 6 OnAction clicks) end-to-end into Editor mode. Verified `6834a15`+ (scoped to Page_MapEditorSettings in `fcb58db`). QuickStart (`MapEditorUseQuickstart`) must be **off**.
+> - **`TriggerPageAction` is a BANNED historical dead-end.** It native-crashes `openplanet.dll`. Do not call it, wrap it, or re-enable any stub that used it. Keep the crash warning permanently (see below).
+> - Hierarchical routes (`/create/mapeditorsettings`, not bare leaf) are required.
+> - Side-effect routes (`/solo/campaigndisplay`, …) can leave Menu into Race; `SetMenuPage` blocks known ones by default.
+>
+> ### Still open
+> - `CGameManialinkNavigationScriptHandler::ApplyInput` — clean keyboard-Select primitive, but **no handle** is exposed off Page/ScriptHandler/UILayer. Needs a Ghidra offset pass (or is superseded in practice by OnAction).
+> - Router_Push **extras** hydration shape for dict/bool third-arg pages (e.g. `/solo/campaigndisplay` Campaign payload).
+> - SetMenuPage history-controls slot (MLHook event arg 2) still hardcoded `"{}"`.
+> - Event-queue direct injection into `PendingEvents` (all fields `const` in script) — Ghidra for offsets/lifecycle; not needed for nav clicks now that OnAction works.
+>
+> ### Agent short path
+> - Navigate pages → `SetMenuPage` + poll `GetActiveMenuPages`.
+> - Click a nav button → `ClickMenuButton {controlId}` (or `{indexPath, layerName}` when scoping matters).
+> - Non-nav / leaf without `component-navigation-item-zone` → `TriggerControlOnAction`.
+> - New map via full menu wizard → `CreateMapViaMenu` (QuickStart off).
+> - New map via title API shortcut → `EditNewMap` (bypasses menu click-chain).
+> - Custom ManiaScript / `TitleControl::EditNewMap`-style terminal calls from injected ML → `RunManialinkScript` / MLHook inject (optional alternative when you need page-local script, not just a control click).
+
+Source: live introspection via `tm-control-mcp GetUILayers` on Trackmania build 3.3.0 / 2026-02-02, running through Proton. 78 layers on top-level `/home`. Click primitives and CreateMapViaMenu verified on live sessions 2026-04-20 (`a418089`…`fcb58db`).
 
 ## Key insight
 
@@ -57,6 +81,8 @@ Verified on a live TM session (2026-04-20):
 
 **Rule**: if the menu script for a button does `Router_Router::SetParentPath(This, "/a/b", "/a")` + `Router_Router::Push(This, "/a/b")`, then the path you pass to `SetMenuPage` must be `"/a/b"`, not `"/b"`.
 
+`SetMenuPage` also rejects routes that do not start with `/` (bare names silently wedge the menu into `Page_LoadingScreen`).
+
 ## How clicks are routed inside the menu script
 
 Discovered by grepping Page_Create's XML (`GetLayerXml {layerIndex, find}`):
@@ -65,38 +91,74 @@ Discovered by grepping Page_Create's XML (`GetLayerXml {layerIndex, find}`):
 2. The page script handles `ComponentNavigation_ComponentNavigation::C_EventType_NavigateMouse`, checks the `navgroup` identifier, then on `MouseClick` calls `Select(Event.To, ...)`.
 3. `Select(CMlControl, ...)` switches on `_Control.ControlId` — e.g. `"button-map-editor"` → `Router_Router::Push(This, "/create/mapeditorsettings")`.
 
-This means `Select` is an ORDINARY SCRIPT FUNCTION in the page's Manialink, not a SendCustomEvent. To drive it from outside without simulating mouse input, we must either:
-- Push the destination route directly via `Router_Push` (works now that we know the full path), OR
-- Inject a script fragment that calls `Select` with a synthesized control pointer (unexplored).
+`Select` is an ordinary script function in the page's Manialink, not a SendCustomEvent. From outside we can:
 
-For the programmatic-navigation use case, the `Router_Push` path is sufficient.
+1. **Push the destination route** via `SetMenuPage` / `Router_Push` (when the button only navigates), OR
+2. **Fire the real click path** via `CControlBase::OnAction()` on the nav-zone leaf — what `ClickMenuButton` / `TriggerControlOnAction` do (LIVE), OR
+3. Inject ManiaScript that calls title-control / page APIs directly (`RunManialinkScript` / MLHook inject) for terminal actions that need custom ML.
 
-### Terminal actions that are NOT Router_Push (live 2026-04-20)
+### LIVE click path — `CControlBase::OnAction` (2026-04-20 → present)
 
-Not every "button" on a page pushes a route. Some end-of-flow buttons call the title control API directly instead, bypassing the Router entirely. These cannot be triggered by `SetMenuPage`:
+**This is the settled answer.** Do not re-investigate TriggerPageAction.
 
-- `Page_MapEditorSettings / button-create` → `TitleControl::EditNewMap(TitleControl, Enviro, Mood, "", PlayerModel, MapType, IsMouseSimple, Plugins, Settings, OnlyForced)` (Page_MapEditorSettings XML @ offset 197012).
-- `Page_MapEditorSettings / button-edit` → `TitleControl::EditMap(TitleControl, FileName, "", "", PlayerModel, Plugins, Settings, !Simple, OnlyForced)` (Page_MapEditorSettings XML @ offset 195282).
+| Tool | Role |
+|------|------|
+| `TriggerControlOnAction` | Low-level: resolve control by `{controlId}` or `{indexPath, layerIndex\|layerName}`, call `.Control.OnAction()`. Optional `recursive=true` DFS-fires descendants. |
+| `ClickMenuButton` | High-level nav click: resolve nav-item → DFS for class `component-navigation-item-zone` → `OnAction` on that leaf. Handles expendable-button **and** Trackmania_Button templates. |
+| `CreateMapViaMenu` | One-shot wizard: `SetMenuPage /create/mapeditorsettings` + 6 scoped `ClickMenuButton` steps → poll Editor. |
 
-These are the same APIs our `EditNewMap` / (future) `EditMap` MCP tools wrap via `app.ManiaTitleControlScriptAPI.*`. So the full "menu → editor" flow can be driven today as `SetMenuPage /create/mapeditorsettings` + `EditNewMap {Environment, Decoration, MapType}`, but NOT by `SetMenuPage` alone.
+Implementation notes (see `src/ManialinkIntrospection.as`):
 
-### Click synthesis feasibility note
+- `OnAction` lives on `CControlBase` (Openplanet.h ~13548), **not** marked `// Maniascript`, so Angelscript calls are safe.
+- For HomePage-style expendable buttons the true hit target is often the leaf nav-zone under the nav-item frame (historically `Controls[0]/[4]/[0]` for `button-create`); `ClickMenuButton` finds it by class instead of hardcoding indexes.
+- **Scope clicks to the right layer** when controlIds collide. `CreateMapViaMenu` resolves `indexPath` on `Page_MapEditorSettings` only — a global DFS for `button-create` can hit `Page_HomePage` first (wrong template).
+- After firing, poll `GetActiveMenuPages` / `GetMode` / `GetDialog` — the click is synchronous dispatch, but menu state transitions are still async.
 
-To fake a real click on `button-create` we'd need to inject a `ComponentNavigation_ComponentNavigation::C_EventType_NavigateMouse` event with `Mouse=MouseClick` and `To="button-create"` into the page's own event queue (not the top-level menu module). MLHook exposes `Queue_Menu_SendCustomEvent` (top-level ScriptHandler only) and `InjectManialinkToMenu` (arbitrary page injection), but no "queue event to a specific Page_* layer" primitive. `GetPendingEvents` on the page drains from its own internal pool populated by the runtime on real input. Implication: driving `Select` without the Router_Push shortcut probably requires either (a) injecting a Manialink bridge page that calls the title control API directly (same effect as our existing `EditNewMap` tool), or (b) simulating host-level mouse input. Both strictly heavier than the current `SetMenuPage + EditNewMap` combo.
+Verified end-to-end:
 
-### Openplanet.h discovery (2026-04-20, post-crash scoping)
+- `TriggerControlOnAction` on HomePage nav-zone → `Page_Create` (`a418089`).
+- `ClickMenuButton {controlId:"button-create"}` / `{controlId:"button-map-editor"}` without hand-computed paths (`bb4c88a`).
+- Full `CreateMapViaMenu` race/RedIsland/Day → Editor (`6834a15`, error propagation `938c1ce`, layer scoping `fcb58db`).
 
-`CGameManialinkNavigationScriptHandler::ApplyInput(CGameManialinkFrame*, EMenuNavAction)` (Openplanet.h:25207) is the clean click primitive — calling it with `Action=Select` (value 4) on the focused button's frame fires the same path a keyboard "A" press would. The page handler receives a `CEventMenuNavigationOnAction` with `IsMouse=false` and `Input=Select`, and the page's own `ComponentNavigation` normaliser would call `Select(State, Event.To)`. Same terminal action as a click.
+### Terminal actions that are NOT Router_Push
 
-Open problem: `CGameManialinkNavigationScriptHandler` has a public constructor but NO field on `CGameManialinkPage` / `CGameManialinkScriptHandler` / any CGameUILayer exposes a handle back to the active instance. Per-page navigation handler reach is presumably internal to the engine's MLUI runtime. To actually invoke `ApplyInput` we'd need either (a) a memory-offset route to the handler off the Page/ScriptHandler (Ghidra exercise), or (b) to construct our own handler and somehow wire it into the event pump (likely pool-invariant-breaking, same risk shape as option D in item-skin saga).
+Not every "button" on a page pushes a route. Some end-of-flow buttons call the title control API directly instead, bypassing the Router entirely. These cannot be triggered by `SetMenuPage` alone:
 
-Related API on `CGameManialinkScriptHandler` worth a probe: `TriggerPageAction(string ActionString)` (line 4473). **UNSAFE — CRASHES openplanet.dll natively.** Tested 2026-04-20 against the page handler reached via `app.MenuManager.ManialinkScriptHandlerMenus` while on `Page_HomePage`, action `"button-create"`. Game froze instantly; script engine produced no log output for the call; socket dead; user confirmed "crash in openplanet.dll, very common when clicking ML stuff in the wrong way." The method is annotated `// Maniascript` — it is only safe to invoke from the ManiaScript runtime itself, not the Openplanet Angelscript host. The `ClickMenuButton` MCP tool has been disabled in place as a poisoned-error marker so future agents stop here. Do not attempt any variant — don't try a different handler field, a different page, or wrapping in `try`/`catch`; the crash is in native code below Angelscript.
+- `Page_MapEditorSettings / button-create` → (wizard chain, not a single hop) ultimately `TitleControl::EditNewMap(...)` after type/device/difficulty/enviro/mood selections.
+- Historical XML notes (Page_MapEditorSettings): `button-create` / `button-edit` paths call `TitleControl::EditNewMap` / `TitleControl::EditMap` style APIs — same family our `EditNewMap` MCP tool wraps via `app.ManiaTitleControlScriptAPI.*`.
 
-Page XML side-note: the Maniascript inside `Page_MapEditorSettings` does use a `switch (...)` on the action string — `case "button-create": { ... EditNewMap2(...); }` — confirming that, semantically, the action IS the controlId. The right dispatch target exists; it's just unreachable from outside the MLUI runtime.
+**Ways to reach the editor today:**
 
-The plain `CGameManialinkControl::Focus()` we already wire in `FocusMenuControl` is insufficient: it changes focus but doesn't fire the Select event. Event-queue direct injection into `CGameManialinkScriptHandler::PendingEvents` (line 4452) would work but all `CGameManialinkScriptEvent` fields are `const` in script, requiring raw offset writes — Ghidra pass needed for field offsets and refcount/lifecycle rules.
+| Path | Tool | Notes |
+|------|------|-------|
+| Full menu wizard (matches human UI) | `CreateMapViaMenu` | Needs QuickStart **off**. Preferred when testing the real click-chain. |
+| Title API shortcut | `EditNewMap` | Bypasses Page_MapEditorSettings UI entirely. |
+| Injected ManiaScript | `RunManialinkScript` / MLHook inject | Optional: run page-local ML that calls `TitleControl::EditNewMap`-style APIs or other script-only entry points when agents need custom ML rather than a control click. |
 
-**Current recommendation**: unless click-synthesis is a hard requirement, compose `SetMenuPage /create/mapeditorsettings` + `EditNewMap {Environment, Decoration, MapType}` — same title-control call the button would make.
+### BANNED — `TriggerPageAction` (historical dead-end, permanent)
+
+`CGameManialinkScriptHandler::TriggerPageAction(string ActionString)` (Openplanet.h ~4473):
+
+- **UNSAFE — CRASHES `openplanet.dll` natively.**
+- Tested 2026-04-20 against `app.MenuManager.ManialinkScriptHandlerMenus` on `Page_HomePage`, action `"button-create"`. Game froze instantly; no script log; socket dead. User: *"crash in openplanet.dll, very common when clicking ML stuff in the wrong way."*
+- Method is annotated `// Maniascript` — only safe inside the ManiaScript runtime, **not** the Openplanet Angelscript host.
+- Early experiment briefly exposed a `ClickMenuButton` that called this API; it was disabled as a poisoned-error marker in `c455ee0`. That stub was **replaced** (not re-enabled) by the OnAction-based `ClickMenuButton` in `bb4c88a`.
+- **Do not attempt any variant** — different handler field, different page, `try`/`catch`, recursive wrapper, etc. The crash is native below Angelscript. Keep this section as a permanent ban notice.
+
+Page XML side-note (still true): Maniascript inside `Page_MapEditorSettings` switches on action/controlId strings (e.g. `"button-create"`). Semantically the action *is* the controlId; the right dispatch target exists inside MLUI. From Angelscript we reach equivalent behaviour via **OnAction on the control's CControlBase**, not via TriggerPageAction.
+
+### ApplyInput — open Ghidra note (superseded for nav clicks)
+
+`CGameManialinkNavigationScriptHandler::ApplyInput(CGameManialinkFrame*, EMenuNavAction)` (Openplanet.h ~25207) remains the clean *keyboard* Select primitive — `Action=Select` (value 4) on the focused button's frame would fire `CEventMenuNavigationOnAction` with `IsMouse=false`, `Input=Select`, and the page's ComponentNavigation normaliser would call `Select(State, Event.To)`.
+
+**Still open:** `CGameManialinkNavigationScriptHandler` has a public constructor but **no field** on `CGameManialinkPage` / `CGameManialinkScriptHandler` / any `CGameUILayer` exposes a handle to the active instance. Invoking `ApplyInput` would need either (a) a memory-offset route off Page/ScriptHandler (Ghidra), or (b) constructing a handler and wiring it into the event pump (pool-invariant risk).
+
+**In practice OnAction superseded this for agent menu navigation.** Leave ApplyInput as a research footnote unless keyboard-nav parity is specifically required.
+
+Related dead ends (do not reopen without new evidence):
+
+- Plain `CGameManialinkControl::Focus()` (`FocusMenuControl`) changes focus but does **not** fire Select.
+- Direct injection into `CGameManialinkScriptHandler::PendingEvents` — fields are `const` in script; needs raw offset writes + lifecycle rules (Ghidra). Not needed for nav clicks now.
 
 ## Routes with side-effects (DANGEROUS — may leave Race mode)
 
@@ -107,6 +169,8 @@ Not every route just swaps a `Page_*` layer. Some Router pushes kick off navigat
 | `/solo/campaigndisplay` | **Auto-loaded the current campaign's active map** (`Spring 2026 - 01`) and transitioned into Race/PlaygroundScript mode. The Page_CampaignDisplay layer became visible briefly before cascading into the race. Observed 2026-04-20 live session. |
 
 Rule of thumb: routes that present a *single* selected thing (a campaign, a replay, a specific match) will likely auto-enter that thing if their content state is already populated. Routes that show a *list* or *settings form* (like `/create/mapeditorsettings`, `/create/garage`) are safe.
+
+`SetMenuPage` blocks known side-effect routes (`/solo/campaigndisplay`, `/solo/monthlycampaigndisplay`) by default; pass `allowPlaygroundLaunch:true` to override.
 
 Use `GetMode` (returns `{mode, mapName?, mapUid?, selfHosted?}`) to detect a cascade. Use `BackToMainMenu` to unwind.
 
@@ -129,7 +193,7 @@ Page_HomePage (partial):
 | `button-play-and-play` | switches on `GetCurrentPlayTabIndex()` → `/solo`, `/live`, `/local` |
 | `button-clubs`       | `/clubs` (offline gate opens popup)                            |
 | `button-create`      | `/create`                                                     |
-| `button-ubi-connect` | `State.Task_ShowUbisoftConnect = True;` (no Router_Push — overlay task) |
+| `button-ubi-connect` | `State.Task_ShowUbisoftConnect = True;` (no Router_Push — overlay task; use `ClickMenuButton` / OnAction, not SetMenuPage) |
 | `button-profile`     | parent `<current>`, push `/profile`                            |
 | `button-settings`    | parent `/home`, push `/settings`                               |
 
@@ -146,25 +210,57 @@ Page_Solo (partial; some pushes take extra args):
 
 `Router_Router::Push` accepts a third-argument extras (Dict or Boolean). Our `SetMenuPage` already passes an empty `"{}"` extras payload; for pages like `/solo/campaigndisplay` that *require* extras the empty payload likely won't hydrate the target page correctly.
 
+## Page_MapEditorSettings click-chain (CreateMapViaMenu)
+
+Implemented tool — see also `docs/task-c-create-map-via-menu.md`.
+
+Step order after `SetMenuPage /create/mapeditorsettings` (poll page visible ≤1s):
+
+| # | Click `controlId` | Then poll for |
+|---|-------------------|---------------|
+| 1 | `button-create` | `frame-create-type` visible (fails fast with QuickStart hint if not) |
+| 2 | `button-create-<mapType>` | `frame-controller` |
+| 3 | `button-<inputDevice>` | `frame-difficulty-<inputDevice>` |
+| 4 | `button-difficulty-<inputDevice>-<difficulty>` | `frame-enviro` |
+| 5 | `button-enviro-<environment>` | `frame-mood` |
+| 6 | `button-mood-<mood>` | `GetMode` / `app.Editor != null` → Editor |
+
+Enums: `mapType` ∈ race|royal|stunt|platform; `environment` ∈ Stadium|RedIsland|GreenCoast|BlueBay|WhiteShore; `mood` ∈ Sunrise|Day|Sunset|Night; `inputDevice` ∈ mouse|gamepad; `difficulty` ∈ simple|advanced.
+
+**Prerequisite:** Map Editor QuickStart must be disabled (`MapEditorUseQuickstart` off). If step 1's `frame-create-type` never appears, that is the usual cause.
+
 ## To navigate programmatically
 
 1. Top-level routes: `/home`, `/create`, `/solo`, `/live`, `/local`, `/clubs`, `/profile`, `/settings`, `/play-map`, `/press-start` etc.
 2. Subpage routes: use the full hierarchical path, e.g. `/create/mapeditorsettings`, `/create/garage`, `/create/edit-replay`, `/create/server-review`, `/create/prestige-recap`, `/solo/weekly-tracks`, `/solo/campaigndisplay`, `/solo/library-clubcampaigns`, `/solo/monthlycampaigndisplay`.
-3. Some subpages that get called with a hash-literal extras ({"Campaign" => ...}) or a Bool flag may render in an empty state without those extras. Extras plumbing via MLHook is unexplored; probably needs the 3rd arg shape of `Router_Push` documented.
-4. Buttons whose handler does *not* call Router_Push (e.g. `button-ubi-connect`) cannot be triggered via this mechanism. We'd need to synthesize a real mouse click, or invoke their script function directly.
+3. Some subpages that get called with a hash-literal extras (`{"Campaign" => ...}`) or a Bool flag may render in an empty state without those extras. Extras plumbing via MLHook is partially explored; dict hydration for campaign pages remains open.
+4. Buttons whose handler does *not* call Router_Push (e.g. `button-ubi-connect`, wizard steps on Page_MapEditorSettings): use **`ClickMenuButton`** / **`TriggerControlOnAction`**, not SetMenuPage.
+5. Prefer layer-scoped resolution (`layerName` + `indexPath` from `InspectMenuControl`) when the same `controlId` exists on multiple Page_* layers.
 
 ## Introspection tools (tm-control-mcp)
 
 Low-level (drill-in):
+
 - `GetUILayers` — lightweight list: index, type, visibility, attachId, pageUrl, manialinkName, top-level children count. Default reads only the first 1 KB of ManialinkPageUtf8 per layer.
 - `GetLayerTree { layerIndex, rootPath?, maxDepth, onlyWithId }` — walk one layer's control tree starting at an optional path. Returns controlId, classes, type, visibility, absPos, size, labelValue, data attributes.
 - `ListMenuManialinkControls` — older alias that walks every layer. Kept for compatibility; prefer `GetUILayers` + `GetLayerTree` for scoped queries.
+- `InspectMenuControl { controlId, layerName? }` — resolve via GetFirstChild; returns type/classes/visibility plus `path` (child-index) and `idPath`. Use `path` as `indexPath` for scoped clicks.
 - `FocusMenuControl { controlId }` — Focus() by id. Does NOT click; useful for discovery only.
+- `SetMenuControlVisible { visible, controlId|indexPath… }` — Show()/Hide(); menu may re-render and reset on next tick.
 
-High-level (one-shot "find me the button"):
-- `FindMenuButtons { onlyVisible?, className? }` — flat list of all visible nav buttons across the whole menu. Default class filter is `component-navigation-item`. Each match includes `layerIndex`, `layerName`, `controlId`, `classes`, `absPos`, `size`, raw `label`, and translation-stripped `displayText`.
+High-level (find / act):
+
+- `FindMenuButtons { onlyVisible?, className? }` — flat list of visible nav buttons. Default class filter `component-navigation-item`. Each match: `layerIndex`, `layerName`, `controlId`, `classes`, `absPos`, `size`, raw `label`, translation-stripped `displayText`.
 - `FindControlsByClass { classPattern, substring?=true }` — substring or exact class match across all layers.
-- `FindControlsByLabel { substring, caseInsensitive?=true }` — search by localized label text; returns the inner Label controls.
+- `FindControlsByLabel { substring, caseInsensitive?=true }` — search by localized label text.
+- **`ClickMenuButton`** — LIVE high-level nav click via OnAction (see above).
+- **`TriggerControlOnAction`** — LIVE low-level OnAction (optional recursive).
+- **`CreateMapViaMenu`** — LIVE full map-editor wizard.
+- `SetMenuPage` / `GetActiveMenuPages` / `GetMenuPage` / `ListKnownMenuRoutes` / `BackToMainMenu` / `GetMode`.
+
+Optional ML injection:
+
+- `RunManialinkScript` — inject ad-hoc ManiaScript via MLHook into menu / in-map / in-editor context (no outer `<manialink>` tags). Useful for TitleControl-style terminal calls or page-local script that has no Angelscript mirror.
 
 ## Nadeo label translation-key format
 
@@ -205,9 +301,12 @@ Observed route-hydration behavior (2026-04-20):
   - `ComponentNavigation_ComponentNavigation::` — framework handlers (navigate mouse / input / select)
   - `Void Select(` or `Select(Event.To` — the ControlId → action switch
   - `SendCustomEvent` — rare but present in some error/popup handlers
+  - `TitleControl::` / `EditNewMap` / `EditMap` — terminal title-API calls from page script
 
 ## Open questions
 
-- Does passing extras through `Queue_Menu_SendCustomEvent("Router_Push", {path, extra, "{}"})` actually hydrate the target page? For `/solo/campaigndisplay` the menu script expects `["Campaign" => "..."]` extras; test whether a dict-shaped JSON/ManiaScript string in field 2 is parsed by the router.
-- Can we call a page's `Select(control, popup)` from outside without going through a mouse-click event? Would unblock buttons like `button-ubi-connect` that set flags rather than pushing routes.
-- `Trackmania.Title.Pack.Gbx` extractor / GBX-script-dumper would still be nice for reading the ComponentNavigation framework source (to confirm the exact event shapes) but is no longer a blocker for navigation.
+- Does passing extras through `Queue_Menu_SendCustomEvent("Router_Push", {path, extra, "{}"})` actually hydrate the target page? For `/solo/campaigndisplay` the menu script expects `["Campaign" => "..."]` extras; test whether a dict-shaped JSON/ManiaScript string in field 1 is parsed by the router.
+- Expose SetMenuPage history-controls (MLHook slot 2) instead of hardcoding `"{}"`.
+- `ApplyInput` handle discovery via Ghidra — only if keyboard-nav parity is needed; OnAction covers mouse-equivalent clicks.
+- `Trackmania.Title.Pack.Gbx` extractor / GBX-script-dumper would still be nice for reading the ComponentNavigation framework source (to confirm exact event shapes) but is no longer a blocker for navigation or clicking.
+- Guides.as `menu-navigation` guide still says non-Router buttons need "simulating a real mouse click (unexplored)" and recommends only `EditNewMap` for new maps — **stale vs this research**; code has ClickMenuButton/CreateMapViaMenu. Guide update is out of scope for this doc pass (owned elsewhere).
