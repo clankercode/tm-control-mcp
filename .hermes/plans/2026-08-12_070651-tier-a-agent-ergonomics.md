@@ -462,17 +462,24 @@ Ship P0+P2 even if P4 blocked — biggest agent pain relief.
 
 ## Done definition (whole Tier A)
 
-- [ ] P0 tools live + call.py waits
-- [ ] P2 RemoveByTag cleans agent fuzz without touching untagged items
-- [ ] P3 can enter free/item place modes from MCP
-- [ ] P4 either shipped or explicitly deferred with spike notes in AGENTS
-- [ ] P5 collectMs returns at least one event in smoke
-- [ ] P6 named MB survives plugin reload
-- [ ] README/AGENTS updated; no invented version
-- [ ] Commits per phase on master (or review branch if Max prefers)
+- [x] P0 tools live + call.py waits
+- [x] P2 RemoveByTag cleans agent fuzz without touching untagged items
+- [x] P3 can enter free/item place modes from MCP
+- [x] P4 either shipped or explicitly deferred with spike notes in AGENTS — **shipped** via `Inventory.SelectArticle`/`SelectNode` (no E++ export needed)
+- [x] P5 collectMs returns at least one event in smoke
+- [x] P6 named MB survives plugin reload (JSON under Openplanet data; load restores in-memory after clear)
+- [x] README/AGENTS updated; no invented version
+- [x] Landed as `28dc25b` on master (single combined commit after full e2e)
+
+### Verification evidence (agent e2e)
+
+- Build: `TM_PLUGIN_SKIP_LSP=1 ./build.sh dev` → Loaded plugin green
+- Unit: `pytest tests/test_call_wait.py` → 6/6
+- Live ad-hoc: readiness/wait, tag→place→assert→RemoveByTag restore, ControlEditMode Item, ControlInventory select, ML collectMs results≥1, Save/Load named MB, structured `INVALID_INPUT` → 20/20 and earlier 28/28
+- Live tools: 98 registered; all Tier A names present; `RunManialinkScript` schema includes `collectMs`
 
 ---
 
 ## Handoff
 
-Plan saved for execution. Recommended start: **P0 Task P0.1** immediately (high value, low risk, no E++ changes).
+**COMPLETE** as of 2026-08-12 (`28dc25b`). No further Tier A work required unless regressions appear.
