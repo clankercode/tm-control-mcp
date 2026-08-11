@@ -27,8 +27,15 @@ namespace TmMcp {
             Json::Value data = Json::Object();
             data["alive"] = true;
             data["port"] = S_TmMcpPort;
-            data["plugin"] = "TM Control MCP";
-            data["version"] = "0.1.0";
+            auto self = Meta::ExecutingPlugin();
+            if (self !is null) {
+                data["plugin"] = self.Name;
+                data["version"] = self.Version;
+                data["id"] = self.ID;
+            } else {
+                data["plugin"] = "TM Control MCP";
+                data["version"] = "unknown";
+            }
             return MakeResponse(id, route, data, "");
         }
 

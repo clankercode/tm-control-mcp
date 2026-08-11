@@ -48,7 +48,8 @@ If that is unacceptable for your environment, **do not load the plugin**.
 
 4. **Treat DEV tools as trusted-developer only**  
    `DevSafeRead`, `DevGetPointers`, `DevComputeItemsPointers`, `RunRandomFuzz`, etc.  
-   They are registered in normal builds today; do not expose the socket on shared hosts.
+   are registered **only when built with `defines = ["DEV"]`** (folder dev staging).  
+   Release `.op` builds omit them from the tool list. Still: do not expose the socket on shared hosts.
 
 5. **Plugin manager guards**  
    `ControlPlugin` refuses **disable/unload of itself** so a client cannot brick the channel accidentally.  

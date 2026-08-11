@@ -723,6 +723,7 @@ namespace TmMcp {
             || name == "InspectMacroblockModel"
             || name == "ListMacroblockInstances"
             || name == "FindBlockModels"
+#if DEV
             || name == "RunGizmoApplyBlock"
             || name == "RunRandomFuzz"
             || name == "RunComputeItemsDiagnostic"
@@ -730,6 +731,7 @@ namespace TmMcp {
             || name == "DevGetPointers"
             || name == "DevComputeItemsPointers"
             || name == "DumpMacroblockHeader"
+#endif
             || name == "CreateNamedMacroblock"
             || name == "GetNamedMacroblock"
             || name == "ListNamedMacroblocks"
@@ -833,6 +835,7 @@ namespace TmMcp {
         if (name == "InspectMacroblockModel") return InspectMacroblockModel(input);
         if (name == "ListMacroblockInstances") return ListMacroblockInstances(input);
         if (name == "FindBlockModels") return FindBlockModels(input);
+#if DEV
         if (name == "RunGizmoApplyBlock") return RunGizmoApplyBlock(input);
         if (name == "RunRandomFuzz") return RunRandomFuzz(input);
         if (name == "RunComputeItemsDiagnostic") return RunComputeItemsDiagnostic(input);
@@ -840,6 +843,7 @@ namespace TmMcp {
         if (name == "DevGetPointers") return RunDevGetPointers(input);
         if (name == "DevComputeItemsPointers") return RunDevComputeItemsPointers(input);
         if (name == "DumpMacroblockHeader") return RunDumpMacroblockHeader(input);
+#endif
         if (name == "CreateNamedMacroblock") return CreateNamedMacroblock(input);
         if (name == "GetNamedMacroblock") return GetNamedMacroblockTool(input);
         if (name == "ListNamedMacroblocks") return ListNamedMacroblocks(input);
@@ -919,7 +923,7 @@ namespace TmMcp {
         tools.Add(MakeTool("OpenMapInEditor", "Open a local map file in the editor.", '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapInfo", "Get current editor map name and counts.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapEnvironment", "Read map collection, decoration, map type/style, mood, and collection-unit metadata.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("ControlMapObjectives", "Get or set race objectives on the current editor map: NbClones (clone mode), NbLaps / IsLapRace. action=get|set. For set: optional nbClones (0-64), nbLaps (1-99), isLapRace (bool). Uses E++ offset writes for const API fields.", '{"type":"object","properties":{"action":{"type":"string"},"nbClones":{"type":"integer"},"nbLaps":{"type":"integer"},"isLapRace":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
+        tools.Add(MakeTool("ControlMapObjectives", "Get or set race objectives on the current editor map: NbClones (clone mode), NbLaps / IsLapRace. action=get|set. For set: optional nbClones (0-64), nbLaps (0-99; 0=multilap hide counter), isLapRace (bool). Uses E++ offset writes for const API fields.", '{"type":"object","properties":{"action":{"type":"string"},"nbClones":{"type":"integer"},"nbLaps":{"type":"integer"},"isLapRace":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
         tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx.", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetDialog", "Inspect Trackmania's current BasicDialogs state and active dialog frame.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("RespondDialog", "Respond to Trackmania BasicDialogs. action: yes, no, cancel, ok, validate, hide.", '{"type":"object","properties":{"action":{"type":"string"}},"required":["action"],"additionalProperties":false}'));
@@ -945,6 +949,7 @@ namespace TmMcp {
         tools.Add(MakeTool("InspectMacroblockModel", "Inspect a loaded macroblock model by name, file path, or index via E++ MacroblockSpec conversion.", '{"type":"object","properties":{"name":{"type":"string"},"path":{"type":"string"},"index":{"type":"integer"},"limit":{"type":"integer"},"includeItems":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ListMacroblockInstances", "List placed map macroblock instances with coord, order, user data, size, unit coords, and model metadata.", '{"type":"object","properties":{"limit":{"type":"integer"},"offset":{"type":"integer"},"recent":{"type":"boolean"},"unitCoordLimit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("FindBlockModels", "Search loaded editor block models.", '{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"},"includeTerrain":{"type":"boolean"},"terrainOnly":{"type":"boolean"}},"additionalProperties":false}'));
+#if DEV
         tools.Add(MakeTool("RunGizmoApplyBlock", "DEV diagnostic: apply a free block through E++'s actual gizmo apply path, with mapPre/mapPost and recent block readback.", '{"type":"object","properties":{"blockName":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"variant":{"type":"integer"},"autofocus":{"type":"boolean"},"autofocusDistance":{"type":"number"}},"required":["blockName","x","y","z"],"additionalProperties":false}'));
         tools.Add(MakeTool("RunRandomFuzz", "DEV fuzz test: place N random blocks and items (picked from editor inventory) at random positions/rotations within a bounding box. Exercises the Editor++ free-placement path (PlaceBlocks/PlaceItems routed through PlaceMacroblock donor). bbox coords are world-space. blockRatio in 0..1 (default 0.6). Reports placed/attempted counts, exceptions, and mapPre/mapPost summaries.", '{"type":"object","properties":{"bboxMin":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"bboxMax":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"iterations":{"type":"integer"},"blockRatio":{"type":"number"}},"required":["bboxMin","bboxMax","iterations"],"additionalProperties":false}'));
         tools.Add(MakeTool("RunComputeItemsDiagnostic", "DEV diagnostic: create a CGameEditorMapMacroBlockInstance at the given grid coord for a macroblock file, call ComputeItemsForMacroblockInstance, and report wrapper pointers + live AnchoredObject matches. Optional testSkin={itemIndex,bgSkin,fgSkin} tries SetItemSkin(s) on the wrapper and reports pre/post skin persistence.", '{"type":"object","properties":{"mbPath":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"force":{"type":"boolean"},"testSkin":{"type":"object","properties":{"itemIndex":{"type":"integer"},"bgSkin":{"type":"string"},"fgSkin":{"type":"string"}}}},"required":["mbPath","x","y","z"],"additionalProperties":false}'));
@@ -952,6 +957,7 @@ namespace TmMcp {
         tools.Add(MakeTool("DevGetPointers", "Return raw pointers for the current editor, PluginMapType, Challenge, Cursor, and App, with per-nod vtable/refcount peeks. Optional listAnchoredObjects, listBlocks, and listPmtItems include map items/blocks/pmt.Items pointers (capped by *Limit params, default 20). listPmtItems exposes healthy CGameCtnEditorScriptAnchoredObject wrappers for memory comparison against compute-path wrappers.", '{"type":"object","properties":{"listAnchoredObjects":{"type":"boolean"},"anchoredObjectsLimit":{"type":"integer"},"listBlocks":{"type":"boolean"},"blocksLimit":{"type":"integer"},"listPmtItems":{"type":"boolean"},"pmtItemsLimit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("DevComputeItemsPointers", "Like RunComputeItemsDiagnostic but NEVER accesses wrapper fields (Position/ItemModel). Returns raw pointers + vtable/refcount peeks for each MacroblockInstanceItemsResults entry so you can inspect layout via DevSafeRead without crashing.", '{"type":"object","properties":{"mbPath":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"force":{"type":"boolean"}},"required":["mbPath","x","y","z"],"additionalProperties":false}'));
         tools.Add(MakeTool("DumpMacroblockHeader", "RE helper: dump CGameCtnMacroBlockInfo flags (Initialized/Connected/IsGround/Has*), buffer lengths, GeneratedBlockInfo ptr, and raw u32 words 0x100..0x1FC. Resolve by name, path, or index.", '{"type":"object","properties":{"name":{"type":"string"},"path":{"type":"string"},"index":{"type":"integer"}},"additionalProperties":false}'));
+#endif
         tools.Add(MakeTool("CreateNamedMacroblock", "Create or replace an in-memory named macroblock.", '{"type":"object","properties":{"name":{"type":"string"},"replace":{"type":"boolean"}},"required":["name"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetNamedMacroblock", "Inspect an in-memory named macroblock and return stored block/item specs.", '{"type":"object","properties":{"name":{"type":"string"},"limit":{"type":"integer"},"includeItems":{"type":"boolean"}},"required":["name"],"additionalProperties":false}'));
         tools.Add(MakeTool("ListNamedMacroblocks", "List in-memory named macroblocks.", '{"type":"object","properties":{},"additionalProperties":false}'));
@@ -1288,19 +1294,15 @@ namespace TmMcp {
                 applied["nbClonesOk"] = ok;
                 if (!ok) return MakeError("SetMapNbClones failed (readback mismatch)", "write_failed", true, "editor");
             }
-            if (input.HasKey("isLapRace")) {
-                bool isLap = bool(input["isLapRace"]);
-                bool ok = Editor::SetMapIsLapRace(map, isLap);
+            // Prefer combined lap mode when either field present (keeps Challenge+MapInfo synced).
+            if (input.HasKey("isLapRace") || input.HasKey("nbLaps")) {
+                bool isLap = input.HasKey("isLapRace") ? bool(input["isLapRace"]) : true;
+                uint n = input.HasKey("nbLaps") ? uint(Math::Clamp(int(input["nbLaps"]), 0, 99)) : uint(Editor::GetMapNbLaps(map));
+                bool ok = Editor::SetMapLapMode(map, isLap, n);
                 applied["isLapRace"] = isLap;
-                applied["isLapRaceOk"] = ok;
-                if (!ok) return MakeError("SetMapIsLapRace failed", "write_failed", true, "editor");
-            }
-            if (input.HasKey("nbLaps")) {
-                uint n = uint(Math::Clamp(int(input["nbLaps"]), 1, 99));
-                bool ok = Editor::SetMapNbLaps(map, n);
                 applied["nbLaps"] = int(n);
-                applied["nbLapsOk"] = ok;
-                if (!ok) return MakeError("SetMapNbLaps failed", "write_failed", true, "editor");
+                applied["lapModeOk"] = ok;
+                if (!ok) return MakeError("SetMapLapMode failed", "write_failed", true, "editor");
             }
             Json::Value result = Json::Object();
             result["ok"] = true;

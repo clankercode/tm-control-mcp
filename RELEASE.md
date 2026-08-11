@@ -92,11 +92,16 @@ TM_PLUGIN_SKIP_LSP=1 ./build.sh dev
 
 ```bash
 python3 -m pytest tests/test_call_wait.py -q
-# Optional broader:
-python3 -m pytest tests/ -q --ignore=tests/test_camera_math.py  # live-game tests as appropriate
 ```
 
 CI runs the wait-helper unit tests on push (see `.github/workflows/ci.yml`).
+
+### Optional live smoke (game required)
+
+```bash
+python3 tools/smoke_tag_cleanup.py
+# readiness → SetAgentTag → place item → AssertPlacement → RemoveByTag
+```
 
 ---
 

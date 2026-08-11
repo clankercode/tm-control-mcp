@@ -15,7 +15,7 @@ themselves — without clicking the UI by hand.
 | **Platform** | Trackmania (current) + [Openplanet](https://openplanet.dev/) |
 | **Hard deps** | [Editor++](https://openplanet.dev/plugin/editor) (`Editor`) · [MLHook](https://openplanet.dev/plugin/mlhook) |
 | **License** | Dual **[Unlicense](./UNLICENSE)** **or** **[CC0 1.0](./CC0-1.0)** — public domain / no attribution required (GitHub may show “Other”) |
-| **Status** | Active development (`info.toml` `0.1.0`) — powerful, not yet a polished “1.0 product” |
+| **Status** | Active development (`info.toml` `0.2.0`) — first tagged public release |
 | **Script timeout** | `15000` ms (`info.toml` `[script] timeout`) — long menu/place/wait tools need headroom |
 | **Security** | Localhost JSON, **no auth** → [SECURITY.md](./SECURITY.md) |
 | **Releasing** | Agent checklist → [RELEASE.md](./RELEASE.md) · history → [CHANGELOG.md](./CHANGELOG.md) |
@@ -75,10 +75,11 @@ themselves — without clicking the UI by hand.
 ### Dev / RE diagnostics
 
 Pointer peeks, safe memory reads, gizmo/fuzz helpers, macroblock header dumps —
-for plugin authors and crash investigation, not required for normal map building.
+**only in DEV builds** (`./build.sh dev` injects `defines = ["DEV"]`). Release
+`.op` packages omit these tools from the registry.
 
 **Ground truth tool list:** `{"route":"tools"}` at runtime, or every
-`MakeTool("…")` in `src/McpTools.as` (**107 tools** at last count).
+`MakeTool("…")` in `src/McpTools.as` (**100 tools** (release; +7 DEV-only) at last count).
 
 ---
 
@@ -279,7 +280,7 @@ python3 tools/call.py EditNewMap '{"environment":"Stadium","decoration":"48x48Da
 
 ---
 
-## Current tools (107)
+## Current tools (100 release / 107 DEV)
 
 Ground truth: every `MakeTool("…")` registration in `src/McpTools.as`.
 Prefer `{"route":"tools"}` at runtime if this list drifts.
@@ -402,6 +403,9 @@ Menu stack is **landed**. Clicks use `CControlBase::OnAction` — **not**
 | `ListGuides` / `GetGuide` | In-plugin documentation topics. |
 
 ### DEV / RE diagnostics
+
+Only registered when the plugin is built with `defines = ["DEV"]`
+(`./build.sh dev`). Release `.op` / `release-check` builds **omit** these tools.
 
 | Tool | Summary |
 |------|---------|

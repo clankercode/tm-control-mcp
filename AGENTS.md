@@ -9,7 +9,9 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
 - If `openplanet-lsp` floods nested-enum / dependency false positives, `TM_PLUGIN_SKIP_LSP=1 ./build.sh dev` is OK when the **in-game Openplanet compile is green**.
 - `info.toml` `[script] timeout = 15000` (ms). Long tools need this headroom; raise + rebuild if Openplanet kills the script.
 - Server host/port are Openplanet **Settings → TM Control MCP → Server**. Host/port changes need plugin reload. Also via `ListPluginSettings` / `SetPluginSetting`.
+- **DEV tools:** only with `./build.sh dev` (`#if DEV`). Release builds omit DevSafeRead/fuzz/etc.
 - Security: localhost-only, no auth — `SECURITY.md`.
+- Live smoke when game up: `python3 tools/smoke_tag_cleanup.py`
 - `tools/call.py` returns compact JSON by default and checks for a real `Trackmania.exe` process before socket calls (`--skip-process-check` only for raw socket debug).
 - Wait helpers: `--wait-mode Editor|Menu|Race`, `--until-ready editor|menu|any`, `--wait-timeout 30`.
 
