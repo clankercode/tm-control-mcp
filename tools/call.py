@@ -99,7 +99,15 @@ def find_new_screenshot(before: dict[str, tuple[float, int]], extension: str, ti
         return {"detected": False, "linuxPath": "", "size": 0}
 
     path, (mtime, size) = latest
-    return {"detected": True, "linuxPath": path, "mtime": mtime, "size": size}
+    info = {"detected": True, "linuxPath": path, "mtime": mtime, "size": size}
+    # Prefer home-relative form for logs/agents; keep absolute linuxPath for openers.
+    try:
+        home = str(Path.home())
+        if path.startswith(home + os.sep):
+            info["linuxPathHomeRelative"] = "~" + path[len(home) :]
+    except Exception:
+        pass
+    return info
 
 
 def attach_screenshot_path(response: object, screenshot_info: dict) -> None:

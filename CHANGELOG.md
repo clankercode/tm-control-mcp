@@ -5,6 +5,14 @@ All notable changes to **tm-control-mcp** are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/).
 Versions follow `info.toml` `[meta] version`.
 
+## [Unreleased]
+
+### Changed
+
+- Plugin list/get default to `sourcePathBase` (basename); full path via `includeSourcePath`
+- `call.py` screenshot detection adds `linuxPathHomeRelative`
+- README documents tested Editor++ 0.8.x and MLHook ≥ 0.5.4
+
 ## [0.2.0] — 2026-08-12
 
 First tagged public GitHub release.

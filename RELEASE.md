@@ -223,6 +223,22 @@ Dual **Unlicense + CC0** is intentional. GitHub’s license detector often shows
 
 ---
 
+## 9. Optional: Openplanet site listing
+
+In-client install via [openplanet.dev](https://openplanet.dev/) is a **human** step
+(site account, plugin page, signed package rules). Not required for GitHub `.op`
+distribution.
+
+Checklist when you do publish there:
+
+1. Create/update plugin page; set name **TM Control MCP**, category Development
+2. Dependencies: Editor++, MLHook (versions as in README)
+3. Upload the same `.op` attached to the GitHub release (no DEV defines)
+4. Note localhost socket + no-auth in the site description (link SECURITY.md)
+5. After approval, record `siteid` in docs/README if useful for `Meta::GetPluginFromSiteID`
+
+---
+
 ## Quick checklist (copy/paste)
 
 ```text

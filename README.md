@@ -88,14 +88,17 @@ Pointer peeks, safe memory reads, gizmo/fuzz helpers, macroblock header dumps �
 1. **Trackmania** (Nadeo) running under your normal install (native Windows or Proton/Wine).
 2. **[Openplanet](https://openplanet.dev/)** for Trackmania.
 3. Plugins (install from Openplanet site or your usual channel):
-   - **Editor++** — dependency id `Editor` in `info.toml`
-   - **MLHook** — dependency id `MLHook`
+   - **[Editor++](https://openplanet.dev/plugin/editor)** — dependency id `Editor`  
+     Tested with **0.8.x** (including letter/dev builds that export free placement + map objectives).  
+     Needs a build that exports `PlaceBlocks` / `DeleteItems` / `GetMapNbClones` (etc.).
+   - **[MLHook](https://openplanet.dev/plugin/mlhook)** — dependency id `MLHook`  
+     Tested with **≥ 0.5.4** (site id 252). Required for menu `Router_Push` and Manialink inject.
 4. This plugin loaded as a **folder plugin** (dev) or `.op` package (release build).
 
 Optional host tooling:
 
 - `python3` for `tools/call.py` and tests
-- [`openplanet-lsp`](https://github.com/clankercode) / `tm-remote-build` if you use `./build.sh dev` reload (optional; can skip)
+- `openplanet-lsp` / `tm-remote-build` if you use `./build.sh dev` reload (optional; can skip)
 
 ---
 

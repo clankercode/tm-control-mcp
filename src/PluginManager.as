@@ -2,6 +2,20 @@ namespace TmMcp {
     // Openplanet Meta:: plugin + settings surface for agents.
     // Docs: https://openplanet.dev/docs/api/Meta
 
+    // When true, PluginToJson includes full SourcePath (may be Wine absolute).
+    bool g_IncludePluginSourcePath = false;
+
+    string SourcePathBaseName(const string &in path) {
+        if (path.Length == 0) return "";
+        int slash = path.LastIndexOf("/");
+        int bslash = path.LastIndexOf("\\");
+        int cut = slash;
+        if (bslash > cut) cut = bslash;
+        if (cut < 0) return path;
+        if (cut + 1 >= int(path.Length)) return "";
+        return path.SubStr(cut + 1);
+    }
+
     Meta::Plugin@ ResolvePlugin(const string &in idOrName, string &out err) {
         err = "";
         if (idOrName.Length == 0) {
@@ -83,7 +97,13 @@ namespace TmMcp {
         o["version"] = p.Version;
         o["type"] = PluginTypeToString(p.Type);
         o["source"] = PluginSourceToString(p.Source);
-        o["sourcePath"] = p.SourcePath;
+        // Full SourcePath can be a Wine/Proton absolute path (user machine layout).
+        // Always emit basename; full path only when includeSourcePath=true on GetPlugin.
+        string srcPath = p.SourcePath;
+        o["sourcePathBase"] = SourcePathBaseName(srcPath);
+        if (g_IncludePluginSourcePath) {
+            o["sourcePath"] = srcPath;
+        }
         o["enabled"] = p.Enabled;
         o["favorite"] = p.Favorite;
         o["essential"] = p.Essential;
@@ -277,6 +297,9 @@ namespace TmMcp {
         string query = input.HasKey("query") ? string(input["query"]) : "";
         string q = query.ToLower();
 
+        bool prevPath = g_IncludePluginSourcePath;
+        g_IncludePluginSourcePath = input.HasKey("includeSourcePath") && bool(input["includeSourcePath"]);
+
         Json::Value plugins = Json::Array();
         auto all = Meta::AllPlugins();
         if (all !is null) {
@@ -300,9 +323,12 @@ namespace TmMcp {
                     auto u = ul[i];
                     Json::Value o = Json::Object();
                     o["id"] = u.ID;
-                    o["path"] = u.Path;
-                    string uid = string(o["id"]);
-                    string upath = string(o["path"]);
+                    o["pathBase"] = SourcePathBaseName(u.Path);
+                    if (g_IncludePluginSourcePath) {
+                        o["path"] = u.Path;
+                    }
+                    string uid = u.ID;
+                    string upath = u.Path;
                     if (q.Length == 0
                         || uid.ToLower().IndexOf(q) >= 0
                         || upath.ToLower().IndexOf(q) >= 0) {
@@ -311,6 +337,8 @@ namespace TmMcp {
                 }
             }
         }
+
+        g_IncludePluginSourcePath = prevPath;
 
         Json::Value output = Json::Object();
         output["plugins"] = plugins;
@@ -332,7 +360,12 @@ namespace TmMcp {
         string err = "";
         auto p = ResolvePlugin(id, err);
         if (p is null) return MakeError(err, "not_found", false, "", "Use ListPlugins; match by id preferred");
+
+        bool prevPath = g_IncludePluginSourcePath;
+        g_IncludePluginSourcePath = input.HasKey("includeSourcePath") && bool(input["includeSourcePath"]);
         Json::Value output = PluginToJson(p, true);
+        g_IncludePluginSourcePath = prevPath;
+
         bool withSettings = input.HasKey("includeSettings") && bool(input["includeSettings"]);
         if (withSettings) {
             Json::Value arr = Json::Array();

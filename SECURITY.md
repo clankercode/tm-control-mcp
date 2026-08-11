@@ -72,9 +72,17 @@ If that is unacceptable for your environment, **do not load the plugin**.
 This is a small public-domain project. Prefer:
 
 1. GitHub issues on [clankercode/tm-control-mcp](https://github.com/clankercode/tm-control-mcp) for non-sensitive bugs
-2. For issues that would help an attacker on a mis-bound socket, email the maintainer listed in `info.toml` (`XertroV`) or open a **private** advisory if/when GitHub security advisories are enabled on the repo
+2. **Private vulnerability reporting** on the GitHub repo (Security → Report a vulnerability) for issues that would help an attacker on a mis-bound socket
 
 Please include Openplanet version, plugin version, and whether the socket host was left at localhost.
+
+---
+
+## Runtime path hygiene
+
+- Plugin listings default to **`sourcePathBase`** (basename). Full Wine/Proton paths require `includeSourcePath: true`.
+- Screenshot helpers may still return absolute `linuxPath` so tools can open the file; `call.py` also sets `linuxPathHomeRelative` (`~/…`).
+- Map author fields come from the **loaded map**, not from this repository.
 
 ---
 
