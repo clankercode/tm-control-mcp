@@ -394,4 +394,146 @@ namespace TmMcp {
         output["items"] = arr;
         return MakeSuccess(output);
     }
+
+    // Dump CGameCtnMacroBlockInfo public flags + buffer lens + raw header words.
+    // Used to RE what differs between native item-bearing MBs and our temp-written donors.
+    Json::Value@ RunDumpMacroblockHeader(Json::Value &in input) {
+        auto editor = GetEditor();
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available");
+
+        string source;
+        auto model = ResolveMacroblockModel(editor.PluginMapType, input, source);
+        if (model is null) return MakeError("macroblock model not found via " + source);
+
+        uint64 ptr = 0;
+        try { ptr = Editor::GetNodPointer(model); } catch {}
+        if (ptr == 0) return MakeError("could not resolve nod pointer");
+
+        Json::Value output = Json::Object();
+        output["source"] = source;
+        output["ptr"] = PtrToHex(ptr);
+        output["idName"] = string(model.IdName);
+        output["name"] = string(model.Name);
+        output["initialized"] = model.Initialized;
+        output["connected"] = model.Connected;
+        output["isGround"] = model.IsGround;
+        output["hasStart"] = model.HasStart;
+        output["hasFinish"] = model.HasFinish;
+        output["hasCheckpoint"] = model.HasCheckpoint;
+        output["hasMultilap"] = model.HasMultilap;
+        output["collectionId"] = int(model.CollectionId);
+        output["collectionText"] = string(model.CollectionId_Text);
+        try { output["refCount"] = Reflection::GetRefCount(model); } catch { output["refCount"] = -1; }
+
+        // Buffer lengths: prefer E++ MacroblockSpec conversion (always available)
+        try {
+            auto spec = Editor::MakeMacroblockSpec(model);
+            if (spec !is null) {
+                output["nbBlocks"] = int(spec.blocks.Length);
+                output["nbItems"] = int(spec.items.Length);
+                // skins not always on shared interface
+            }
+        } catch {
+            output["specError"] = getExceptionInfo();
+        }
+
+        // Known E++ offsets (Dev.as) — avoid GetOffset (not available in MCP)
+        // HasMultilap@0x148 → blocks 0x150, skins 0x160, items 0x170
+        uint16 oGen = 0x130;
+        uint16 oGround = 0x138;
+        uint16 oBlocks = 0x150;
+        uint16 oSkins = 0x160;
+        uint16 oItems = 0x170;
+        Json::Value offs = Json::Object();
+        offs["GeneratedBlockInfo"] = int(oGen);
+        offs["IsGround"] = int(oGround);
+        offs["BlocksBuf"] = int(oBlocks);
+        offs["SkinsBuf"] = int(oSkins);
+        offs["ItemsBuf"] = int(oItems);
+        output["offsets"] = offs;
+
+        try {
+            uint64 bp = Dev::SafeReadUInt64(ptr + uint64(oBlocks));
+            uint32 bl = Dev::SafeReadUInt32(ptr + uint64(oBlocks) + 0x8);
+            output["blocksBufPtr"] = PtrToHex(bp);
+            output["blocksLenCapU32"] = int(bl);
+            output["blocksLen"] = int(bl & 0xFFFF);
+            output["blocksCap"] = int((bl >> 16) & 0xFFFF);
+        } catch { output["blocksBufError"] = getExceptionInfo(); }
+        try {
+            uint64 ip = Dev::SafeReadUInt64(ptr + uint64(oItems));
+            uint32 il = Dev::SafeReadUInt32(ptr + uint64(oItems) + 0x8);
+            output["itemsBufPtr"] = PtrToHex(ip);
+            output["itemsLenCapU32"] = int(il);
+            output["itemsLen"] = int(il & 0xFFFF);
+            output["itemsCap"] = int((il >> 16) & 0xFFFF);
+        } catch { output["itemsBufError"] = getExceptionInfo(); }
+        try {
+            uint64 sp = Dev::SafeReadUInt64(ptr + uint64(oSkins));
+            uint32 sl = Dev::SafeReadUInt32(ptr + uint64(oSkins) + 0x8);
+            output["skinsBufPtr"] = PtrToHex(sp);
+            output["skinsLenCapU32"] = int(sl);
+            output["skinsLen"] = int(sl & 0xFFFF);
+            output["skinsCap"] = int((sl >> 16) & 0xFFFF);
+        } catch { output["skinsBufError"] = getExceptionInfo(); }
+
+        // GeneratedBlockInfo / Model pointers
+        try {
+            if (model.GeneratedBlockInfo !is null) {
+                output["generatedBlockInfoPtr"] = PtrToHex(Editor::GetNodPointer(model.GeneratedBlockInfo));
+                output["generatedBlockInfoName"] = string(model.GeneratedBlockInfo.IdName);
+            } else {
+                output["generatedBlockInfoPtr"] = "null";
+            }
+        } catch {
+            output["generatedBlockInfoError"] = getExceptionInfo();
+        }
+        try {
+            if (model.GeneratedBlockModel !is null) {
+                output["generatedBlockModelPtr"] = PtrToHex(Editor::GetNodPointer(model.GeneratedBlockModel));
+                output["generatedBlockModelName"] = string(model.GeneratedBlockModel.IdName);
+            } else {
+                output["generatedBlockModelPtr"] = "null";
+            }
+        } catch {
+            output["generatedBlockModelError"] = getExceptionInfo();
+        }
+
+        // Raw u32 words from 0x100 .. 0x1FC (covers gen, ground, buffers, trailing state)
+        Json::Value words = Json::Array();
+        for (uint off = 0x100; off < 0x200; off += 4) {
+            Json::Value w = Json::Object();
+            w["off"] = "0x" + Text::Format("%x", off);
+            try {
+                uint32 v = Dev::SafeReadUInt32(ptr + uint64(off));
+                w["hex"] = Text::Format("%08x", v);
+            } catch {
+                w["error"] = getExceptionInfo();
+            }
+            words.Add(w);
+        }
+        output["rawU32_0x100_0x1fc"] = words;
+
+        // First item element head if itemsLen > 0 (MwFastBuffer of pointers)
+        try {
+            int iLen = output.HasKey("itemsLen") ? int(output["itemsLen"]) : 0;
+            if (iLen > 0) {
+                uint64 itemsArr = Dev::SafeReadUInt64(ptr + uint64(oItems));
+                uint64 item0Ptr = Dev::SafeReadUInt64(itemsArr);
+                Json::Value ih = Json::Object();
+                ih["elemPtr"] = PtrToHex(item0Ptr);
+                string raw = "";
+                for (uint off = 0; off < 0x40; off += 4) {
+                    raw += Text::Format("%08x", Dev::SafeReadUInt32(item0Ptr + uint64(off)));
+                    if (off + 4 < 0x40) raw += " ";
+                }
+                ih["raw0_3f"] = raw;
+                output["item0"] = ih;
+            }
+        } catch {
+            output["item0Error"] = getExceptionInfo();
+        }
+
+        return MakeSuccess(output);
+    }
 }

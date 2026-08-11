@@ -714,6 +714,7 @@ namespace TmMcp {
             || name == "DevSafeRead"
             || name == "DevGetPointers"
             || name == "DevComputeItemsPointers"
+            || name == "DumpMacroblockHeader"
             || name == "CreateNamedMacroblock"
             || name == "GetNamedMacroblock"
             || name == "ListNamedMacroblocks"
@@ -799,6 +800,7 @@ namespace TmMcp {
         if (name == "DevSafeRead") return RunDevSafeRead(input);
         if (name == "DevGetPointers") return RunDevGetPointers(input);
         if (name == "DevComputeItemsPointers") return RunDevComputeItemsPointers(input);
+        if (name == "DumpMacroblockHeader") return RunDumpMacroblockHeader(input);
         if (name == "CreateNamedMacroblock") return CreateNamedMacroblock(input);
         if (name == "GetNamedMacroblock") return GetNamedMacroblockTool(input);
         if (name == "ListNamedMacroblocks") return ListNamedMacroblocks(input);
@@ -886,6 +888,7 @@ namespace TmMcp {
         tools.Add(MakeTool("DevSafeRead", "Read memory at an arbitrary address using Dev::SafeRead*. ptr accepts hex string \"0x...\" or integer. Optional offset/offsets (array of ints) are summed. kind: u8|u16|u32|u64|i8|i16|i32|i64|f32|vec2|vec3|vec4|cstr|bytes. For cstr/bytes, len caps bytes read (default 256/64, bytes max 4096). Reports probe result, value, and readError on faults.", '{"type":"object","properties":{"ptr":{"type":["string","integer"]},"offset":{"type":"integer"},"offsets":{"type":"array","items":{"type":"integer"}},"kind":{"type":"string"},"len":{"type":"integer"}},"required":["ptr"],"additionalProperties":false}'));
         tools.Add(MakeTool("DevGetPointers", "Return raw pointers for the current editor, PluginMapType, Challenge, Cursor, and App, with per-nod vtable/refcount peeks. Optional listAnchoredObjects, listBlocks, and listPmtItems include map items/blocks/pmt.Items pointers (capped by *Limit params, default 20). listPmtItems exposes healthy CGameCtnEditorScriptAnchoredObject wrappers for memory comparison against compute-path wrappers.", '{"type":"object","properties":{"listAnchoredObjects":{"type":"boolean"},"anchoredObjectsLimit":{"type":"integer"},"listBlocks":{"type":"boolean"},"blocksLimit":{"type":"integer"},"listPmtItems":{"type":"boolean"},"pmtItemsLimit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("DevComputeItemsPointers", "Like RunComputeItemsDiagnostic but NEVER accesses wrapper fields (Position/ItemModel). Returns raw pointers + vtable/refcount peeks for each MacroblockInstanceItemsResults entry so you can inspect layout via DevSafeRead without crashing.", '{"type":"object","properties":{"mbPath":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"force":{"type":"boolean"}},"required":["mbPath","x","y","z"],"additionalProperties":false}'));
+        tools.Add(MakeTool("DumpMacroblockHeader", "RE helper: dump CGameCtnMacroBlockInfo flags (Initialized/Connected/IsGround/Has*), buffer lengths, GeneratedBlockInfo ptr, and raw u32 words 0x100..0x1FC. Resolve by name, path, or index.", '{"type":"object","properties":{"name":{"type":"string"},"path":{"type":"string"},"index":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("CreateNamedMacroblock", "Create or replace an in-memory named macroblock.", '{"type":"object","properties":{"name":{"type":"string"},"replace":{"type":"boolean"}},"required":["name"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetNamedMacroblock", "Inspect an in-memory named macroblock and return stored block/item specs.", '{"type":"object","properties":{"name":{"type":"string"},"limit":{"type":"integer"},"includeItems":{"type":"boolean"}},"required":["name"],"additionalProperties":false}'));
         tools.Add(MakeTool("ListNamedMacroblocks", "List in-memory named macroblocks.", '{"type":"object","properties":{},"additionalProperties":false}'));
