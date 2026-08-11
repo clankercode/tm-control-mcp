@@ -130,13 +130,9 @@ namespace TmMcp {
         return PosDist2(item.AbsolutePositionInMap, x, y, z) <= eps * eps;
     }
 
-    int FindLiveItemIndex(CGameCtnEditorFree@ editor, const string &in idName, float x, float y, float z, float eps, int preferredIndex, int &out candidateCount) {
+    int FindLiveItemIndex(CGameCtnEditorFree@ editor, const string &in idName, float x, float y, float z, float eps, int &out candidateCount) {
         if (editor is null || editor.Challenge is null) return -1;
         candidateCount = 0;
-        if (LiveItemMatches(editor, preferredIndex, idName, x, y, z, eps)) {
-            candidateCount = 1;
-            return preferredIndex;
-        }
         int match = -1;
         for (uint i = 0; i < editor.Challenge.AnchoredObjects.Length; i++) {
             if (!LiveItemMatches(editor, int(i), idName, x, y, z, eps)) continue;
@@ -164,13 +160,9 @@ namespace TmMcp {
         return PosDist2(pos, x, y, z) <= eps * eps;
     }
 
-    int FindLiveBlockIndex(CGameCtnEditorFree@ editor, const string &in idName, float x, float y, float z, float eps, int preferredIndex, int &out candidateCount) {
+    int FindLiveBlockIndex(CGameCtnEditorFree@ editor, const string &in idName, float x, float y, float z, float eps, int &out candidateCount) {
         if (editor is null || editor.Challenge is null) return -1;
         candidateCount = 0;
-        if (LiveBlockMatches(editor, preferredIndex, idName, x, y, z, eps)) {
-            candidateCount = 1;
-            return preferredIndex;
-        }
         int match = -1;
         for (uint i = 0; i < editor.Challenge.Blocks.Length; i++) {
             if (!LiveBlockMatches(editor, int(i), idName, x, y, z, eps)) continue;
@@ -298,7 +290,7 @@ namespace TmMcp {
 
             if (obj.kind == "item") {
                 int candidateCount = 0;
-                int idx = FindLiveItemIndex(editor, obj.idName, obj.x, obj.y, obj.z, eps, obj.lastKnownIndex, candidateCount);
+                int idx = FindLiveItemIndex(editor, obj.idName, obj.x, obj.y, obj.z, eps, candidateCount);
                 row["resolvedIndex"] = idx;
                 row["candidateCount"] = candidateCount;
                 if (idx < 0) {
@@ -321,7 +313,7 @@ namespace TmMcp {
                 removeTrackIdx.InsertLast(i);
             } else if (obj.kind == "block") {
                 int candidateCount = 0;
-                int idx = FindLiveBlockIndex(editor, obj.idName, obj.x, obj.y, obj.z, eps, obj.lastKnownIndex, candidateCount);
+                int idx = FindLiveBlockIndex(editor, obj.idName, obj.x, obj.y, obj.z, eps, candidateCount);
                 row["resolvedIndex"] = idx;
                 row["candidateCount"] = candidateCount;
                 if (idx < 0) {
