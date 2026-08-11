@@ -1,38 +1,282 @@
 # TM Control MCP
 
-Local Openplanet bridge for controlling Trackmania from external tools.
+**Local Openplanet bridge for controlling Trackmania from external tools and AI agents.**
 
-The plugin listens on `127.0.0.1:30006` by default and accepts one newline
-terminated JSON request per TCP connection. Responses are newline terminated
-JSON, and the socket is closed after each response.
+`tm-control-mcp` is an Openplanet plugin that exposes Trackmania’s **map editor**,
+**main menu**, and related game state over a **localhost JSON TCP socket**. Coding
+agents, scripts, and MCP-style clients can create maps, place freeblocks and
+items, drive menu flows, take screenshots, inject ManiaScript, and clean up after
+themselves — without clicking the UI by hand.
+
+| | |
+|---|---|
+| **Socket** | `127.0.0.1:30006` (configurable) |
+| **Protocol** | One newline-terminated JSON request per TCP connection; newline JSON response; socket closes |
+| **Platform** | Trackmania (current) + [Openplanet](https://openplanet.dev/) |
+| **Hard deps** | [Editor++](https://openplanet.dev/plugin/editor) (`Editor`) · [MLHook](https://openplanet.dev/plugin/mlhook) |
+| **License** | Dual **[Unlicense](./UNLICENSE)** **or** **[CC0 1.0](./CC0-1.0)** — public domain / no attribution required |
+| **Status** | Active development (`info.toml` `0.1.0`) — powerful, not yet a polished “1.0 product” |
+| **Script timeout** | `15000` ms (`info.toml` `[script] timeout`) — long menu/place/wait tools need headroom |
+
+> **Safety:** the control socket is **localhost-only by design**. It can mutate
+> maps, clear content, and drive menus. Do not bind it to a public interface.
+> Treat it like a local debugger attached to your game.
+
+---
+
+## What it provides
+
+### For AI / agent workflows
+
+- **Readiness & waiting** — `GetReadiness`, `WaitUntil`, and `tools/call.py`
+  `--until-ready` / `--wait-mode` so agents stop guessing “is the editor ready?”
+- **Provenance tags** — `SetAgentTag` → place → `RemoveByTag` cleans agent debris
+  without nuking the whole map (`ClearMapContent` remains available when you mean it)
+- **Placement verification** — `AssertPlacement` (deltas, near-point, tags)
+- **Structured errors** — failed tools can include `code`, `retryable`,
+  `requiredMode`, `hint` (plus the classic `error` string)
+- **In-plugin guides** — `ListGuides` / `GetGuide` (menu nav, vistas, skins,
+  cleanup, manialink runner, …)
+- **Screenshots** — `TakeScreenshot` with optional Linux-side path detection via `call.py`
+
+### Editor control
+
+- Mode / map / dialogs: `GetMode`, `OpenMapInEditor`, `GetMapInfo`,
+  `GetMapEnvironment`, `SaveMapAs`, `GetDialog` / `RespondDialog`
+- Cursor, selection, validation, camera (`ControlCursor`, `ControlSelection`,
+  `ControlValidation`, `ControlCamera`, `FocusCamera`, …)
+- **Freeblock / flying item placement** via Editor++ (`PlaceBlockViaEditorPlusPlus`,
+  `PlaceItemViaEditorPlusPlus`) — preferred over raw grid `PlaceBlock` for free work
+- **Named macroblocks** — compose in memory, batch-add blocks/items (with skins),
+  preflight, place with offset/pivot rotation; **durable JSON save/load** under the
+  Openplanet data folder
+- Inventory browse + picker control (`BrowseInventoryTree`, `ControlInventory`,
+  `SelectBlockModel` / `SelectItemModel` / `SelectMacroblockModel`, `ControlEditMode`)
+- Deletion: recent/by-index via E++ `DeleteItems` / block delete; clear-all helpers
+
+### Menu automation
+
+- Full main-menu stack: route push (`SetMenuPage`), UI layer introspection,
+  **OnAction clicks** (`ClickMenuButton` / `TriggerControlOnAction`)
+- **Never use `TriggerPageAction`** — that path crashes; this plugin uses the same
+  `CControlBase::OnAction` dispatch as a real click
+- One-shot map create: `CreateMapViaMenu` (QuickStart off) or faster `EditNewMap`
+- Leave editor/race: `BackToMainMenu`
+
+### ManiaScript injection
+
+- `RunManialinkScript` injects ad-hoc ManiaScript through MLHook into
+  **menu / playground / editor** (same contexts as MLHook’s UILayers browser)
+- Optional **result channel**: `collectMs` + `SendCustomEvent("MLHook_Event_McpAdHoc_Result", …)`
+
+### Dev / RE diagnostics
+
+Pointer peeks, safe memory reads, gizmo/fuzz helpers, macroblock header dumps —
+for plugin authors and crash investigation, not required for normal map building.
+
+**Ground truth tool list:** `{"route":"tools"}` at runtime, or every
+`MakeTool("…")` in `src/McpTools.as` (**106 tools** at last count).
+
+---
+
+## Requirements
+
+1. **Trackmania** (Nadeo) running under your normal install (native Windows or Proton/Wine).
+2. **[Openplanet](https://openplanet.dev/)** for Trackmania.
+3. Plugins (install from Openplanet site or your usual channel):
+   - **Editor++** — dependency id `Editor` in `info.toml`
+   - **MLHook** — dependency id `MLHook`
+4. This plugin loaded as a **folder plugin** (dev) or `.op` package (release build).
+
+Optional host tooling:
+
+- `python3` for `tools/call.py` and tests
+- [`openplanet-lsp`](https://github.com/clankercode) / `tm-remote-build` if you use `./build.sh dev` reload (optional; can skip)
+
+---
+
+## Install (dev folder plugin)
+
+```bash
+git clone https://github.com/clankercode/tm-control-mcp.git
+cd tm-control-mcp
+
+# Stage into Openplanet Plugins and reload (if RemoteBuild is available)
+./build.sh dev
+
+# If openplanet-lsp false-positives are noisy but in-game compile is green:
+TM_PLUGIN_SKIP_LSP=1 ./build.sh dev
+```
+
+Default stage path: `~/OpenplanetNext/Plugins/tm-control-mcp`  
+Override with `OPENPLANET_DIR` / `PLUGINS_DIR`.
+
+**Release `.op` package:**
+
+```bash
+./build.sh release   # → tm-control-mcp-<version>.op
+```
+
+Enable the plugin in Openplanet’s UI. Confirm the socket:
+
+```bash
+python3 tools/call.py status
+python3 tools/call.py GetMode
+```
+
+### Openplanet settings (host / port / timeout)
+
+This plugin exposes **Server** settings (and any future categories) through Openplanet’s
+normal settings UI **and** via MCP tools (`ListPluginSettings` / `SetPluginSetting`).
+
+**UI path**
+
+1. Open the Openplanet overlay in-game.
+2. Open **Settings** (or Scripts → plugin settings).
+3. Select **TM Control MCP** (dev builds may show **TM Control MCP (Dev)**).
+4. Category **Server**:
+   - **Socket Host** — default `127.0.0.1` (keep localhost-only)
+   - **Socket Port** — default `30006`
+   - **Startup Delay (ms)** — delay before the listener binds
+   - **Trace Requests** — log request/response payloads to `Openplanet.log`
+
+**Host/port changes require a plugin reload** (disable/enable the plugin, or
+`ControlPlugin action=reload` on this plugin — the socket drops until reload finishes).
+
+**Script execution timeout** is **not** a runtime setting: it is
+`timeout = 15000` in `info.toml` (15s). Raise it there and rebuild/reload if a
+tool legitimately needs longer than 15s of continuous script time. Openplanet
+kills the script if a single invocation exceeds this budget.
+
+**Via MCP** (after the plugin is loaded):
+
+```bash
+python3 tools/call.py ListPluginSettings '{"category":"Server"}'
+python3 tools/call.py GetPluginSetting '{"varName":"S_TmMcpPort"}'
+# Example: change port (then reload plugin + point call.py --port)
+python3 tools/call.py SetPluginSetting '{"varName":"S_TmMcpPort","value":30007}'
+python3 tools/call.py ControlPlugin '{"action":"reload","id":"tm-control-mcp"}'
+```
+
+### Plugin manager tools
+
+| Tool | Role |
+|------|------|
+| `ListPlugins` | `Meta::AllPlugins` (+ optional unloaded) |
+| `GetPlugin` | One plugin by id/name; optional embedded settings |
+| `ControlPlugin` | `enable` / `disable` / `setEnabled` / `reload` / `unload` / `load` / `openSettings` |
+| `ListPluginSettings` | List typed settings for a plugin (default: self) |
+| `GetPluginSetting` / `SetPluginSetting` / `ResetPluginSetting` | Read / write / reset |
+| `SavePluginSettings` | `Meta::SaveSettings()` |
+
+`ControlPlugin` refuses **disable/unload of itself** so agents cannot brick the
+control channel by accident. `reload` of self is allowed but drops the socket.
+---
 
 ## Protocol
 
-Status:
+One JSON object per connection, newline-terminated. Response is one JSON object + newline.
+
+**Status**
 
 ```json
 {"route":"status"}
 ```
 
-List tools:
+**List tools**
 
 ```json
 {"route":"tools"}
 ```
 
-Call a tool:
+**Call a tool**
 
 ```json
 {"route":"call","tool":"GetMode","input":{}}
 ```
 
-Tool names can also be used as routes:
+Tool names also work as routes:
 
 ```json
 {"route":"GetMapInfo","input":{}}
 ```
 
-## Current tools (84)
+Typical success shape:
+
+```json
+{"ok":true,"route":"call","data":{"tool":"GetMode","result":{"success":true,"output":{"mode":"Editor"}}}}
+```
+
+Errors may include structured fields:
+
+```json
+{"success":false,"error":"…","code":"wrong_mode","retryable":true,"requiredMode":"Editor","hint":"…"}
+```
+
+### Client: `tools/call.py`
+
+```bash
+python3 tools/call.py status
+python3 tools/call.py --pretty GetMode
+python3 tools/call.py GetReadiness '{"want":"editor"}'
+python3 tools/call.py --until-ready editor GetMapInfo
+python3 tools/call.py --wait-mode Editor --wait-timeout 30 GetMode
+python3 tools/call.py PlaceItemViaEditorPlusPlus \
+  '{"itemPath":"LightCube2m","x":128,"y":64,"z":128,"yaw":15}'
+```
+
+Behavior:
+
+- Compact JSON by default (`--pretty` for humans)
+- Checks for a real `Trackmania.exe` process before connecting (`--skip-process-check` for raw socket debug only)
+- `--strict` validates tool input against the live schema when available
+- Screenshot path detection under common Proton prefixes (`TM_USER_GAME_FOLDER` override)
+
+---
+
+## Agent-oriented quick start
+
+```bash
+# 1. Preflight
+python3 tools/call.py --until-ready editor GetReadiness '{"want":"editor"}'
+
+# 2. Tag agent work, place, verify, clean
+python3 tools/call.py SetAgentTag '{"tag":"agent:demo"}'
+python3 tools/call.py PlaceItemViaEditorPlusPlus \
+  '{"itemPath":"LightCube2m","x":200,"y":80,"z":200}'
+python3 tools/call.py AssertPlacement \
+  '{"expectItemsDelta":1,"near":{"x":200,"y":80,"z":200,"radius":5},"tag":"agent:demo","tagMinCount":1}'
+python3 tools/call.py RemoveByTag '{"tag":"agent:demo"}'
+
+# 3. Named macroblock batch place
+python3 tools/call.py CreateNamedMacroblock '{"name":"part-a","replace":true}'
+python3 tools/call.py AddBlocksToNamedMacroblock '{"name":"part-a","blocks":[
+  {"blockName":"RoadTechStraight","x":0,"y":0,"z":0,"yaw":0},
+  {"blockName":"RoadTechStraight","x":32,"y":0,"z":0,"yaw":0}
+]}'
+python3 tools/call.py PreflightNamedMacroblockPlacement '{"name":"part-a","offsetX":128,"offsetY":64,"offsetZ":128}'
+python3 tools/call.py PlaceNamedMacroblock '{"name":"part-a","offsetX":128,"offsetY":64,"offsetZ":128}'
+python3 tools/call.py SaveNamedMacroblock '{"name":"part-a"}'   # durable JSON
+
+# 4. Menu → new map (QuickStart must be off for CreateMapViaMenu)
+python3 tools/call.py CreateMapViaMenu \
+  '{"mapType":"race","environment":"Stadium","mood":"Day","inputDevice":"mouse","difficulty":"simple","timeoutMs":15000}'
+# or faster title path (Stadium: omit deco or use 48x48Day; other envs need real deco):
+python3 tools/call.py EditNewMap '{"environment":"Stadium","decoration":"48x48Day"}'
+```
+
+**Habits that keep agents reliable**
+
+1. Prefer `GetReadiness` / `WaitUntil` / `--until-ready` before mutate.
+2. Tag placements; clean with `RemoveByTag` instead of blind clear.
+3. Prefer E++ free placement and named macroblocks over one-by-one grid place.
+4. After menu nav: wait for `pageVisible` / mode change.
+5. Stadium maps: empty `decoration=""` can trap the vista prompt — use a real deco or omit.
+6. Do not depend on old disabled library plugins (`mcp-tm` / `tm-mcptm`).
+
+---
+
+## Current tools (106)
 
 Ground truth: every `MakeTool("…")` registration in `src/McpTools.as`.
 Prefer `{"route":"tools"}` at runtime if this list drifts.
@@ -49,402 +293,245 @@ Prefer `{"route":"tools"}` at runtime if this list drifts.
 | `GetDialog` | Inspect `BasicDialogs` state / active frame. |
 | `RespondDialog` | Respond: `yes`, `no`, `cancel`, `ok`, `validate`, `hide`, … |
 
-### Editor selection / cursor / camera
+### Readiness / agent provenance / assert
 
 | Tool | Summary |
 |------|---------|
-| `ControlValidation` | Validation / test / playground. Actions: `status`, `validate`, `requestEnterPlayground`, `requestLeavePlayground`, `testFromStart`, `testFromCoord`. |
-| `ControlSelection` | Copy-paste / custom selection. Actions: `status`, `showCustom`, `hideCustom`, `resetSelection`, `selectAll`, `addSelection`, `copy`, `cut`, `remove`, `symmetrize`. |
+| `GetReadiness` | Composite preflight (`want=editor\|menu\|any\|race`). |
+| `WaitUntil` | Poll mode/dialog/editorReady/pageVisible/map counts/readiness (`timedOut` on budget). |
+| `SetAgentTag` | Default provenance tag for subsequent `Place*` calls (empty clears). |
+| `ListTagged` | List tracked tagged placements (`prefix` / `tag:` prefix). |
+| `RemoveByTag` | Delete live objects matching tag (re-resolve by pos+idName); optional `dryRun`. |
+| `ClearTagIndex` | Drop sidecar index only (no map mutation). |
+| `AssertPlacement` | Verify deltas / near / tags after place. |
+
+### Editor selection / cursor / camera / edit mode
+
+| Tool | Summary |
+|------|---------|
+| `ControlValidation` | Validation / test / playground. |
+| `ControlSelection` | Copy-paste / custom selection. |
 | `GetCursor` | Editor cursor **coord** + selected block name/id. |
-| `GetEditorSelectionState` | Placement modes, picked block, selected models, cursor coord, variant. |
-| `ControlCursor` | Cursor API: `status`, `raise`, `lower`, `rotate`, `move`, `moveToCameraTarget`, `followCamera`, `disableMouseDetection`, `releaseLock`, `resetRGB`, `setRGB`. Relative moves via `direction` + `directionKind` are intentional. |
-| `GetEditorCamera` | Camera target, angles, distance, orbital position. |
-| `SetEditorCamera` | Set target/angles/distance (degrees default; `hAngleRad`/`vAngleRad` for radians). |
-| `ControlCamera` | Camera API: `status`, `centerOnCursor`, `moveToMapCenter`, `watchWholeMap`, `watchStart`, `watchClosestFinishLine`, `watchClosestCheckpoint`, `zoom`/`zoomIn`/`zoomOut`, `look`, `followCursor`, `ignoreCollisions`, `releaseLock`, `setVStep`. |
-| `FocusCamera` | Focus camera on world `(x,y,z)` via E++ animation (`distance` optional). |
-| `TakeScreenshot` | Built-in viewport screenshot; `format` optional. |
+| `GetEditorSelectionState` | Placement modes, picked block, selected models, cursor, variant. |
+| `ControlCursor` | raise/lower/rotate/move (relative/cardinal), followCamera, RGB, … |
+| `ControlEditMode` | Inspect/set `EditMode` / `PlaceMode`; optional model select. |
+| `GetEditorCamera` / `SetEditorCamera` | Numeric camera target/angles/distance. |
+| `ControlCamera` | centerOnCursor, watchWholeMap/start/CP/finish, zoom, look, … |
+| `FocusCamera` | Focus on world `(x,y,z)` via E++ animation. |
+| `TakeScreenshot` | Built-in viewport screenshot. |
 
 ### Blocks / items (read)
 
 | Tool | Summary |
 |------|---------|
-| `GetBlocks` | Blocks by optional grid/world radius, model `query`, freeblock filter. |
-| `GetRecentBlocks` | Last N blocks (freeblock `pos`/`rot`/`rotDeg`/`isFree` readback). |
-| `GetBlockAt` | Block at exact grid `(x,y,z)`. |
-| `GetItems` | Anchored items near world pos, or all up to `limit`. |
-| `GetRecentItems` | Last N anchored items in map order. |
+| `GetBlocks` | By grid/world radius, model query, freeblock filter. |
+| `GetRecentBlocks` | Last N blocks (freeblock pos/rot readback). |
+| `GetBlockAt` | Exact grid `(x,y,z)`. |
+| `GetItems` | Near world pos, or all up to `limit`. |
+| `GetRecentItems` | Last N anchored items. |
 
 ### Inventory / models
 
 | Tool | Summary |
 |------|---------|
-| `GetInventorySummary` | E++ inventory cache counts + scan status. |
-| `FindInventory` | Search blocks/items/macroblocks (`type`: `block`\|`item`\|`macroblock`\|`all`). |
-| `RefreshInventory` | Trigger E++ InventoryCache rescan (after mid-session item adds). |
-| `BrowseInventoryTree` | Read-only inventory tree (`root`, `rootIndex`, `path`, `depth`, `limit`, `query`, `includeArticles`). |
-| `InspectMacroblockModel` | Loaded macroblock by `name`/`path`/`index` via E++ MacroblockSpec. |
-| `ListMacroblockInstances` | Placed map macroblock instances (`limit`/`offset`/`recent`/`unitCoordLimit`). |
-| `FindBlockModels` | Search loaded block models (variant counts, base sizes). |
+| `GetInventorySummary` | Cache counts + scan status. |
+| `FindInventory` | Search blocks/items/macroblocks. |
+| `RefreshInventory` | Rescan after mid-session content adds. |
+| `BrowseInventoryTree` | Read-only tree (`root`, `path`, `depth`, `query`, …). |
+| `ControlInventory` | `status` / `select` / `openFolder` via inventory SelectArticle/SelectNode. |
+| `InspectMacroblockModel` | Loaded MB by name/path/index. |
+| `ListMacroblockInstances` | Placed native MB instances. |
+| `FindBlockModels` | Search loaded block models. |
+| `SelectBlockModel` / `SetCursorBlock` | Set selected block model. |
+| `SelectItemModel` / `SelectMacroblockModel` | Picker helpers for item/MB. |
 
-### DEV / RE diagnostics
-
-| Tool | Summary |
-|------|---------|
-| `RunGizmoApplyBlock` | DEV: free block through E++ gizmo apply path + mapPre/mapPost. |
-| `RunRandomFuzz` | DEV: N random blocks/items in world bbox (`bboxMin`/`bboxMax`/`iterations`/`blockRatio`). |
-| `RunComputeItemsDiagnostic` | DEV: `ComputeItemsForMacroblockInstance` + optional skin probe. |
-| `DevSafeRead` | `Dev::SafeRead*` at `ptr` (+ `offset`/`offsets`, `kind`, `len`). |
-| `DevGetPointers` | Editor/PMT/Challenge/Cursor/App pointers; optional item/block lists. |
-| `DevComputeItemsPointers` | Like compute diagnostic but pointer-only (no wrapper field access). |
-| `DumpMacroblockHeader` | RE: macroblock flags, buffers, raw words `0x100..0x1FC`. |
-
-### Named macroblocks (in-memory)
+### Named macroblocks
 
 | Tool | Summary |
 |------|---------|
-| `CreateNamedMacroblock` | Create/replace named handle (`name`, `replace`). |
-| `GetNamedMacroblock` | Inspect stored block/item specs. |
-| `ListNamedMacroblocks` | List in-memory named macroblocks. |
-| `ClearNamedMacroblock` | Clear one (`name`) or all (`all=true`). |
-| `AddBlockToNamedMacroblock` | Add free block spec (deg rotation default; optional skins). |
-| `AddBlocksToNamedMacroblock` | Batch free block specs. |
-| `AddItemToNamedMacroblock` | Add flying item by inventory path. |
-| `AddItemsToNamedMacroblock` | Batch flying item specs. |
+| `CreateNamedMacroblock` | Create/replace in-memory handle. |
+| `GetNamedMacroblock` / `ListNamedMacroblocks` / `ClearNamedMacroblock` | Inspect / list / clear. |
+| `AddBlock(s)ToNamedMacroblock` | Free block specs (variant, bg/fg skins). |
+| `AddItem(s)ToNamedMacroblock` | Flying item specs by inventory path (+ skins). |
 | `PlaceNamedMacroblock` | Place via E++ with offset/pivot rotation + mapPre/mapPost. |
 | `PreflightNamedMacroblockPlacement` | Non-mutating extents/bounds/model checks. |
+| `SaveNamedMacroblock` | Persist JSON under Openplanet data `tm-control-mcp/named-mb/`. |
+| `LoadNamedMacroblock` | Load durable JSON into memory (resolves models). |
+| `ListSavedNamedMacroblocks` | List durable JSON files. |
 
 ### Placement / deletion / undo
 
 | Tool | Summary |
 |------|---------|
 | `CanPlaceBlock` | Grid/terrain place check without mutating. |
-| `PlaceBlock` | Place grid block (`allowDestruction` optional). |
-| `PlaceBlockViaEditorPlusPlus` | Free blocks via E++ macroblock path (deg default). |
-| `PlaceItemViaEditorPlusPlus` | Flying items via E++ item path. |
-| `RemoveBlock` | Remove block at grid coords. |
-| `ClearBlocks` | `PluginMapType.RemoveAllBlocks()`. |
-| `ClearItems` | `PluginMapType.RemoveAllObjects()`. |
-| `ClearMapContent` | Clear blocks+items (`includeTerrain` optional). |
-| `RemoveRecentBlocks` | Delete last N blocks via E++ deletion. |
-| `RemoveRecentItems` | Delete last N items via **`Editor::DeleteItems`** (see below). |
-| `RemoveBlocksByIndex` | Delete explicit block indices via E++. |
-| `RemoveItemsByIndex` | Delete explicit item indices via **`Editor::DeleteItems`**. |
-| `SelectBlockModel` | Set selected block model by name (E++). |
-| `SetCursorBlock` | Alias for `SelectBlockModel`. |
+| `PlaceBlock` | Grid block place. |
+| `PlaceBlockViaEditorPlusPlus` | Free blocks via E++ (preferred for free work). |
+| `PlaceItemViaEditorPlusPlus` | Flying items via E++. |
+| `RemoveBlock` | Remove at grid coords. |
+| `ClearBlocks` / `ClearItems` / `ClearMapContent` | PluginMapType remove-all helpers. |
+| `RemoveRecentBlocks` / `RemoveBlocksByIndex` | E++ block deletion. |
+| `RemoveRecentItems` / `RemoveItemsByIndex` | E++ `DeleteItems` (buffer fallback opt-in). |
 | `Undo` / `Redo` | Editor undo/redo. |
 
-### Guides
-
-| Tool | Summary |
-|------|---------|
-| `ListGuides` | List self-doc guide topics. |
-| `GetGuide` | Fetch guide body by `topic`. |
-
-### Menu automation (landed)
+### Menu automation
 
 Menu stack is **landed**. Clicks use `CControlBase::OnAction` — **not**
-`TriggerPageAction` (that path crashes). Poll `GetActiveMenuPages` / `GetMode` /
-`GetDialog` after navigation or clicks.
+`TriggerPageAction`. Poll `GetActiveMenuPages` / `GetMode` / `GetDialog` after nav.
 
 | Tool | Summary |
 |------|---------|
-| `SetMenuPage` | MLHook `Router_Push` to hierarchical `route` (e.g. `/create/mapeditorsettings`). Optional JSON strings `extra`, `history`. Side-effect routes blocked unless `allowPlaygroundLaunch:true`. Main-menu module only. |
-| `GetMenuPage` | Top-level mode + whether main-menu module is active (not the specific route). |
-| `ListKnownMenuRoutes` | Hardcoded catalogue of known working routes. |
-| `EditNewMap` | `EditNewMap2` with Environment + Decoration + mapType. Returns immediately; poll `GetMode` → Editor. |
-| `BackToMainMenu` | Unwind Editor/Race → main menu. Async; poll `GetMode` → Menu. |
-| `GetUILayers` | List menu UI layers (index, type, visibility, attachId, pageUrl, manialink name). |
-| `GetActiveMenuPages` | Visible layers named `Page_*` (where-am-I after `SetMenuPage`). |
-| `GetLayerTree` | Walk one layer’s control tree (`layerIndex`, optional `rootPath`). |
-| `GetLayerXml` | Slice or substring-grep a layer’s Manialink XML. |
-| `ListMenuManialinkControls` | Walk menu control tree (ids/classes/visibility/path). |
-| `FindMenuButtons` | Flat list of nav buttons (`component-navigation-item` default). |
-| `FindControlsByClass` | Search controls by class pattern. |
-| `FindControlsByLabel` | Search Label values by substring. |
-| `InspectMenuControl` | Resolve ControlId; paths (`path` index, `idPath` ids); optional recursive descendants. |
-| `FocusMenuControl` | `Focus()` a control by id (no click). |
-| `SetMenuControlVisible` | `Show()`/`Hide()` by id or index path. |
-| `ClickMenuButton` | High-level nav-item click → leaf `component-navigation-item-zone` → `OnAction`. |
-| `TriggerControlOnAction` | Direct `CControlBase.OnAction()` by id or index path; optional recursive DFS. |
-| `CreateMapViaMenu` | Single-call 7-step click-chain on `Page_MapEditorSettings` → Editor. Requires QuickStart off. |
+| `SetMenuPage` | MLHook `Router_Push` hierarchical `route`. |
+| `GetMenuPage` / `ListKnownMenuRoutes` | Mode + menu module; route catalogue. |
+| `EditNewMap` | Title-control new map (env + decoration + mapType). |
+| `BackToMainMenu` | Unwind Editor/Race → menu. |
+| `GetUILayers` / `GetActiveMenuPages` / `GetLayerTree` / `GetLayerXml` | Layer introspection. |
+| `ListMenuManialinkControls` / `FindMenuButtons` / `FindControlsByClass` / `FindControlsByLabel` | Discovery. |
+| `InspectMenuControl` / `FocusMenuControl` / `SetMenuControlVisible` | Probe / focus / show-hide. |
+| `ClickMenuButton` / `TriggerControlOnAction` | Real click dispatch. |
+| `CreateMapViaMenu` | Full `Page_MapEditorSettings` click-chain → Editor (QuickStart off). |
 
-### `RunManialinkScript`
+### ManiaScript + guides
 
-Registered and implemented (`src/ManialinkRunner.as`). Injects ad-hoc ManiaScript
-via MLHook into the same three contexts as MLHook’s UILayers browser.
+| Tool | Summary |
+|------|---------|
+| `RunManialinkScript` | MLHook inject (`menu`/`in-map`/`in-editor`/`current`); optional `collectMs`/`resultEvent`. |
+| `ListGuides` / `GetGuide` | In-plugin documentation topics. |
 
-| Arg | Default | Notes |
-|-----|---------|--------|
-| `script` | *(required)* | Raw ManiaScript or inner fragment. **No outer `<manialink>` tags** — MLHook wraps as `MLHook_<pageUid>`. |
-| `context` | `current` | `current` (auto), `menu`, `in-map`, `in-editor` (aliases: playground, editor, race, …). |
-| `pageUid` | `McpAdHoc` | Sanitized attach id stem. |
-| `replace` | `true` | Replace existing injected page with same uid. |
-| `persist` | `true` | If `false`, blank/remove layer after `waitMs`. |
-| `waitMs` | `150` | Yield while inject queue runs (max 10000). |
+### DEV / RE diagnostics
 
-Inject targets:
+| Tool | Summary |
+|------|---------|
+| `RunGizmoApplyBlock` | Free block through E++ gizmo apply path. |
+| `RunRandomFuzz` | Random place N blocks/items in a world bbox. |
+| `RunComputeItemsDiagnostic` / `DevComputeItemsPointers` | Macroblock compute-items probes. |
+| `DevSafeRead` / `DevGetPointers` | Safe memory read / pointer dumps. |
+| `DumpMacroblockHeader` | MB flags/buffers/raw header words. |
 
-- `menu` → `MLHook::InjectManialinkToMenu`
-- `in-map` → `MLHook::InjectManialinkToPlayground`
-- `in-editor` → `MLHook::InjectManialinkToEditor`
+### Openplanet plugins & settings
 
-**Semantics:** fire-and-forget. No return channel unless the script emits events
-your hooks observe. Manialink pages are sandboxed from each other; use
-TitleControl / local APIs available in that context. Bad ManiaScript can force
-the game recovery restart — keep scripts small.
+| Tool | Summary |
+|------|---------|
+| `ListPlugins` | Loaded plugins (`query`, `includeDisabled`, `includeUnloaded`). |
+| `GetPlugin` | One plugin by id/name; `includeSettings` optional. |
+| `ControlPlugin` | enable/disable/reload/unload/load/openSettings (no self-disable/unload). |
+| `ListPluginSettings` | Settings for a plugin (default: this MCP plugin). |
+| `GetPluginSetting` / `SetPluginSetting` / `ResetPluginSetting` | Typed get/set/reset. |
+| `SavePluginSettings` | Persist settings to disk. |
 
-```bash
-python3 tools/call.py RunManialinkScript '{"script":"main() {}","context":"menu"}'
-```
-
-## Quick Test
-
-`tools/call.py` checks for a real Wine/Proton `Trackmania.exe` process before
-opening the socket on every route, including `status` and `tools`. This avoids
-waiting on a stale wrapper or frozen plugin when the game is not actually
-running. Use `--skip-process-check` only for raw socket debugging.
-
-`tools/call.py` returns **compact JSON** by default. Use `--pretty` when reading
-responses manually. It returns compact JSON errors if Trackmania or the plugin
-socket is unavailable.
-
-```bash
-./build.sh dev
-python3 tools/call.py status
-python3 tools/call.py --pretty status
-python3 tools/call.py GetMode
-python3 tools/call.py GetMapInfo
-python3 tools/call.py GetMapEnvironment
-python3 tools/call.py SaveMapAs '{"name":"codex-save-test","folder":"MCP","overwrite":true}'
-python3 tools/call.py GetDialog
-python3 tools/call.py RespondDialog '{"action":"no"}'
-python3 tools/call.py ControlValidation '{"action":"status"}'
-python3 tools/call.py ControlSelection '{"action":"status"}'
-python3 tools/call.py GetCursor
-python3 tools/call.py GetEditorCamera
-python3 tools/call.py FocusCamera '{"x":338,"y":108.8,"z":196.25,"distance":60}'
-python3 tools/call.py ControlCamera '{"action":"status"}'
-python3 tools/call.py ControlCamera '{"action":"watchWholeMap","smooth":true}'
-python3 tools/call.py ControlCursor '{"action":"status"}'
-python3 tools/call.py ControlCursor '{"action":"move","direction":"Forward","directionKind":"relative"}'
-python3 tools/call.py GetEditorSelectionState
-python3 tools/call.py TakeScreenshot '{"format":"jpg"}'
-python3 tools/call.py GetInventorySummary
-python3 tools/call.py FindInventory '{"query":"RoadTech","type":"block","limit":5}'
-python3 tools/call.py FindInventory '{"query":"LightCube","type":"item","limit":5}'
-python3 tools/call.py RefreshInventory
-python3 tools/call.py BrowseInventoryTree '{"root":"items","path":"Official","depth":5,"query":"LightCube","limit":35}'
-python3 tools/call.py InspectMacroblockModel '{"index":0,"limit":5}'
-python3 tools/call.py ListMacroblockInstances '{"recent":true,"limit":5}'
-python3 tools/call.py PreflightNamedMacroblockPlacement '{"name":"stress-a","offsetX":32}'
-python3 tools/call.py GetItems '{"limit":10}'
-python3 tools/call.py GetRecentItems '{"count":5}'
-python3 tools/call.py FindBlockModels '{"query":"TechnicsScreen","limit":5}'
-python3 tools/call.py SelectBlockModel '{"blockName":"RoadTechStraight"}'
-python3 tools/call.py PlaceBlockViaEditorPlusPlus '{"blockName":"RoadTechStraight","x":128,"y":64,"z":128,"pitch":12,"yaw":18,"roll":7,"repeat":8,"spacingX":30,"spacingY":6.4,"spacingZ":9.75}'
-python3 tools/call.py GetRecentBlocks '{"count":8}'
-python3 tools/call.py CreateNamedMacroblock '{"name":"stress-a","replace":true}'
-python3 tools/call.py AddBlockToNamedMacroblock '{"name":"stress-a","blockName":"RoadTechStraight","x":430,"y":128,"z":226,"pitch":12,"yaw":18,"roll":7}'
-python3 tools/call.py AddBlockToNamedMacroblock '{"name":"skin-a","blockName":"TechnicsScreen1x1Straight","x":900,"y":188,"z":560,"bgSkin":"Skins\\\\Stadium\\\\LightColors\\\\Pink.dds"}'
-python3 tools/call.py AddBlocksToNamedMacroblock '{"name":"stress-a","blocks":[{"blockName":"RoadTechStraight","x":494,"y":142,"z":245,"yaw":30},{"blockName":"RoadTechStraight","x":526,"y":148,"z":254,"yaw":35}]}'
-python3 tools/call.py AddItemToNamedMacroblock '{"name":"stress-a","itemPath":"LightCube4m","x":494,"y":142,"z":245,"yaw":30}'
-python3 tools/call.py AddItemsToNamedMacroblock '{"name":"stress-a","items":[{"itemPath":"LightCube2m","x":510,"y":154,"z":250,"yaw":20}]}'
-python3 tools/call.py GetNamedMacroblock '{"name":"stress-a","limit":5}'
-python3 tools/call.py PlaceNamedMacroblock '{"name":"stress-a","offsetX":0,"offsetY":0,"offsetZ":0}'
-python3 tools/call.py PlaceNamedMacroblock '{"name":"stress-a","offsetX":64,"yaw":25,"pivotX":430,"pivotY":128,"pivotZ":226}'
-python3 tools/call.py CanPlaceBlock '{"blockName":"RoadTechStraight","x":24,"y":20,"z":24}'
-python3 tools/call.py PlaceItemViaEditorPlusPlus '{"itemPath":"LightCube2m","x":710,"y":190,"z":320,"yaw":20}'
-python3 tools/call.py ClearItems
-python3 tools/call.py ClearBlocks
-python3 tools/call.py ClearMapContent '{"includeTerrain":false}'
-python3 tools/call.py RemoveRecentItems '{"count":1}'
-python3 tools/call.py RemoveRecentBlocks '{"count":1}'
-python3 tools/call.py RemoveBlocksByIndex '{"index":2307}'
-python3 tools/call.py RemoveItemsByIndex '{"index":1,"forceBufferFallback":true}'
-# Menu stack (main menu)
-python3 tools/call.py ListKnownMenuRoutes
-python3 tools/call.py GetMenuPage
-python3 tools/call.py GetActiveMenuPages
-python3 tools/call.py SetMenuPage '{"route":"/create"}'
-python3 tools/call.py FindMenuButtons
-python3 tools/call.py ClickMenuButton '{"controlId":"button-map-editor"}'
-python3 tools/call.py ListGuides
-python3 tools/call.py GetGuide '{"topic":"menu-navigation"}'
-python3 tools/call.py BackToMainMenu
-python3 tools/call.py EditNewMap '{"environment":"Stadium","decoration":"48x48Day"}'
-# Full menu create flow (QuickStart off)
-python3 tools/call.py CreateMapViaMenu '{"mapType":"race","environment":"Stadium","mood":"Day","inputDevice":"mouse","difficulty":"simple","timeoutMs":10000}'
-python3 tools/call.py RunManialinkScript '{"script":"main() {}","context":"current"}'
-```
-
-
-## Tier A agent ergonomics (2026-08-12)
-
-| Tool | Role |
-|------|------|
-| `GetReadiness` | Composite preflight (`want=editor\|menu\|any\|race`) |
-| `WaitUntil` | Poll mode/dialog/editorReady/pageVisible/map counts/readiness (`timedOut` on budget) |
-| `SetAgentTag` / `ListTagged` / `RemoveByTag` / `ClearTagIndex` | Provenance tags + safe cleanup |
-| `ControlEditMode` | Set EditMode/PlaceMode; optional model select |
-| `SelectItemModel` / `SelectMacroblockModel` | Picker helpers |
-| `ControlInventory` | `status` / `select` / `openFolder` via inventory API |
-| `SaveNamedMacroblock` / `LoadNamedMacroblock` / `ListSavedNamedMacroblocks` | Durable named-MB JSON |
-| `AssertPlacement` | Verify deltas / near / tags after place |
-| `RunManialinkScript` | + `collectMs` / `resultEvent` result channel |
-
-`tools/call.py`: `--wait-mode`, `--until-ready`, `--wait-timeout`.
+---
 
 ## Behavioral notes
 
 ### Placement and map metadata
 
-`CanPlaceBlock` checks normal grid or terrain block placement without mutating
-the map. `PlaceBlock` uses no-destruction placement unless `allowDestruction`
-is true. Prefer checking `canPlace` / `placed` and verifying with `GetBlockAt`;
-raw editor undo can group adjacent direct API actions. Mutating placement tools
-include `mapPre` and `mapPost` metadata with map name, size, block count, baked
-block count, item count, and vertex count.
+Mutating placement tools include `mapPre` / `mapPost` (name, size, block/item/vertex counts, bounds). Prefer verifying with `GetBlockAt` / `GetRecent*` / `AssertPlacement`.
 
-`GetMapInfo` and mutating tool map summaries include `bounds` in editor coords
-and meters. Coord bounds are `[0,0,0]` through `size - 1`, with
-`maxExclusive=size`. Meter bounds use 32m X/Z units, 8m Y units, and the usual
-64m base-height offset; on a 48x40x48 map the Y max-exclusive is 256m.
-
-`GetMapEnvironment` is a read-only vista/mood metadata probe. It reports the
-challenge collection, decoration, map type/style, vehicle collection text,
-editor mood time fields, and `PluginMapType` collection unit dimensions.
-
-`SaveMapAs` saves the current editor map to a named `.Map.Gbx` under the user
-`Maps` folder. Pass either `fileName` relative to `Maps`, or `name` plus
-`folder`; for example `{"name":"stress-01","folder":"MCP","overwrite":true}`
-saves as `MCP/stress-01.Map.Gbx`. The tool treats `SaveMap` returning without
-exception as success and returns a Wine/Trackmania `gamePathHint`; external
-Linux-side file checks should map that through the active Proton prefix.
-
-### Dialogs, validation, selection
-
-`GetDialog` / `RespondDialog` expose Trackmania `BasicDialogs` (unsaved map
-prompts, etc.). `RespondDialog` accepts `yes`, `no`, `cancel`, `ok`, `wait-ok`,
-`validate`, `saveas-cancel`, and `hide`.
-
-`ControlValidation` exposes map validation and test/playground controls.
-`ControlSelection` exposes editor copy-paste/custom selection.
-
-### Cursor and camera
-
-`GetCursor` returns the editor cursor **`coord`** (nat3 JSON array), `dir`, and
-selected block `blockName` / `blockIdName` (from current or ghost block info).
-It does not move the cursor.
-
-`ControlCursor` uses the game’s cursor methods (no direct coordinate writes).
-`action=move` with `direction` + `directionKind` (`relative` / cardinal /
-cardinal8) is the supported way to nudge the cursor — relative moves are
-intentional. Also: raise/lower, rotate, moveToCameraTarget, followCamera,
-disableMouseDetection, releaseLock, setRGB/resetRGB.
-
-`ControlCamera` reports API state and can center on cursor, move to map center,
-watch whole map/start/closest finish/checkpoint, zoom, look, follow cursor,
-ignore collisions, release lock, set V step. `GetEditorCamera` /
-`SetEditorCamera` / `FocusCamera` remain for exact numeric control.
+`SaveMapAs` writes under the user `Maps` folder; responses may include a Wine/Trackmania `gamePathHint` — map through your Proton prefix on Linux.
 
 ### Free placement and inventory
 
-`PlaceBlockViaEditorPlusPlus` places free blocks through E++ macroblock
-placement. Rotation inputs are degrees by default (`pitch`, `yaw`, `roll`);
-use `pitchRad`, `yawRad`, or `rollRad` for radians. Placement autofocus is on by
-default; pass `autofocus=false` or `autofocusDistance` (default 60).
+Prefer **E++ free placement** and **named macroblocks** for generated builds. Rotation defaults to **degrees** (`pitch`/`yaw`/`roll`); use `*Rad` for radians. Autofocus is on by default for free place tools.
 
-`PlaceItemViaEditorPlusPlus` places flying items through E++ item placement
-(inventory paths from `FindInventory`; same rotation/repeat/autofocus options).
-
-`FindInventory` searches loaded block models, macroblock models, and E++ item
-inventory. `RefreshInventory` rescans after the user adds items mid-session
-(cache is normally scanned once on editor load). `BrowseInventoryTree` is
-read-only hierarchy browse.
-
-`InspectMacroblockModel` resolves a loaded macroblock and converts via E++
-`MakeMacroblockSpec` (block skins not currently exposed). `ListMacroblockInstances`
-lists native placed instances — E++ placement may materialize blocks/items
-without leaving native instances (`total=0` can be valid).
-
-### Named macroblocks
-
-Named macroblock tools keep E++ `MacroblockSpec` handles in plugin memory.
-They support free block specs, flying item specs, and placement-time translation
-and rotation around a world-space pivot. Free block specs accept `variant`,
-`bgSkin`, and `fgSkin`; item specs also accept skins. Skins apply after
-`PlaceNamedMacroblock` succeeds. Handles are in-memory only and clear on plugin
-reload. Prefer `AddBlocksToNamedMacroblock` / `AddItemsToNamedMacroblock` for
-generated builds. `PreflightNamedMacroblockPlacement` is non-mutating.
+Path-based place remains the reliable headless path; `ControlInventory` is for picker parity / UI-native flows.
 
 ### Item delete via `Editor::DeleteItems`
 
-`RemoveRecentItems` and `RemoveItemsByIndex` call **`Editor::DeleteItems`**
-(E++: macroblock donor + `RemoveMacroblock` with `Initialized`/`Connected` set
-true). That path works when `PluginMapType.Items` is empty.
+`RemoveRecentItems` / `RemoveItemsByIndex` call E++ **`DeleteItems`** (works when `PluginMapType.Items` is empty). Direct `AnchoredObjects` buffer removal is **opt-in** (`forceBufferFallback=true`) and reports `undoSupported=false`.
 
-- Default: `forceBufferFallback=false`.
-- On success: response includes `method=DeleteItems`, `undoSupported=true`,
-  `deleted=true`, plus `mapPre`/`mapPost` and `removed` entries.
-- Direct `AnchoredObjects` buffer removal is **opt-in only** via
-  `forceBufferFallback=true`. That path reports `undoSupported=false` and is
-  cleanup tooling, not normal undoable deletion. After buffer cleanup,
-  save-reload is the cheapest full reset.
+### Named macroblocks + skins
 
-```bash
-python3 tools/call.py RemoveRecentItems '{"count":1,"forceBufferFallback":false}'
-# → deleted=true, method=DeleteItems, undoSupported=true (when OK)
-```
-
-`RemoveRecentBlocks` / `RemoveBlocksByIndex` use E++ freeblock deletion queue
-and `DeleteBlocks` for non-free blocks.
-
-`ClearBlocks` / `ClearItems` / `ClearMapContent` call PluginMapType remove-all
-methods directly (`RemoveAllBlocks`, `RemoveAllObjects`, or
-`RemoveAllBlocksAndTerrain` when `includeTerrain=true`).
+Block/item specs support `variant`, `bgSkin`, `fgSkin`. Skins apply after successful `PlaceNamedMacroblock` and are verified when possible. Durable JSON is v2-capable (item skins) with v1 load compatibility. In-memory handles alone do not survive reload — use `SaveNamedMacroblock`.
 
 ### Screenshots
 
-`TakeScreenshot` triggers Trackmania’s built-in viewport capture. Through
-`tools/call.py`, the caller indexes the Wine user game folder before/after,
-waits for the async write, and may add `detectedScreenshot.linuxPath` / `size`.
-Default Linux lookup is the Steam Proton prefix for app `2225070`; set
-`TM_USER_GAME_FOLDER` for other installs.
+`TakeScreenshot` triggers the game’s viewport capture. `call.py` can detect the new file under the Proton user folder (`TM_USER_GAME_FOLDER` override).
 
 ### Menu automation details
 
-- **Routes are hierarchical.** Pass `/create/mapeditorsettings`, not
-  `/mapeditorsettings`. Use `ListKnownMenuRoutes` and the `menu-navigation`
-  guide.
-- **`SetMenuPage`** only works while the main-menu module is active
-  (`GetMode` / `GetMenuPage`). Known playground-launching routes (e.g.
-  `/solo/campaigndisplay`) are blocked unless `allowPlaygroundLaunch:true`.
-- **Clicks:** `ClickMenuButton` / `TriggerControlOnAction` invoke
-  `CControlBase::OnAction` (same dispatch as a real click). Do **not** use
-  `TriggerPageAction` — it crashes. For Nadeo expendable-button nav-items the
-  leaf is often the `component-navigation-item-zone` under the button.
-- **Observe:** after push/click, poll `GetActiveMenuPages`, `GetMode`,
-  `GetDialog`.
-- **Enter editor:**
-  - Fast path: `EditNewMap` (title-control `EditNewMap2`) or
-    `SetMenuPage` + `EditNewMap`.
-  - Full UI path: `CreateMapViaMenu` (SetMenuPage + 6 OnAction clicks; QuickStart
-    must be off). Verified click-chain 2026-04-20.
-- **Leave editor/race:** `BackToMainMenu`, then poll until `mode=="Menu"`.
-- Layer introspection: `GetUILayers` → `GetLayerTree` / `GetLayerXml` /
-  `FindMenuButtons` / `FindControlsByClass` / `FindControlsByLabel` /
-  `InspectMenuControl`.
+- Routes are **hierarchical** (`/create/mapeditorsettings`, not bare `/mapeditorsettings`).
+- `SetMenuPage` only while main-menu module is active.
+- Side-effect / playground-launch routes blocked unless `allowPlaygroundLaunch:true`.
+- Enter editor: `EditNewMap` (fast) or `CreateMapViaMenu` (full UI; QuickStart off).
+- Leave: `BackToMainMenu`, poll until `mode=="Menu"`.
 
-### Guides
+### RunManialinkScript
 
-`ListGuides` / `GetGuide` expose in-plugin docs (topics include
-`menu-navigation`, `map-vistas`, `item-skins`, `block-skins`,
-`macroblock-placement`, `crash-debugging`, `item-placement-debris`).
+| Arg | Default | Notes |
+|-----|---------|--------|
+| `script` | *(required)* | No outer `<manialink>` — MLHook wraps as `MLHook_<pageUid>`. |
+| `context` | `current` | `menu` / `in-map` / `in-editor` / `current`. |
+| `pageUid` | `McpAdHoc` | Attach id stem. |
+| `replace` | `true` | Replace same uid. |
+| `persist` | `true` | If false, remove after `waitMs`. |
+| `waitMs` | `150` | Yield for inject queue (capped). |
+| `collectMs` | `0` | If &gt;0, register result hook and collect events. |
+| `resultEvent` | `McpAdHoc_Result` | Script: `SendCustomEvent("MLHook_Event_"+resultEvent, [...])`. |
 
-### DEV tools
+Bad ManiaScript can force a game recovery restart — keep scripts small.
 
-`RunGizmoApplyBlock`, `RunRandomFuzz`, `RunComputeItemsDiagnostic`,
-`DevSafeRead`, `DevGetPointers`, `DevComputeItemsPointers`, and
-`DumpMacroblockHeader` are diagnostics/RE helpers. Prefer them for crash
-investigation and pointer layout work; they are not required for normal map
-authoring flows.
+### Stadium / decoration pitfall
+
+For `EditNewMap`: **Stadium** — omit decoration or use `48x48Day`. Non-Stadium needs a real decoration string (or use `OpenMapInEditor` / `CreateMapViaMenu`). Empty `decoration=""` can leave the vista prompt up.
+
+---
+
+## Project layout
+
+```
+src/                 Openplanet Angelscript plugin (module TmMcp)
+tools/call.py        CLI client + wait helpers + screenshot detection
+tests/               pytest (call.py waits, camera math, …)
+docs/ research/      Design notes and RE notes
+AGENTS.md            Short agent-oriented project notes
+info.toml            Openplanet manifest (deps: Editor, MLHook)
+build.sh             dev stage+reload · release .op pack
+```
+
+---
+
+## Development
+
+```bash
+# Stage + reload into game
+TM_PLUGIN_SKIP_LSP=1 ./build.sh dev
+
+# Unit tests that do not need the game
+python3 -m pytest tests/test_call_wait.py -q
+
+# Live smoke (game + plugin running)
+python3 tools/call.py status
+python3 tools/call.py GetReadiness '{"want":"editor"}'
+```
+
+In-game Openplanet compile is the ground truth if LSP reports nested-enum / dependency noise.
+
+---
+
+## Security model
+
+- Default bind: **`127.0.0.1` only** (Openplanet setting; do not expose WAN).
+- No auth on the socket — **anyone on the machine** can call tools while the plugin is loaded.
+- Tools can **destroy map content**, drive menus, and inject ManiaScript.
+- DEV memory tools (`DevSafeRead`, etc.) are for local RE; leave them for trusted environments.
+
+---
+
+## Related
+
+- **Editor++** — free placement, inventory cache, deletion, camera helpers this plugin calls into
+- **MLHook** — menu router push, Manialink inject, custom events
+- Sibling tooling in the Openplanet ecosystem (RemoteBuild, openplanet-lsp) optional for the reload loop
+
+---
+
+## License
+
+Dual-licensed under the **[Unlicense](./UNLICENSE)** **or** **[CC0 1.0 Universal](./CC0-1.0)**, at your option. See [`LICENSE`](./LICENSE).
+
+No warranty. Trackmania and Nadeo assets remain subject to their own terms; this repo is the control bridge only.
+
+---
+
+## Credits
+
+Author: **XertroV** (`info.toml`). Maintained under **[clankercode](https://github.com/clankercode)**.

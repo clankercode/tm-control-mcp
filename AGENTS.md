@@ -6,6 +6,8 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
 
 - Use `./build.sh dev` for every change: runs `openplanet-lsp`, stages to `~/OpenplanetNext/Plugins/tm-control-mcp`, reloads via RemoteBuild.
 - If `openplanet-lsp` floods nested-enum / dependency false positives, `TM_PLUGIN_SKIP_LSP=1 ./build.sh dev` is OK when the **in-game Openplanet compile is green**.
+- `info.toml` `[script] timeout = 15000` (ms). Long tools need this headroom; raise + rebuild if Openplanet kills the script.
+- Server host/port are Openplanet **Settings → TM Control MCP → Server**. Host/port changes need plugin reload. Also via `ListPluginSettings` / `SetPluginSetting`.
 - `tools/call.py` returns compact JSON by default and checks for a real `Trackmania.exe` process before socket calls (`--skip-process-check` only for raw socket debug).
 - Wait helpers: `--wait-mode Editor|Menu|Race`, `--until-ready editor|menu|any`, `--wait-timeout 30`.
 
@@ -19,20 +21,20 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
 ### Landed control surface (high-signal)
 
 - **Readiness:** `GetReadiness` + `WaitUntil` (mode/dialog/editorReady/pageVisible/map counts/readiness). Prefer before mutate.
-- **Editor preflight / control:** `CanPlaceBlock`, `ControlCursor`, `ControlValidation`, `ControlCamera`, `ControlSelection`, `GetEditorSelectionState`, **`ControlEditMode`** (set Place/Erase/FreeLook + place modes).
+- **Editor preflight / control:** `CanPlaceBlock`, `ControlCursor`, `ControlValidation`, `ControlCamera`, `ControlSelection`, `GetEditorSelectionState`, **`ControlEditMode`**.
 - **Cursor:** `GetCursor` / `ControlCursor` relative/cardinal — absolute optional.
 - **Item delete:** `RemoveRecentItems` / `RemoveItemsByIndex` → E++ `DeleteItems`. Prefer **`SetAgentTag` + `RemoveByTag`** for agent smoke cleanup.
-- **Inventory:** browse tools + **`ControlInventory`** (select/openFolder via `Inventory.SelectArticle`/`SelectNode`). Path-place still preferred for headless placement.
-- **Menu automation (OnAction):** `ClickMenuButton`, `CreateMapViaMenu`, discovery + routing. Never `TriggerPageAction`.
+- **Inventory:** browse tools + **`ControlInventory`**. Path-place still preferred for headless placement.
+- **Menu automation (OnAction):** `ClickMenuButton`, `CreateMapViaMenu`. Never `TriggerPageAction`.
 - **AssertPlacement:** verify deltas / near{x,y,z} / tags after place.
-- **Guides:** `ListGuides` / `GetGuide` (topics include readiness, agent-cleanup, manialink-runner).
+- **Plugins/settings:** `ListPlugins`, `ControlPlugin`, `ListPluginSettings`, `SetPluginSetting`, …
+- **Guides:** `ListGuides` / `GetGuide`.
 
 ### RunManialinkScript
 
 - MLHook inject: `menu` / `in-map` / `in-editor` / `current`.
-- Params: `script`, `pageUid`, `replace`, `persist`, `waitMs`, **`collectMs`**, **`resultEvent`** (default `McpAdHoc_Result`).
+- Params: `script`, `pageUid`, `replace`, `persist`, `waitMs`, **`collectMs`**, **`resultEvent`**.
 - Result channel: script `SendCustomEvent("MLHook_Event_McpAdHoc_Result", [...])`; response `results[]`.
-- Prefer over one-off menu mutators when sandbox allows.
 
 ### Open product themes (still future / partial)
 

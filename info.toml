@@ -8,4 +8,4 @@ version  = "0.1.0"
 #__DEFINES__
 dependencies = ["Editor", "MLHook"]
 module = "TmMcp"
-timeout = 0
+timeout = 15000

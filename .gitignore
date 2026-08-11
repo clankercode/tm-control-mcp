@@ -1,5 +1,9 @@
 *.op
 *.zip
 __pycache__/
+.pytest_cache/
 .goal-loops/
+.codebase-memory/
 op-next-formatted.json
+*.log
+.DS_Store

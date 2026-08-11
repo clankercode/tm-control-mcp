@@ -790,7 +790,15 @@ namespace TmMcp {
             || name == "SaveNamedMacroblock"
             || name == "LoadNamedMacroblock"
             || name == "ListSavedNamedMacroblocks"
-            || name == "AssertPlacement";
+            || name == "AssertPlacement"
+            || name == "ListPlugins"
+            || name == "GetPlugin"
+            || name == "ControlPlugin"
+            || name == "ListPluginSettings"
+            || name == "GetPluginSetting"
+            || name == "SetPluginSetting"
+            || name == "ResetPluginSetting"
+            || name == "SavePluginSettings";
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
@@ -892,6 +900,14 @@ namespace TmMcp {
         if (name == "LoadNamedMacroblock") return LoadNamedMacroblock(input);
         if (name == "ListSavedNamedMacroblocks") return ListSavedNamedMacroblocks(input);
         if (name == "AssertPlacement") return AssertPlacement(input);
+        if (name == "ListPlugins") return ListPlugins(input);
+        if (name == "GetPlugin") return GetPluginInfo(input);
+        if (name == "ControlPlugin") return ControlPlugin(input);
+        if (name == "ListPluginSettings") return ListPluginSettings(input);
+        if (name == "GetPluginSetting") return GetPluginSetting(input);
+        if (name == "SetPluginSetting") return SetPluginSetting(input);
+        if (name == "ResetPluginSetting") return ResetPluginSetting(input);
+        if (name == "SavePluginSettings") return SavePluginSettings(input);
         return null;
     }
 
@@ -996,6 +1012,14 @@ namespace TmMcp {
         tools.Add(MakeTool("LoadNamedMacroblock", "Load a saved named-macroblock JSON into memory (resolves models; requires editor).", '{"type":"object","properties":{"name":{"type":"string"},"fileName":{"type":"string"},"replace":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ListSavedNamedMacroblocks", "List durable named-macroblock JSON files under the plugin data folder.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("AssertPlacement", "Verify recent placement: expectItemsDelta/expectBlocksDelta, near{x,y,z,radius}+itemPath/blockName, tag/tagMinCount.", '{"type":"object","properties":{"expectItemsDelta":{"type":"integer"},"expectBlocksDelta":{"type":"integer"},"near":{"type":"object"},"itemPath":{"type":"string"},"blockName":{"type":"string"},"mapPre":{"type":"object"},"tag":{"type":"string"},"tagMinCount":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("ListPlugins", "List loaded Openplanet plugins (Meta::AllPlugins). Optional query, includeDisabled (default true), includeUnloaded.", '{"type":"object","properties":{"query":{"type":"string"},"includeDisabled":{"type":"boolean"},"includeUnloaded":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetPlugin", "Get one plugin by id or name. includeSettings=true embeds setting values.", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"name":{"type":"string"},"includeSettings":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("ControlPlugin", "Plugin lifecycle: enable|disable|setEnabled|reload|unload|load|openSettings. load needs absolute path + optional source/type. Refuses disable/unload of self.", '{"type":"object","properties":{"action":{"type":"string"},"id":{"type":"string"},"plugin":{"type":"string"},"name":{"type":"string"},"enabled":{"type":"boolean"},"path":{"type":"string"},"source":{"type":"string"},"type":{"type":"string"}},"required":["action"],"additionalProperties":false}'));
+        tools.Add(MakeTool("ListPluginSettings", "List Meta::PluginSetting for a plugin (default: this MCP plugin). Filters: category, query, includeHidden, includeValues.", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"name":{"type":"string"},"category":{"type":"string"},"query":{"type":"string"},"includeHidden":{"type":"boolean"},"includeValues":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetPluginSetting", "Read one setting by varName (or unique display name). Default plugin = self.", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"varName":{"type":"string"},"setting":{"type":"string"},"name":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("SetPluginSetting", "Write a setting value (typed). save=true (default) calls Meta::SaveSettings. Socket host/port need plugin reload.", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"varName":{"type":"string"},"setting":{"type":"string"},"value":{},"save":{"type":"boolean"}},"required":["value"],"additionalProperties":false}'));
+        tools.Add(MakeTool("ResetPluginSetting", "Reset one setting to default via PluginSetting.Reset(); optional save.", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"varName":{"type":"string"},"setting":{"type":"string"},"save":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("SavePluginSettings", "Persist all Openplanet plugin settings to disk (Meta::SaveSettings).", '{"type":"object","properties":{},"additionalProperties":false}'));
         return tools;
     }
 
