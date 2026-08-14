@@ -1091,6 +1091,21 @@ namespace TmMcp {
         output["hasEntityModelEdition"] = itemModel !is null && itemModel.EntityModelEdition !is null;
         output["hasEntityModel"] = itemModel !is null && itemModel.EntityModel !is null;
 
+        if (output["action"] == "leaveItemEditor") {
+            Editor::LeaveCurrentItemEditor();
+            output["left"] = true;
+        }
+        if (output["action"] == "saveItem") {
+            if (itemModel is null || itemModel.IdName == "Unassigned") {
+                return MakeError("item has not been saved before (IdName Unassigned); save it manually once first", "NOT_SAVED_YET", false);
+            }
+            try {
+                Editor::SaveCurrentItemEditorItem();
+                output["saved"] = true;
+            } catch {
+                return MakeError("save failed: " + getExceptionInfo(), "SAVE_FAILED", false);
+            }
+        }
         if (output["action"] == "nullifyEME") {
             if (itemModel is null) return MakeError("no item model loaded in item editor", "NO_ITEM_MODEL", false, "ItemEditor");
             bool notify = input.HasKey("notify") ? bool(input["notify"]) : true;
