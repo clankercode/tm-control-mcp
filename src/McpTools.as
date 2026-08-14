@@ -801,7 +801,11 @@ namespace TmMcp {
             || name == "GetPluginSetting"
             || name == "SetPluginSetting"
             || name == "ResetPluginSetting"
-            || name == "SavePluginSettings";
+            || name == "SavePluginSettings"
+            || name == "GetRaceData"
+            || name == "GetPlayers"
+            || name == "GetServerInfo"
+            || name == "GetResult";
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
@@ -914,6 +918,10 @@ namespace TmMcp {
         if (name == "SetPluginSetting") return SetPluginSetting(input);
         if (name == "ResetPluginSetting") return ResetPluginSetting(input);
         if (name == "SavePluginSettings") return SavePluginSettings(input);
+        if (name == "GetRaceData") return GetRaceData(input);
+        if (name == "GetPlayers") return GetPlayers(input);
+        if (name == "GetServerInfo") return GetServerInfo(input);
+        if (name == "GetResult") return GetResult(input);
         return null;
     }
 
@@ -1029,6 +1037,10 @@ namespace TmMcp {
         tools.Add(MakeTool("SetPluginSetting", "Write a setting value (typed). save=true (default) calls Meta::SaveSettings. Socket host/port need plugin reload.", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"varName":{"type":"string"},"setting":{"type":"string"},"value":{},"save":{"type":"boolean"}},"required":["value"],"additionalProperties":false}'));
         tools.Add(MakeTool("ResetPluginSetting", "Reset one setting to default via PluginSetting.Reset(); optional save.", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"varName":{"type":"string"},"setting":{"type":"string"},"save":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("SavePluginSettings", "Persist all Openplanet plugin settings to disk (Meta::SaveSettings).", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetRaceData", "Get live race data via MLFeed::GetRaceData_V4. Requires an active playground (Race mode). Returns map name, CP count, lap count, and sorted players.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetPlayers", "Get live player data via MLFeed::GetRaceData_V4. Richer than GetRaceData: includes login, currentLap, teamNum, isMVP, respawnRank. Requires Race mode.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetServerInfo", "Get current server connection info from CTrackManiaNetwork. Returns serverName, connected, playerCount, maxPlayers.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetResult", "Poll for async tool result. input: {requestId}. Returns {request_id, status:'pending'|'done'|'error', result?/error?}. Used after DispatchAsync (in-process only).", '{"type":"object","properties":{"requestId":{"type":"string"},"request_id":{"type":"string"}},"additionalProperties":false}'));
         return tools;
     }
 

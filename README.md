@@ -19,6 +19,7 @@ themselves — without clicking the UI by hand.
 | **Script timeout** | `15000` ms (`info.toml` `[script] timeout`) — long menu/place/wait tools need headroom |
 | **Security** | Localhost JSON, **no auth** → [SECURITY.md](./SECURITY.md) |
 | **Releasing** | Agent checklist → [RELEASE.md](./RELEASE.md) · history → [CHANGELOG.md](./CHANGELOG.md) |
+| **Migration** | From tm-mcptm → [docs/migration-from-mcptm.md](./docs/migration-from-mcptm.md) |
 
 ![Editor viewport capture via TakeScreenshot](docs/images/editor-demo.jpg)
 
@@ -93,6 +94,8 @@ Pointer peeks, safe memory reads, gizmo/fuzz helpers, macroblock header dumps �
      Needs a build that exports `PlaceBlocks` / `DeleteItems` / `GetMapNbClones` (etc.).
    - **[MLHook](https://openplanet.dev/plugin/mlhook)** — dependency id `MLHook`  
      Tested with **≥ 0.5.4** (site id 252). Required for menu `Router_Push` and Manialink inject.
+   - **[MLFeedRaceData](https://openplanet.dev/)** — dependency id `MLFeedRaceData`  
+     Required for `GetRaceData` / `GetPlayers` race-mode tools.
 4. This plugin loaded as a **folder plugin** (dev) or `.op` package (release build).
 
 Optional host tooling:

@@ -6,6 +6,8 @@ version  = "0.2.0"
 
 [script]
 #__DEFINES__
-dependencies = ["Editor", "MLHook"]
+dependencies = ["Editor", "MLHook", "MLFeedRaceData"]
 module = "TmMcp"
 timeout = 15000
+exports = ["TmMcp_Export.as"]
+shared_exports = ["AsyncDispatch.as"]

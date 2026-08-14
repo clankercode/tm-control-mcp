@@ -10,6 +10,9 @@ int S_TmMcpStartupDelayMs = 100;
 [Setting category="Server" name="Trace Requests" description="Log request and response payloads to Openplanet.log."]
 bool S_TmMcpTraceRequests = false;
 
+[Setting category="Server" name="Enable Socket" description="When false, skip the TCP listener entirely. Use for in-process-only consumers (e.g. tm-agent). Tools remain callable via import. Requires plugin reload."]
+bool S_TmMcpEnableSocket = true;
+
 namespace TmMcp {
     const uint MAX_ACTIVE_CLIENTS = 8;
     const uint CLIENT_READ_TIMEOUT_MS = 2000;
@@ -24,6 +27,10 @@ namespace TmMcp {
     void Start() {
         if (g_running) return;
         g_running = true;
+        if (!S_TmMcpEnableSocket) {
+            trace("TM Control MCP socket disabled (in-process mode); tools still callable via import");
+            return;
+        }
         g_starting = true;
         trace("TM Control MCP startup requested; socket delay " + S_TmMcpStartupDelayMs + " ms");
         startnew(CoroutineFunc(StartServerAfterDelay));
