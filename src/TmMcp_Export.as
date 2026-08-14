@@ -11,6 +11,8 @@
 //   Json::Value@ result = TmMcp::CallTool("PlaceBlock", input);
 //
 // For non-blocking dispatch, use DispatchAsync + GetResult (issue #3).
+// Those live in AsyncDispatchLocal.as (NOT shared) but are still exported
+// here for in-process consumers within the same compile dependency chain.
 
 namespace TmMcp {
     // Core dispatch — call any tool by name.

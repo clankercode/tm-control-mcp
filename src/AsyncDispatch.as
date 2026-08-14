@@ -1,14 +1,10 @@
-// Global-scope coroutine for startnew (AngelScript startnew requires global scope).
-// Bridges into the namespace-scoped async dispatch.
-void TmMcp_AsyncToolCoroutine(const string &in payload) {
-    TmMcp::AsyncToolCoroutineImpl(payload);
-}
+// Shared async dispatch infrastructure (issue #3).
+// This file is compiled into BOTH this module and dependent modules.
+// It must NOT reference non-shared symbols (CallTool, IsToolName, etc.)
+// — only self-contained types and helpers. Pattern mirrors tm-mcptm's
+// McpTM_Async.as.
 
 namespace TmMcp {
-    // Async dispatch infrastructure (issue #3).
-    // Lets in-process callers dispatch tools non-blocking and poll for results,
-    // mirroring tm-mcptm's GetResult(reqId) pattern.
-
     shared class AsyncToolResult {
         string requestId;
         string status;  // "pending" | "done" | "error"
@@ -79,69 +75,29 @@ namespace TmMcp {
         @tr.error = e;
     }
 
-    // Non-blocking dispatch: starts a coroutine that runs the tool and stores
-    // the result in g_PendingRequests. Returns {request_id, status:"pending"}.
-    Json::Value@ DispatchAsync(const string &in toolName, Json::Value@ input) {
-        if (!IsToolName(toolName)) {
-            return MakeError("unknown tool: " + toolName, "unknown_tool", false, "", "");
+    // Cleanup orphaned input stash entries (call on unload / periodic GC).
+    void CleanupAsyncInputs() {
+        auto keys = g_AsyncInputs.GetKeys();
+        if (keys is null) return;
+        for (uint i = 0; i < keys.Length; i++) {
+            g_AsyncInputs.Delete(keys[i]);
         }
-        if (input is null) {
-            @input = Json::Object();
-        }
-        string reqId = GenRequestId();
-        AsyncToolResult@ tr = AsyncToolResult(reqId);
-        RegisterPending(reqId, tr);
-
-        // Stash input for the coroutine (startnew only passes a string)
-        @g_AsyncInputs[reqId] = @input;
-        string payload = toolName + "\t" + reqId;
-        startnew(TmMcp_AsyncToolCoroutine, payload);
-
-        Json::Value ret = Json::Object();
-        ret["request_id"] = reqId;
-        ret["status"] = "pending";
-        return ret;
     }
 
-    // Poll for async result. input: {requestId: "..."}.
-    // Returns {request_id, status:"pending"|"done"|"error", result?/error?}.
-    Json::Value@ GetResult(Json::Value &in input) {
-        string reqId = input.HasKey("requestId") ? string(input["requestId"]) : "";
-        if (reqId.Length == 0 && input.HasKey("request_id")) reqId = string(input["request_id"]);
-        Json::Value result;
-        if (GetPendingResult(reqId, result)) return result;
-
-        Json::Value ret = Json::Object();
-        ret["request_id"] = reqId;
-        ret["status"] = "pending";
-        return ret;
-    }
-
-    // Namespace-scoped coroutine implementation (called from global wrapper).
-    void AsyncToolCoroutineImpl(const string &in payload) {
-        string[] parts = payload.Split("\t");
-        string toolName = parts.Length > 0 ? parts[0] : "";
-        string reqId = parts.Length > 1 ? parts[1] : "";
-
-        Json::Value@ input = null;
-        if (g_AsyncInputs.Exists(reqId)) {
-            @input = cast<Json::Value@>(g_AsyncInputs[reqId]);
-            g_AsyncInputs.Delete(reqId);
-        }
-        if (input is null) @input = Json::Object();
-
-        Json::Value@ result = CallTool(toolName, input);
-        if (result is null) {
-            SetAsyncResultError(reqId, "tool returned null: " + toolName);
-        } else if (!result.Get("success", false)) {
-            // Tool returned an error — preserve the full result object
-            AsyncToolResult@ tr = cast<AsyncToolResult@>(g_PendingRequests[reqId]);
-            if (tr !is null) {
-                tr.status = "error";
-                @tr.error = result;
+    // Cleanup completed/errored pending requests older than maxAgeMs.
+    void GC_PENDING(uint maxAgeMs = 300000) {
+        auto keys = g_PendingRequests.GetKeys();
+        if (keys is null) return;
+        for (uint i = 0; i < keys.Length; i++) {
+            string id = keys[i];
+            AsyncToolResult@ tr = cast<AsyncToolResult@>(g_PendingRequests[id]);
+            if (tr is null) {
+                g_PendingRequests.Delete(id);
+                continue;
             }
-        } else {
-            SetAsyncResultDone(reqId, result);
+            if (tr.status != "pending" && uint(Time::Now - tr.startTime) > maxAgeMs) {
+                g_PendingRequests.Delete(id);
+            }
         }
     }
 }
