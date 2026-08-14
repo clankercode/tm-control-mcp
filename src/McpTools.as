@@ -1034,7 +1034,7 @@ namespace TmMcp {
         tools.Add(MakeTool("GetMapEnvironment", "Read map collection, decoration, map type/style, mood, and collection-unit metadata.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlMapObjectives", "Get or set race objectives on the current editor map: NbClones (clone mode), NbLaps / IsLapRace. action=get|set. For set: optional nbClones (0-64), nbLaps (0-99; 0=multilap hide counter), isLapRace (bool). Uses E++ offset writes for const API fields.", '{"type":"object","properties":{"action":{"type":"string"},"nbClones":{"type":"integer"},"nbLaps":{"type":"integer"},"isLapRace":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
 
-        tools.Add(MakeTool("ControlItemEditor", "Inspect/control the item editor: get state (item model name, has EntityModelEdition/EntityModel), nullify EntityModelEdition safely (transforms surface materials to matids first, then nulls; refuses when EntityModel is null), or openItem to enter the item editor for a user item by inventory path (requires map editor).", '{"type":"object","properties":{"action":{"type":"string"},"notify":{"type":"boolean"},"itemPath":{"type":"string"}},"required":["action"],"additionalProperties":false}'));
+        tools.Add(MakeTool("ControlItemEditor", "Inspect/control the item editor: get state (item model name, has EntityModelEdition/EntityModel), nullify EntityModelEdition safely (transforms surface materials to matids first, then nulls; refuses when EntityModel is null), or openItem to enter the item editor for a user item by inventory path (requires map editor).", '{"type":"object","properties":{"action":{"type":"string"},"notify":{"type":"boolean"},"itemPath":{"type":"string"},"blockIndex":{"type":"integer"},"itemIndex":{"type":"integer"}},"required":["action"],"additionalProperties":false}'));
         tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx.", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetDialog", "Inspect Trackmania's current BasicDialogs state and active dialog frame.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("RespondDialog", "Respond to Trackmania BasicDialogs. action: yes, no, cancel, ok, validate, hide.", '{"type":"object","properties":{"action":{"type":"string"}},"required":["action"],"additionalProperties":false}'));
@@ -1216,8 +1216,10 @@ namespace TmMcp {
         }
 
         if (action == "enterGizmoOnLatestStart") {
+            int blockIndex = input.HasKey("blockIndex") ? int(input["blockIndex"]) : -1;
+            int itemIndex = input.HasKey("itemIndex") ? int(input["itemIndex"]) : -1;
             string report;
-            try { report = Editor::SpikeEnterGizmoOnLatestStart(); } catch {
+            try { report = Editor::SpikeEnterGizmoOnLatestStart(blockIndex, itemIndex); } catch {
                 return MakeError("enterGizmo failed: " + getExceptionInfo(), "SPIKE_FAILED", false);
             }
             Json::Value output = Json::Object();
