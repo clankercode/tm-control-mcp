@@ -1,17 +1,6 @@
-#if DEPENDENCY_EDITOR
-namespace Editor {
-    import vec3 GetBlockLocation(CGameCtnBlock@ block, bool forceFree = false) from "Editor";
-    import vec3 GetBlockRotation(CGameCtnBlock@ block) from "Editor";
-    import bool IsBlockFree(CGameCtnBlock@ block) from "Editor";
-}
-#endif
 
 namespace TmMcp {
     array<string> g_NamedMacroblockNames;
-#if DEPENDENCY_EDITOR
-    array<Editor::MacroblockSpec@> g_NamedMacroblocks;
-    array<NamedMacroblockSkin@[]@> g_NamedMacroblockSkins;
-#endif
 
     CGameCtnEditorFree@ GetEditor() {
         auto app = cast<CTrackMania>(GetApp());
@@ -201,33 +190,10 @@ namespace TmMcp {
         return vec2(h, v);
     }
 
-#if DEPENDENCY_EDITOR
-    bool FocusCameraOn(vec3 pos, float distance) {
-        auto editor = GetEditor();
-        auto orbital = editor is null ? null : editor.OrbitalCameraControl;
-        vec3 camPos = orbital is null ? pos + vec3(0, 0, -1) : orbital.Pos;
-        vec3 dir = pos - camPos;
-        if (dir.LengthSquared() < 1.0e-6) dir = vec3(0, 0, 1);
-        return Editor::SetCamAnimationGoTo(LookDirToOrbitalAngles(dir), pos, distance);
-    }
-#endif
 
     // High-angle autofocus: look down at `pos` from above, keeping the horizontal yaw
     // pointing from the target back toward the current camera so the transition animates
     // naturally from the user's viewpoint.
-#if DEPENDENCY_EDITOR
-    bool AutofocusCameraOn(vec3 pos, float distance) {
-        auto editor = GetEditor();
-        auto orbital = editor is null ? null : editor.OrbitalCameraControl;
-        if (orbital is null) return FocusCameraOn(pos, distance);
-        vec3 horiz = (orbital.Pos - pos) * vec3(1, 0, 1);
-        if (horiz.LengthSquared() < 1.0e-6) horiz = vec3(0, 0, -1);
-        horiz = horiz.Normalized();
-        float pitchDown = Math::ToRad(65.0);
-        vec3 lookDir = horiz * -Math::Cos(pitchDown) + vec3(0, -Math::Sin(pitchDown), 0);
-        return Editor::SetCamAnimationGoTo(LookDirToOrbitalAngles(lookDir), pos, distance);
-    }
-#endif
 
     Json::Value BasicDialogSummary() {
         auto app = cast<CTrackMania>(GetApp());
@@ -458,29 +424,12 @@ namespace TmMcp {
             obj["name"] = block.BlockInfo.Name;
             obj["idName"] = block.BlockInfo.IdName;
         }
-#if DEPENDENCY_EDITOR
-        bool isFree = Editor::IsBlockFree(block);
-        obj["isFree"] = isFree;
-        obj["variant"] = int(block.BlockInfoVariantIndex);
-        obj["mobilIndex"] = int(block.MobilIndex);
-        obj["mobilVariant"] = int(block.MobilVariantIndex);
-        obj["isGround"] = block.IsGround;
-        obj["isGhost"] = block.IsGhostBlock();
-        obj["pos"] = Vec3ToJson(Editor::GetBlockLocation(block));
-        auto rot = Editor::GetBlockRotation(block);
-        obj["rot"] = Vec3ToJson(rot);
-        obj["rotDeg"] = Vec3DegToJson(rot);
-#else
         obj["isFree"] = false;
         obj["variant"] = int(block.BlockInfoVariantIndex);
         obj["mobilIndex"] = int(block.MobilIndex);
         obj["mobilVariant"] = int(block.MobilVariantIndex);
         obj["isGround"] = block.IsGround;
         obj["isGhost"] = block.IsGhostBlock();
-#endif
-#if DEPENDENCY_EDITOR
-        obj["skin"] = BlockSkinToJson(block);
-#endif
         return obj;
     }
 
@@ -504,9 +453,6 @@ namespace TmMcp {
             obj["idName"] = item.ItemModel.IdName;
             obj["waypointType"] = int(item.ItemModel.WaypointType);
         }
-#if DEPENDENCY_EDITOR
-        obj["skin"] = ItemSkinToJson(item);
-#endif
         return obj;
     }
 
@@ -562,111 +508,14 @@ namespace TmMcp {
         return obj;
     }
 
-    int FindNamedMacroblockIndex(const string &in name) {
-        for (uint i = 0; i < g_NamedMacroblockNames.Length; i++) {
-            if (g_NamedMacroblockNames[i] == name) return int(i);
-        }
-        return -1;
-    }
 
-#if DEPENDENCY_EDITOR
-    Editor::MacroblockSpec@ GetNamedMacroblock(const string &in name) {
-        int index = FindNamedMacroblockIndex(name);
-        if (index < 0) return null;
-        return g_NamedMacroblocks[index];
-    }
-#endif
 
-#if DEPENDENCY_EDITOR
-    Json::Value NamedMacroblockSummary(const string &in name, Editor::MacroblockSpec@ mb) {
-        Json::Value output = Json::Object();
-        auto skins = GetNamedMacroblockSkins(name);
-        output["name"] = name;
-        output["exists"] = mb !is null;
-        output["nbBlocks"] = mb is null ? 0 : int(mb.blocks.Length);
-        output["nbItems"] = mb is null ? 0 : int(mb.items.Length);
-        output["nbRawSkins"] = mb is null ? 0 : int(mb.skins.Length);
-        output["nbPostSkins"] = skins is null ? 0 : int(skins.Length);
-        output["nbSkins"] = int(output["nbRawSkins"]) + int(output["nbPostSkins"]);
-        return output;
-    }
-#endif
 
-    vec3 MacroblockInternalOffset() {
-        return vec3(0, 56, 0);
-    }
 
-#if DEPENDENCY_EDITOR
-    Json::Value BlockSpecToJson(Editor::BlockSpec@ block) {
-        Json::Value obj = Json::Object();
-        if (block is null) return obj;
-        obj["name"] = block.name;
-        obj["coord"] = CoordToJson(block.coord);
-        obj["dir"] = int(block.dir);
-        obj["dir2"] = int(block.dir2);
-        obj["pos"] = Vec3ToJson(block.pos - MacroblockInternalOffset());
-        obj["internalPos"] = Vec3ToJson(block.pos);
-        obj["rot"] = Vec3ToJson(block.pyr);
-        obj["rotDeg"] = Vec3DegToJson(block.pyr);
-        obj["variant"] = int(block.variant);
-        obj["flags"] = int(block.flags);
-        obj["isFree"] = block.isFree;
-        obj["isGround"] = block.isGround;
-        obj["isGhost"] = block.isGhost;
-        return obj;
-    }
-#endif
 
-#if DEPENDENCY_EDITOR
-    Json::Value ItemSpecToJson(Editor::ItemSpec@ item) {
-        Json::Value obj = Json::Object();
-        if (item is null) return obj;
-        obj["name"] = item.name;
-        obj["coord"] = CoordToJson(item.coord);
-        obj["pos"] = Vec3ToJson(item.pos - MacroblockInternalOffset());
-        obj["internalPos"] = Vec3ToJson(item.pos);
-        obj["rot"] = Vec3ToJson(item.pyr);
-        obj["rotDeg"] = Vec3DegToJson(item.pyr);
-        obj["variant"] = int(item.variantIx);
-        obj["isFlying"] = item.isFlying != 0;
-        return obj;
-    }
-#endif
 
-#if DEPENDENCY_EDITOR
-    void ApplyTransformToSpec(Editor::BlockSpec@ block, const mat4 &in transform) {
-        auto blockMat = mat4::Translate(block.pos) * Editor::EulerToMat(block.pyr);
-        auto transformed = transform * blockMat;
-        block.pos = (transformed * vec3()).xyz;
-        block.pyr = Editor::PitchYawRollFromRotationMatrix(mat4::Translate(block.pos * -1.0) * transformed);
-    }
-#endif
 
-#if DEPENDENCY_EDITOR
-    void ApplyTransformToSpec(Editor::ItemSpec@ item, const mat4 &in transform) {
-        auto itemMat = mat4::Translate(item.pos) * Editor::EulerToMat(item.pyr);
-        auto transformed = transform * itemMat;
-        item.pos = (transformed * vec3()).xyz;
-        item.pyr = Editor::PitchYawRollFromRotationMatrix(mat4::Translate(item.pos * -1.0) * transformed);
-    }
-#endif
 
-#if DEPENDENCY_EDITOR
-    Editor::MacroblockSpec@ DuplicateAndTransformMacroblock(Editor::MacroblockSpec@ mb, vec3 offset, vec3 rotation, vec3 pivot) {
-        auto copy = mb.Duplicate();
-        auto internalPivot = pivot + MacroblockInternalOffset();
-        auto transform = mat4::Translate(internalPivot + offset)
-            * Editor::EulerToMat(rotation)
-            * mat4::Translate(internalPivot * -1.0);
-        for (uint i = 0; i < copy.blocks.Length; i++) {
-            ApplyTransformToSpec(copy.blocks[i], transform);
-        }
-        for (uint i = 0; i < copy.items.Length; i++) {
-            ApplyTransformToSpec(copy.items[i], transform);
-        }
-        return copy;
-    }
-#endif
 
     bool TextMatchesQuery(const string &in text, const string &in lowerQuery) {
         return lowerQuery.Length == 0 || text.ToLower().Contains(lowerQuery);
@@ -688,19 +537,11 @@ namespace TmMcp {
         output["nbBlocks"] = int(pmt.BlockModels.Length);
         output["nbTerrainBlocks"] = int(pmt.TerrainBlockModels.Length);
         output["nbItems"] =
-#if DEPENDENCY_EDITOR
-            int(Editor::GetInventoryNbItems());
-#else
             0;
-#endif
         output["nbMacroblocks"] = int(pmt.MacroblockModels.Length);
         output["isScanningBlocks"] = false;
         output["isScanningItems"] =
-#if DEPENDENCY_EDITOR
-            Editor::IsInventoryScanningItems();
-#else
             false;
-#endif
         output["isScanningMacroblocks"] = false;
         output["loadingStatus"] = "loaded from CGameEditorPluginMap";
         output["loadingStatusShort"] = "ready";
@@ -732,53 +573,16 @@ namespace TmMcp {
         return null;
     }
 
-#if DEPENDENCY_EDITOR
-    CGameItemModel@ ResolveItemModel(const string &in itemPath) {
-        return Editor::GetInventoryItemModelByPath(itemPath);
-    }
-#endif
 
-    bool IsToolName(const string &in name) {
-        return name == "GetMode"
-            || name == "OpenMapInEditor"
-            || name == "GetMapInfo"
-            || name == "GetMapEnvironment"
-            || name == "ControlMapObjectives"
-            || name == "ControlItemEditor"
-            || name == "SaveMapAs"
-            || name == "GetDialog"
-            || name == "RespondDialog"
-            || name == "ControlValidation"
-            || name == "ControlSelection"
-            || name == "GetCursor"
-            || name == "GetEditorSelectionState"
-            || name == "ControlCursor"
-            || name == "GetEditorCamera"
-            || name == "SetEditorCamera"
-            || name == "ControlCamera"
-            || name == "FocusCamera"
-            || name == "TakeScreenshot"
-            || name == "GetBlocks"
-            || name == "GetRecentBlocks"
-            || name == "GetBlockAt"
-            || name == "GetItems"
-            || name == "GetRecentItems"
-            || name == "GetInventorySummary"
+    bool IsMovedEppTool(const string &in name) {
+        return name == "FocusCamera"
             || name == "FindInventory"
             || name == "RefreshInventory"
-            || name == "BrowseInventoryTree"
             || name == "InspectMacroblockModel"
             || name == "ListMacroblockInstances"
-            || name == "FindBlockModels"
-#if DEV
             || name == "RunGizmoApplyBlock"
+            || name == "SpikeGizmoVehiclePreview"
             || name == "RunRandomFuzz"
-            || name == "RunComputeItemsDiagnostic"
-            || name == "DevSafeRead"
-            || name == "DevGetPointers"
-            || name == "DevComputeItemsPointers"
-            || name == "DumpMacroblockHeader"
-#endif
             || name == "CreateNamedMacroblock"
             || name == "GetNamedMacroblock"
             || name == "ListNamedMacroblocks"
@@ -789,20 +593,64 @@ namespace TmMcp {
             || name == "AddItemsToNamedMacroblock"
             || name == "PlaceNamedMacroblock"
             || name == "PreflightNamedMacroblockPlacement"
-            || name == "CanPlaceBlock"
-            || name == "PlaceBlock"
             || name == "PlaceBlockViaEditorPlusPlus"
             || name == "PlaceItemViaEditorPlusPlus"
-            || name == "RemoveBlock"
-            || name == "ClearBlocks"
-            || name == "ClearItems"
-            || name == "ClearMapContent"
             || name == "RemoveRecentBlocks"
             || name == "RemoveRecentItems"
             || name == "RemoveBlocksByIndex"
             || name == "RemoveItemsByIndex"
+            || name == "SaveNamedMacroblock"
+            || name == "LoadNamedMacroblock"
+            || name == "ListSavedNamedMacroblocks"
+            || name == "ControlMapObjectives"
+            || name == "ControlItemEditor"
+            || name == "ControlEditMode"
+            || name == "SelectItemModel"
+            || name == "SelectMacroblockModel"
+            || name == "ControlInventory"
+            || name == "GetEditorSelectionState"
             || name == "SelectBlockModel"
             || name == "SetCursorBlock"
+            || name == "RemoveByTag"
+            || name == "DumpMacroblockHeader";
+    }
+
+    bool IsToolName(const string &in name) {
+        return name == "GetMode"
+            || name == "OpenMapInEditor"
+            || name == "GetMapInfo"
+            || name == "GetMapEnvironment"
+            || name == "SaveMapAs"
+            || name == "GetDialog"
+            || name == "RespondDialog"
+            || name == "ControlValidation"
+            || name == "ControlSelection"
+            || name == "GetCursor"
+            || name == "ControlCursor"
+            || name == "GetEditorCamera"
+            || name == "SetEditorCamera"
+            || name == "ControlCamera"
+            || name == "TakeScreenshot"
+            || name == "GetBlocks"
+            || name == "GetRecentBlocks"
+            || name == "GetBlockAt"
+            || name == "GetItems"
+            || name == "GetRecentItems"
+            || name == "GetInventorySummary"
+            || name == "BrowseInventoryTree"
+            || name == "FindBlockModels"
+#if DEV
+            || name == "RunComputeItemsDiagnostic"
+            || name == "DevSafeRead"
+            || name == "DevGetPointers"
+            || name == "DevComputeItemsPointers"
+#endif
+            || name == "CanPlaceBlock"
+            || name == "PlaceBlock"
+            || name == "RemoveBlock"
+            || name == "ClearBlocks"
+            || name == "ClearItems"
+            || name == "ClearMapContent"
             || name == "Undo"
             || name == "Redo"
             || name == "SetMenuPage"
@@ -831,15 +679,7 @@ namespace TmMcp {
             || name == "WaitUntil"
             || name == "SetAgentTag"
             || name == "ListTagged"
-            || name == "RemoveByTag"
             || name == "ClearTagIndex"
-            || name == "ControlEditMode"
-            || name == "SelectItemModel"
-            || name == "SelectMacroblockModel"
-            || name == "ControlInventory"
-            || name == "SaveNamedMacroblock"
-            || name == "LoadNamedMacroblock"
-            || name == "ListSavedNamedMacroblocks"
             || name == "AssertPlacement"
             || name == "ListPlugins"
             || name == "GetPlugin"
@@ -860,7 +700,8 @@ namespace TmMcp {
             || name == "SetEditorOrbitalTarget"
             || name == "GetResult"
             || name == "ListToolPacks"
-            || IsPackToolName(name);
+            || IsPackToolName(name)
+            || IsMovedEppTool(name);
     }
 
     string CompactJsonForTrace(Json::Value &in value) {
@@ -930,13 +771,6 @@ namespace TmMcp {
         if (name == "ListMacroblockInstances") return ListMacroblockInstances(input);
         if (name == "FindBlockModels") return FindBlockModels(input);
 #if DEV
-#if DEPENDENCY_EDITOR
-        if (name == "RunGizmoApplyBlock") return RunGizmoApplyBlock(input);
-        if (name == "RunRandomFuzz") return RunRandomFuzz(input);
-        if (name == "RunComputeItemsDiagnostic") return RunComputeItemsDiagnostic(input);
-        if (name == "DumpMacroblockHeader") return RunDumpMacroblockHeader(input);
-        if (name == "DevComputeItemsPointers") return RunDevComputeItemsPointers(input);
-#endif
         if (name == "DevSafeRead") return RunDevSafeRead(input);
         if (name == "DevGetPointers") return RunDevGetPointers(input);
 #endif
@@ -1032,21 +866,17 @@ namespace TmMcp {
         tools.Add(MakeTool("OpenMapInEditor", "Open a local map file in the editor.", '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapInfo", "Get current editor map name and counts.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapEnvironment", "Read map collection, decoration, map type/style, mood, and collection-unit metadata.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("ControlMapObjectives", "Get or set race objectives on the current editor map: NbClones (clone mode), NbLaps / IsLapRace. action=get|set. For set: optional nbClones (0-64), nbLaps (0-99; 0=multilap hide counter), isLapRace (bool). Uses E++ offset writes for const API fields.", '{"type":"object","properties":{"action":{"type":"string"},"nbClones":{"type":"integer"},"nbLaps":{"type":"integer"},"isLapRace":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
 
-        tools.Add(MakeTool("ControlItemEditor", "Inspect/control the item editor: get state (item model name, has EntityModelEdition/EntityModel), nullify EntityModelEdition safely (transforms surface materials to matids first, then nulls; refuses when EntityModel is null), or openItem to enter the item editor for a user item by inventory path (requires map editor).", '{"type":"object","properties":{"action":{"type":"string"},"notify":{"type":"boolean"},"itemPath":{"type":"string"},"blockIndex":{"type":"integer"},"itemIndex":{"type":"integer"}},"required":["action"],"additionalProperties":false}'));
         tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx.", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetDialog", "Inspect Trackmania's current BasicDialogs state and active dialog frame.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("RespondDialog", "Respond to Trackmania BasicDialogs. action: yes, no, cancel, ok, validate, hide.", '{"type":"object","properties":{"action":{"type":"string"}},"required":["action"],"additionalProperties":false}'));
         tools.Add(MakeTool("ControlValidation", "Inspect or trigger map validation/test/playground controls. Actions: status, validate, requestEnterPlayground, requestLeavePlayground, testFromStart, testFromCoord.", '{"type":"object","properties":{"action":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlSelection", "Inspect or control editor copy-paste/custom selection. Actions: status, showCustom, hideCustom, resetSelection, selectAll, addSelection, copy, cut, remove, symmetrize.", '{"type":"object","properties":{"action":{"type":"string"},"x1":{"type":"integer"},"y1":{"type":"integer"},"z1":{"type":"integer"},"x2":{"type":"integer"},"y2":{"type":"integer"},"z2":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetCursor", "Get editor cursor coordinate and selected block.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("GetEditorSelectionState", "Read current editor selection/picker/cursor state for gizmo diagnostics.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlCursor", "Use the editor cursor API: status, raise, lower, rotate, move, moveToCameraTarget, followCamera, disableMouseDetection, releaseLock, resetRGB, setRGB.", '{"type":"object","properties":{"action":{"type":"string"},"direction":{"type":"string"},"directionKind":{"type":"string"},"count":{"type":"integer"},"clockwise":{"type":"boolean"},"follow":{"type":"boolean"},"disable":{"type":"boolean"},"r":{"type":"number"},"g":{"type":"number"},"b":{"type":"number"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetEditorCamera", "Get editor camera target, angles, distance, and current orbital position.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("SetEditorCamera", "Set editor camera target, angles, and target distance. Angles default to degrees; use hAngleRad/vAngleRad for radians.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"hAngle":{"type":"number"},"vAngle":{"type":"number"},"hAngleRad":{"type":"number"},"vAngleRad":{"type":"number"},"distance":{"type":"number"},"animate":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlCamera", "Use the editor camera API: status, centerOnCursor, moveToMapCenter, watchWholeMap, watchStart, watchClosestFinishLine, watchClosestCheckpoint, zoom, zoomIn, zoomOut, look, followCursor, ignoreCollisions, releaseLock, setVStep.", '{"type":"object","properties":{"action":{"type":"string"},"smooth":{"type":"boolean"},"loop":{"type":"boolean"},"clockwise":{"type":"boolean"},"halfSteps":{"type":"boolean"},"level":{"type":"string"},"direction":{"type":"string"},"directionKind":{"type":"string"},"follow":{"type":"boolean"},"ignore":{"type":"boolean"},"step":{"type":"string"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("FocusCamera", "Focus the editor camera on a world position using E++ camera animation.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"distance":{"type":"number"}},"required":["x","y","z"],"additionalProperties":false}'));
         tools.Add(MakeTool("TakeScreenshot", "Trigger a built-in viewport screenshot and return the game ScreenShots folder to inspect.", '{"type":"object","properties":{"format":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetBlocks", "Get blocks by optional grid/world radius, model query, and freeblock filter.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"radius":{"type":"number"},"world":{"type":"boolean"},"query":{"type":"string"},"isFree":{"type":"boolean"},"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetRecentBlocks", "Get the last N blocks in map block order, useful for freeblock placement readback.", '{"type":"object","properties":{"count":{"type":"integer"}},"additionalProperties":false}'));
@@ -1054,45 +884,20 @@ namespace TmMcp {
         tools.Add(MakeTool("GetItems", "Get anchored items near a world position, or all items up to limit if no position is provided.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"radius":{"type":"number"},"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetRecentItems", "Get the last N anchored items in map item order.", '{"type":"object","properties":{"count":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetInventorySummary", "Get E++ inventory cache counts and scan status.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("FindInventory", "Search E++ inventory cache blocks, items, and macroblocks.", '{"type":"object","properties":{"query":{"type":"string"},"type":{"type":"string"},"limit":{"type":"integer"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("RefreshInventory", "Trigger E++ InventoryCache rescan (use after user adds items mid-session; cache is scanned once on editor load).", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("BrowseInventoryTree", "Read-only browse of the editor inventory root/directories. Supports root, rootIndex, path, depth, limit, query.", '{"type":"object","properties":{"root":{"type":"string"},"rootIndex":{"type":"integer"},"path":{"type":"string"},"depth":{"type":"integer"},"limit":{"type":"integer"},"query":{"type":"string"},"includeArticles":{"type":"boolean"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("InspectMacroblockModel", "Inspect a loaded macroblock model by name, file path, or index via E++ MacroblockSpec conversion.", '{"type":"object","properties":{"name":{"type":"string"},"path":{"type":"string"},"index":{"type":"integer"},"limit":{"type":"integer"},"includeItems":{"type":"boolean"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("ListMacroblockInstances", "List placed map macroblock instances with coord, order, user data, size, unit coords, and model metadata.", '{"type":"object","properties":{"limit":{"type":"integer"},"offset":{"type":"integer"},"recent":{"type":"boolean"},"unitCoordLimit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("FindBlockModels", "Search loaded editor block models.", '{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"},"includeTerrain":{"type":"boolean"},"terrainOnly":{"type":"boolean"}},"additionalProperties":false}'));
 #if DEV
-        tools.Add(MakeTool("RunGizmoApplyBlock", "DEV diagnostic: apply a free block through E++'s actual gizmo apply path, with mapPre/mapPost and recent block readback.", '{"type":"object","properties":{"blockName":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"variant":{"type":"integer"},"autofocus":{"type":"boolean"},"autofocusDistance":{"type":"number"}},"required":["blockName","x","y","z"],"additionalProperties":false}'));
-        tools.Add(MakeTool("RunRandomFuzz", "DEV fuzz test: place N random blocks and items (picked from editor inventory) at random positions/rotations within a bounding box. Exercises the Editor++ free-placement path (PlaceBlocks/PlaceItems routed through PlaceMacroblock donor). bbox coords are world-space. blockRatio in 0..1 (default 0.6). Reports placed/attempted counts, exceptions, and mapPre/mapPost summaries.", '{"type":"object","properties":{"bboxMin":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"bboxMax":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"iterations":{"type":"integer"},"blockRatio":{"type":"number"}},"required":["bboxMin","bboxMax","iterations"],"additionalProperties":false}'));
         tools.Add(MakeTool("RunComputeItemsDiagnostic", "DEV diagnostic: create a CGameEditorMapMacroBlockInstance at the given grid coord for a macroblock file, call ComputeItemsForMacroblockInstance, and report wrapper pointers + live AnchoredObject matches. Optional testSkin={itemIndex,bgSkin,fgSkin} tries SetItemSkin(s) on the wrapper and reports pre/post skin persistence.", '{"type":"object","properties":{"mbPath":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"force":{"type":"boolean"},"testSkin":{"type":"object","properties":{"itemIndex":{"type":"integer"},"bgSkin":{"type":"string"},"fgSkin":{"type":"string"}}}},"required":["mbPath","x","y","z"],"additionalProperties":false}'));
         tools.Add(MakeTool("DevSafeRead", "Read memory at an arbitrary address using Dev::SafeRead*. ptr accepts hex string \"0x...\" or integer. Optional offset/offsets (array of ints) are summed. kind: u8|u16|u32|u64|i8|i16|i32|i64|f32|vec2|vec3|vec4|cstr|bytes. For cstr/bytes, len caps bytes read (default 256/64, bytes max 4096). Reports probe result, value, and readError on faults.", '{"type":"object","properties":{"ptr":{"type":["string","integer"]},"offset":{"type":"integer"},"offsets":{"type":"array","items":{"type":"integer"}},"kind":{"type":"string"},"len":{"type":"integer"}},"required":["ptr"],"additionalProperties":false}'));
         tools.Add(MakeTool("DevGetPointers", "Return raw pointers for the current editor, PluginMapType, Challenge, Cursor, and App, with per-nod vtable/refcount peeks. Optional listAnchoredObjects, listBlocks, and listPmtItems include map items/blocks/pmt.Items pointers (capped by *Limit params, default 20). listPmtItems exposes healthy CGameCtnEditorScriptAnchoredObject wrappers for memory comparison against compute-path wrappers.", '{"type":"object","properties":{"listAnchoredObjects":{"type":"boolean"},"anchoredObjectsLimit":{"type":"integer"},"listBlocks":{"type":"boolean"},"blocksLimit":{"type":"integer"},"listPmtItems":{"type":"boolean"},"pmtItemsLimit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("DevComputeItemsPointers", "Like RunComputeItemsDiagnostic but NEVER accesses wrapper fields (Position/ItemModel). Returns raw pointers + vtable/refcount peeks for each MacroblockInstanceItemsResults entry so you can inspect layout via DevSafeRead without crashing.", '{"type":"object","properties":{"mbPath":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"force":{"type":"boolean"}},"required":["mbPath","x","y","z"],"additionalProperties":false}'));
-        tools.Add(MakeTool("DumpMacroblockHeader", "RE helper: dump CGameCtnMacroBlockInfo flags (Initialized/Connected/IsGround/Has*), buffer lengths, GeneratedBlockInfo ptr, and raw u32 words 0x100..0x1FC. Resolve by name, path, or index.", '{"type":"object","properties":{"name":{"type":"string"},"path":{"type":"string"},"index":{"type":"integer"}},"additionalProperties":false}'));
 #endif
-        tools.Add(MakeTool("CreateNamedMacroblock", "Create or replace an in-memory named macroblock.", '{"type":"object","properties":{"name":{"type":"string"},"replace":{"type":"boolean"}},"required":["name"],"additionalProperties":false}'));
-        tools.Add(MakeTool("GetNamedMacroblock", "Inspect an in-memory named macroblock and return stored block/item specs.", '{"type":"object","properties":{"name":{"type":"string"},"limit":{"type":"integer"},"includeItems":{"type":"boolean"}},"required":["name"],"additionalProperties":false}'));
-        tools.Add(MakeTool("ListNamedMacroblocks", "List in-memory named macroblocks.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("ClearNamedMacroblock", "Clear one in-memory named macroblock, or all with all=true.", '{"type":"object","properties":{"name":{"type":"string"},"all":{"type":"boolean"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("AddBlockToNamedMacroblock", "Add a free block spec to an in-memory named macroblock. Rotation defaults to degrees; optional bgSkin/fgSkin are applied after placement.", '{"type":"object","properties":{"name":{"type":"string"},"blockName":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"pitchRad":{"type":"number"},"yawRad":{"type":"number"},"rollRad":{"type":"number"},"variant":{"type":"integer"},"bgSkin":{"type":"string"},"fgSkin":{"type":"string"},"skin":{"type":"string"},"create":{"type":"boolean"}},"required":["name","blockName","x","y","z"],"additionalProperties":false}'));
-        tools.Add(MakeTool("AddBlocksToNamedMacroblock", "Add many free block specs to an in-memory named macroblock in one MCP request.", '{"type":"object","properties":{"name":{"type":"string"},"blocks":{"type":"array","items":{"type":"object"}},"create":{"type":"boolean"},"continueOnError":{"type":"boolean"}},"required":["name","blocks"],"additionalProperties":false}'));
-        tools.Add(MakeTool("AddItemToNamedMacroblock", "Add a flying item spec to an in-memory named macroblock by inventory item path. Rotation defaults to degrees; optional bgSkin/fgSkin are applied after placement.", '{"type":"object","properties":{"name":{"type":"string"},"itemPath":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"pitchRad":{"type":"number"},"yawRad":{"type":"number"},"rollRad":{"type":"number"},"variant":{"type":"integer"},"bgSkin":{"type":"string"},"fgSkin":{"type":"string"},"skin":{"type":"string"},"create":{"type":"boolean"}},"required":["name","itemPath","x","y","z"],"additionalProperties":false}'));
-        tools.Add(MakeTool("AddItemsToNamedMacroblock", "Add many flying item specs to an in-memory named macroblock in one MCP request.", '{"type":"object","properties":{"name":{"type":"string"},"items":{"type":"array","items":{"type":"object"}},"create":{"type":"boolean"},"continueOnError":{"type":"boolean"}},"required":["name","items"],"additionalProperties":false}'));
-        tools.Add(MakeTool("PlaceNamedMacroblock", "Place an in-memory named macroblock through Editor++ macroblock placement with optional position offset, rotation around pivot, and mapPre/mapPost metadata.", '{"type":"object","properties":{"name":{"type":"string"},"offsetX":{"type":"number"},"offsetY":{"type":"number"},"offsetZ":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"pitchRad":{"type":"number"},"yawRad":{"type":"number"},"rollRad":{"type":"number"},"pivotX":{"type":"number"},"pivotY":{"type":"number"},"pivotZ":{"type":"number"},"addUndo":{"type":"boolean"},"autofocus":{"type":"boolean"},"autofocusDistance":{"type":"number"},"tag":{"type":"string","description":"Per-call provenance tag; overrides SetAgentTag default."}},"required":["name"],"additionalProperties":false}'));
-        tools.Add(MakeTool("PreflightNamedMacroblockPlacement", "Non-mutating checks for a named macroblock placement: transformed extents, map bounds, missing models, and invalid variants.", '{"type":"object","properties":{"name":{"type":"string"},"offsetX":{"type":"number"},"offsetY":{"type":"number"},"offsetZ":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"pitchRad":{"type":"number"},"yawRad":{"type":"number"},"rollRad":{"type":"number"},"pivotX":{"type":"number"},"pivotY":{"type":"number"},"pivotZ":{"type":"number"},"limit":{"type":"integer"}},"required":["name"],"additionalProperties":false}'));
         tools.Add(MakeTool("CanPlaceBlock", "Check whether a normal grid/terrain block can be placed without mutating the map.", '{"type":"object","properties":{"blockName":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"allowDestruction":{"type":"boolean"}},"required":["blockName","x","y","z"],"additionalProperties":false}'));
         tools.Add(MakeTool("PlaceBlock", "Place a block in the editor and return mapPre/mapPost metadata.", '{"type":"object","properties":{"blockName":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"allowDestruction":{"type":"boolean"}},"required":["blockName","x","y","z"],"additionalProperties":false}'));
-        tools.Add(MakeTool("PlaceBlockViaEditorPlusPlus", "Place one or more free blocks through Editor++ macroblock placement and return mapPre/mapPost metadata. Rotation defaults to degrees; use pitchRad/yawRad/rollRad for radians.", '{"type":"object","properties":{"blockName":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"pitchRad":{"type":"number"},"yawRad":{"type":"number"},"rollRad":{"type":"number"},"repeat":{"type":"integer"},"spacingX":{"type":"number"},"spacingY":{"type":"number"},"spacingZ":{"type":"number"},"addUndo":{"type":"boolean"},"autofocus":{"type":"boolean"},"autofocusDistance":{"type":"number"},"tag":{"type":"string","description":"Per-call provenance tag; overrides SetAgentTag default."}},"required":["blockName","x","y","z"],"additionalProperties":false}'));
-        tools.Add(MakeTool("PlaceItemViaEditorPlusPlus", "Place one or more flying items through Editor++ item placement and return mapPre/mapPost metadata. Rotation defaults to degrees.", '{"type":"object","properties":{"itemPath":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"pitchRad":{"type":"number"},"yawRad":{"type":"number"},"rollRad":{"type":"number"},"repeat":{"type":"integer"},"spacingX":{"type":"number"},"spacingY":{"type":"number"},"spacingZ":{"type":"number"},"variant":{"type":"integer"},"addUndo":{"type":"boolean"},"autofocus":{"type":"boolean"},"autofocusDistance":{"type":"number"},"tag":{"type":"string","description":"Per-call provenance tag; overrides SetAgentTag default."}},"required":["itemPath","x","y","z"],"additionalProperties":false}'));
         tools.Add(MakeTool("RemoveBlock", "Remove a block at grid coordinates.", '{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"}},"required":["x","y","z"],"additionalProperties":false}'));
         tools.Add(MakeTool("ClearBlocks", "Remove all map blocks through the editor PluginMapType RemoveAllBlocks method.", '{"type":"object","properties":{"autosave":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ClearItems", "Remove all map items/objects through the editor PluginMapType RemoveAllObjects method.", '{"type":"object","properties":{"autosave":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ClearMapContent", "Remove all map blocks and items through editor PluginMapType remove-all methods.", '{"type":"object","properties":{"autosave":{"type":"boolean"},"includeTerrain":{"type":"boolean"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("RemoveRecentBlocks", "Delete the last N map blocks through Editor++ deletion and return mapPre/mapPost metadata.", '{"type":"object","properties":{"count":{"type":"integer"},"addUndo":{"type":"boolean"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("RemoveRecentItems", "Delete the last N map items through Editor++ deletion and return mapPre/mapPost metadata. Direct buffer fallback is opt-in.", '{"type":"object","properties":{"count":{"type":"integer"},"addUndo":{"type":"boolean"},"forceBufferFallback":{"type":"boolean"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("RemoveBlocksByIndex", "Delete explicit map block indices through Editor++ deletion and return mapPre/mapPost metadata.", '{"type":"object","properties":{"index":{"type":"integer"},"indices":{"type":"array","items":{"type":"integer"}},"addUndo":{"type":"boolean"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("RemoveItemsByIndex", "Delete explicit map item indices and return mapPre/mapPost metadata. Direct buffer fallback is opt-in and reports undoSupported=false.", '{"type":"object","properties":{"index":{"type":"integer"},"indices":{"type":"array","items":{"type":"integer"}},"addUndo":{"type":"boolean"},"forceBufferFallback":{"type":"boolean"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("SelectBlockModel", "Set the editor selected block model by name using E++ selection helpers.", '{"type":"object","properties":{"blockName":{"type":"string"},"selection":{"type":"string"}},"required":["blockName"],"additionalProperties":false}'));
-        tools.Add(MakeTool("SetCursorBlock", "Alias for SelectBlockModel.", '{"type":"object","properties":{"blockName":{"type":"string"},"selection":{"type":"string"}},"required":["blockName"],"additionalProperties":false}'));
         tools.Add(MakeTool("Undo", "Undo the last editor action.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("Redo", "Redo the last undone editor action.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("SetMenuPage", "Navigate the main-menu router to a route via MLHook. Routes are hierarchical (e.g. '/create/mapeditorsettings', not '/mapeditorsettings'); see ListKnownMenuRoutes. 'extra' is a JSON string for route hydration (e.g. '{\"Campaign\":\"...\"}'), default '{}'. 'history' is a JSON string for navigation-history controls (e.g. '{\"SaveHistory\":true,\"HidePreviousPage\":true}'), default '{}'. Known side-effect routes (e.g. /solo/campaigndisplay) are blocked unless allowPlaygroundLaunch:true — they can silently auto-load a map into Race mode. Only works while in the main-menu module; use GetMode to check.", '{"type":"object","properties":{"route":{"type":"string"},"extra":{"type":"string"},"history":{"type":"string"},"allowPlaygroundLaunch":{"type":"boolean"}},"required":["route"],"additionalProperties":false}'));
@@ -1120,17 +925,6 @@ namespace TmMcp {
 
         tools.Add(MakeTool("GetReadiness", "Composite preflight: mode/dialog/editor-ready/inventory/map checks. want=editor|menu|any|race.", '{"type":"object","properties":{"want":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("WaitUntil", "Poll until condition is true. condition=mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness. Returns ok/timedOut (not a hard error on timeout).", '{"type":"object","properties":{"condition":{"type":"string"},"equals":{"type":"string"},"page":{"type":"string"},"op":{"type":"string"},"count":{"type":"integer"},"want":{"type":"string"},"timeoutMs":{"type":"integer"},"pollMs":{"type":"integer"}},"required":["condition"],"additionalProperties":false}'));
-        tools.Add(MakeTool("SetAgentTag", "Set default provenance tag for subsequent Place* calls. Empty tag clears.", '{"type":"object","properties":{"tag":{"type":"string"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("ListTagged", "List tracked tagged placements. tag filter; prefix=true or tag ending with ':' for prefix match.", '{"type":"object","properties":{"tag":{"type":"string"},"prefix":{"type":"boolean"},"limit":{"type":"integer"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("RemoveByTag", "Delete live map objects matching tracked tag (re-resolve by pos+idName). Prefer over ClearMapContent for agent cleanup.", '{"type":"object","properties":{"tag":{"type":"string"},"prefix":{"type":"boolean"},"addUndo":{"type":"boolean"},"eps":{"type":"number"},"dryRun":{"type":"boolean"}},"required":["tag"],"additionalProperties":false}'));
-        tools.Add(MakeTool("ClearTagIndex", "Drop provenance sidecar entries only (does not mutate map). all=true clears everything.", '{"type":"object","properties":{"tag":{"type":"string"},"prefix":{"type":"boolean"},"all":{"type":"boolean"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("ControlEditMode", "Inspect/set editor EditMode and PlaceMode. actions: status, set, setEdit, setPlace. Optional blockName/itemPath/macroblock select after set.", '{"type":"object","properties":{"action":{"type":"string"},"editMode":{"type":"string"},"placeMode":{"type":"string"},"blockName":{"type":"string"},"itemPath":{"type":"string"},"macroblock":{"type":"string"},"macroblockName":{"type":"string"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("SelectItemModel", "Select item model in editor picker (inventory SelectArticle when found).", '{"type":"object","properties":{"itemPath":{"type":"string"},"path":{"type":"string"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("SelectMacroblockModel", "Select macroblock model in editor picker when inventory article is found.", '{"type":"object","properties":{"name":{"type":"string"},"macroblock":{"type":"string"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("ControlInventory", "Inventory picker control. actions: status, select, openFolder. type=block|item|macroblock. Path-place remains preferred for headless placement.", '{"type":"object","properties":{"action":{"type":"string"},"type":{"type":"string"},"root":{"type":"string"},"path":{"type":"string"},"query":{"type":"string"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("SaveNamedMacroblock", "Persist an in-memory named macroblock to Openplanet data folder as JSON.", '{"type":"object","properties":{"name":{"type":"string"},"fileName":{"type":"string"}},"required":["name"],"additionalProperties":false}'));
-        tools.Add(MakeTool("LoadNamedMacroblock", "Load a saved named-macroblock JSON into memory (resolves models; requires editor).", '{"type":"object","properties":{"name":{"type":"string"},"fileName":{"type":"string"},"replace":{"type":"boolean"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("ListSavedNamedMacroblocks", "List durable named-macroblock JSON files under the plugin data folder.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("AssertPlacement", "Verify recent placement: expectItemsDelta/expectBlocksDelta, near{x,y,z,radius}+itemPath/blockName, tag/tagMinCount.", '{"type":"object","properties":{"expectItemsDelta":{"type":"integer"},"expectBlocksDelta":{"type":"integer"},"near":{"type":"object"},"itemPath":{"type":"string"},"blockName":{"type":"string"},"mapPre":{"type":"object"},"tag":{"type":"string"},"tagMinCount":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ListPlugins", "List loaded Openplanet plugins (Meta::AllPlugins). Optional query, includeDisabled (default true), includeUnloaded, includeSourcePath (full paths; default basename only).", '{"type":"object","properties":{"query":{"type":"string"},"includeDisabled":{"type":"boolean"},"includeUnloaded":{"type":"boolean"},"includeSourcePath":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetPlugin", "Get one plugin by id or name. includeSettings=true embeds setting values. includeSourcePath=true adds full SourcePath (may be Wine absolute); default is sourcePathBase only.", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"name":{"type":"string"},"includeSettings":{"type":"boolean"},"includeSourcePath":{"type":"boolean"}},"additionalProperties":false}'));
@@ -1164,152 +958,6 @@ namespace TmMcp {
     }
 
     // Item editor control: state readout + safe EME nullify via E++ (issue #28).
-#if DEPENDENCY_EDITOR
-    Json::Value@ ControlItemEditor(Json::Value &in input) {
-        auto app = cast<CTrackMania>(GetApp());
-        if (app is null) return MakeError("app not available", "UNKNOWN", true);
-        string action = input.HasKey("action") ? string(input["action"]) : "status";
-
-        // openItem runs FROM the map editor; everything else requires the item editor.
-        if (action == "openItem") {
-            if (!input.HasKey("itemPath")) return MakeError("itemPath required for openItem", "BAD_INPUT", false);
-            string itemPath = input["itemPath"];
-            auto mapEditor = cast<CGameCtnEditorFree>(GetApp().Editor);
-            if (mapEditor is null) {
-                return MakeError("openItem requires the map editor (got item editor or other module)", "NOT_IN_MAP_EDITOR", true, "Editor");
-            }
-            auto model = Editor::GetInventoryItemModelByPath(itemPath);
-            if (model is null) return MakeError("item model not found in inventory cache: " + itemPath + " (try RefreshInventory)", "MODEL_NOT_FOUND", false);
-            Editor::OpenItemEditor(mapEditor, model);
-            Json::Value output = Json::Object();
-            output["action"] = action;
-            output["requested"] = true;
-            return MakeSuccess(output);
-        }
-
-        if (action == "dumpTestCursor") {
-            string report;
-            try {
-                report = Editor::SpikeDumpTestVehicleCursor();
-            } catch {
-                return MakeError("dump failed: " + getExceptionInfo(), "DUMP_FAILED", false);
-            }
-            Json::Value output = Json::Object();
-            output["action"] = action;
-            auto parsed = Json::Parse(report);
-            if (parsed.GetType() == Json::Type::Object) output["report"] = parsed;
-            else output["reportRaw"] = report;
-            return MakeSuccess(output);
-        }
-
-        if (action == "leaveTestMode") {
-            string report;
-            try { report = Editor::SpikeLeaveTestMode(); } catch {
-                return MakeError("leaveTestMode failed: " + getExceptionInfo(), "SPIKE_FAILED", false);
-            }
-            Json::Value output = Json::Object();
-            output["action"] = action;
-            auto parsed = Json::Parse(report);
-            if (parsed.GetType() == Json::Type::Object) output["report"] = parsed;
-            else output["reportRaw"] = report;
-            return MakeSuccess(output);
-        }
-
-        if (action == "enterGizmoOnLatestStart") {
-            int blockIndex = input.HasKey("blockIndex") ? int(input["blockIndex"]) : -1;
-            int itemIndex = input.HasKey("itemIndex") ? int(input["itemIndex"]) : -1;
-            string report;
-            try { report = Editor::SpikeEnterGizmoOnLatestStart(blockIndex, itemIndex); } catch {
-                return MakeError("enterGizmo failed: " + getExceptionInfo(), "SPIKE_FAILED", false);
-            }
-            Json::Value output = Json::Object();
-            output["action"] = action;
-            auto parsed = Json::Parse(report);
-            if (parsed.GetType() == Json::Type::Object) output["report"] = parsed;
-            else output["reportRaw"] = report;
-            return MakeSuccess(output);
-        }
-
-        if (action == "exitGizmo") {
-            string report;
-            try { report = Editor::SpikeExitGizmo(); } catch {
-                return MakeError("exitGizmo failed: " + getExceptionInfo(), "SPIKE_FAILED", false);
-            }
-            Json::Value output = Json::Object();
-            output["action"] = action;
-            auto parsed = Json::Parse(report);
-            if (parsed.GetType() == Json::Type::Object) output["report"] = parsed;
-            else output["reportRaw"] = report;
-            return MakeSuccess(output);
-        }
-
-        if (action == "keepVehiclePatchOn" || action == "keepVehiclePatchOff") {
-            string report;
-            try { report = Editor::SpikeSetKeepVehiclePatch(action == "keepVehiclePatchOn"); } catch {
-                return MakeError("keepVehiclePatch failed: " + getExceptionInfo(), "SPIKE_FAILED", false);
-            }
-            Json::Value output = Json::Object();
-            output["action"] = action;
-            auto parsed = Json::Parse(report);
-            if (parsed.GetType() == Json::Type::Object) output["report"] = parsed;
-            else output["reportRaw"] = report;
-            return MakeSuccess(output);
-        }
-
-        if (action == "enterTestAtLatestStart") {
-            string report;
-            try { report = Editor::SpikeEnterTestAtLatestStart(); } catch {
-                return MakeError("enterTest failed: " + getExceptionInfo(), "SPIKE_FAILED", false);
-            }
-            Json::Value output = Json::Object();
-            output["action"] = action;
-            auto parsed = Json::Parse(report);
-            if (parsed.GetType() == Json::Type::Object) output["report"] = parsed;
-            else output["reportRaw"] = report;
-            return MakeSuccess(output);
-        }
-
-        auto itemEditor = cast<CGameEditorItem>(app.Editor);
-        if (itemEditor is null) {
-            return MakeError("item editor not available (app.Editor is not a CGameEditorItem)", "NOT_IN_ITEM_EDITOR", true, "ItemEditor");
-        }
-        auto itemModel = itemEditor.ItemModel;
-
-        Json::Value output = Json::Object();
-        output["action"] = input.HasKey("action") ? string(input["action"]) : "status";
-        output["itemModelName"] = itemModel is null ? "" : itemModel.IdName;
-        output["hasEntityModelEdition"] = itemModel !is null && itemModel.EntityModelEdition !is null;
-        output["hasEntityModel"] = itemModel !is null && itemModel.EntityModel !is null;
-
-        if (output["action"] == "leaveItemEditor") {
-            Editor::LeaveCurrentItemEditor();
-            output["left"] = true;
-        }
-        if (output["action"] == "saveItem") {
-            if (itemModel is null || itemModel.IdName == "Unassigned") {
-                return MakeError("item has not been saved before (IdName Unassigned); save it manually once first", "NOT_SAVED_YET", false);
-            }
-            try {
-                Editor::SaveCurrentItemEditorItem();
-                output["saved"] = true;
-            } catch {
-                return MakeError("save failed: " + getExceptionInfo(), "SAVE_FAILED", false);
-            }
-        }
-        if (output["action"] == "nullifyEME") {
-            if (itemModel is null) return MakeError("no item model loaded in item editor", "NO_ITEM_MODEL", false, "ItemEditor");
-            bool notify = input.HasKey("notify") ? bool(input["notify"]) : true;
-            string err = Editor::NullifyItemModelEME(itemModel, notify);
-            output["nullifyError"] = err;
-            output["ok"] = err.Length == 0;
-            output["hasEntityModelEdition"] = itemModel.EntityModelEdition !is null;
-            if (err.Length > 0) {
-                output["success"] = true; // tool succeeded at reporting; nullify refused
-            }
-        }
-        return MakeSuccess(output);
-    }
-#endif
 
     Json::Value@ GetMode(Json::Value &in input) {
         auto app = cast<CTrackMania>(GetApp());
@@ -1549,63 +1197,6 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
-#if DEPENDENCY_EDITOR
-    Json::Value@ ControlMapObjectives(Json::Value &in input) {
-        auto editor = cast<CGameCtnEditorFree>(GetApp().Editor);
-        if (editor is null || editor.Challenge is null) return MakeError("Not in editor with a map", "wrong_mode", false, "editor");
-        auto map = editor.Challenge;
-        string action = input.HasKey("action") ? string(input["action"]) : "get";
-        action = action.ToLower();
-
-        if (action == "set") {
-            Json::Value applied = Json::Object();
-            if (input.HasKey("nbClones")) {
-                uint n = uint(Math::Clamp(int(input["nbClones"]), 0, 64));
-                bool ok = Editor::SetMapNbClones(map, n);
-                applied["nbClones"] = int(n);
-                applied["nbClonesOk"] = ok;
-                if (!ok) return MakeError("SetMapNbClones failed (readback mismatch)", "write_failed", true, "editor");
-            }
-            // Prefer combined lap mode when either field present (keeps Challenge+MapInfo synced).
-            if (input.HasKey("isLapRace") || input.HasKey("nbLaps")) {
-                bool isLap = input.HasKey("isLapRace") ? bool(input["isLapRace"]) : true;
-                uint n = input.HasKey("nbLaps") ? uint(Math::Clamp(int(input["nbLaps"]), 0, 99)) : uint(Editor::GetMapNbLaps(map));
-                bool ok = Editor::SetMapLapMode(map, isLap, n);
-                applied["isLapRace"] = isLap;
-                applied["nbLaps"] = int(n);
-                applied["lapModeOk"] = ok;
-                if (!ok) return MakeError("SetMapLapMode failed", "write_failed", true, "editor");
-            }
-            Json::Value result = Json::Object();
-            result["ok"] = true;
-            result["action"] = "set";
-            result["applied"] = applied;
-            result["nbClones"] = int(Editor::GetMapNbClones(map));
-            result["nbLaps"] = int(Editor::GetMapNbLaps(map));
-            result["isLapRace"] = Editor::GetMapIsLapRace(map);
-            if (map.MapInfo !is null) result["mapInfoNbClones"] = int(map.MapInfo.TMObjective_NbClones);
-            return MakeSuccess(result);
-        }
-
-        // get (default)
-        Json::Value result = Json::Object();
-        result["ok"] = true;
-        result["action"] = "get";
-        result["nbClones"] = int(Editor::GetMapNbClones(map));
-        result["nbLaps"] = int(Editor::GetMapNbLaps(map));
-        result["isLapRace"] = Editor::GetMapIsLapRace(map);
-        result["authorTime"] = int(map.TMObjective_AuthorTime);
-        result["goldTime"] = int(map.TMObjective_GoldTime);
-        result["silverTime"] = int(map.TMObjective_SilverTime);
-        result["bronzeTime"] = int(map.TMObjective_BronzeTime);
-        if (map.MapInfo !is null) {
-            result["mapInfoNbClones"] = int(map.MapInfo.TMObjective_NbClones);
-            result["mapInfoIsLapRace"] = map.MapInfo.TMObjective_IsLapRace;
-            result["mapInfoNbLaps"] = int(map.MapInfo.TMObjective_NbLaps);
-        }
-        return MakeSuccess(result);
-    }
-#endif
 
 Json::Value@ GetMapInfo(Json::Value &in input) {
         auto editor = GetEditor();
@@ -1923,11 +1514,6 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         bool animate = input.HasKey("animate") ? bool(input["animate"]) : false;
 
         bool animated = false;
-#if DEPENDENCY_EDITOR
-        if (animate) {
-            animated = Editor::SetCamAnimationGoTo(vec2(h, v), target, distance);
-        }
-#endif
         if (!animated) {
             pmt.CameraTargetPosition = target;
             pmt.CameraToTargetDistance = distance;
@@ -2036,22 +1622,6 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         return MakeSuccess(output);
     }
 
-#if DEPENDENCY_EDITOR
-    Json::Value@ FocusCamera(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
-        if (!input.HasKey("x") || !input.HasKey("y") || !input.HasKey("z")) return MakeError("missing x, y, z");
-        vec3 target = PositionInput(input);
-        float distance = input.HasKey("distance") ? float(input["distance"]) : 60.0;
-        bool focused = FocusCameraOn(target, distance);
-
-        Json::Value output = CameraToJson(editor);
-        output["focused"] = focused;
-        output["target"] = Vec3ToJson(target);
-        output["distance"] = distance;
-        return MakeSuccess(output);
-    }
-#endif
 
     Json::Value@ TakeScreenshot(Json::Value &in input) {
         auto app = GetApp();
@@ -2107,18 +1677,11 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
             if (block is null) continue;
             if (query.Length > 0 && !ModelMatchesQuery(block.BlockInfo, query)) continue;
 
-#if DEPENDENCY_EDITOR
-            bool isFree = Editor::IsBlockFree(block);
-#else
             bool isFree = false;
-#endif
             if (filterFree && isFree != wantFree) continue;
 
             if (hasCenter) {
                 if (world) {
-#if DEPENDENCY_EDITOR
-                    if ((Editor::GetBlockLocation(block) - worldCenter).Length() > radius) continue;
-#endif
                 } else if (float(Nat3Distance(block.Coord, coordCenter)) > radius) {
                     continue;
                 }
@@ -2280,448 +1843,16 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         return MakeSuccess(InventorySummary(editor.PluginMapType));
     }
 
-#if DEPENDENCY_EDITOR
-    Json::Value@ FindInventory(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
-        string query = input.HasKey("query") ? string(input["query"]).ToLower() : "";
-        string requestedType = input.HasKey("type") ? string(input["type"]).ToLower() : "all";
-        int limit = input.HasKey("limit") ? int(input["limit"]) : 25;
-        if (limit < 1) limit = 1;
-        if (limit > 200) limit = 200;
 
-        Json::Value results = Json::Array();
-        if (InventoryTypeEnabled(requestedType, "block")) {
-            for (uint i = 0; i < editor.PluginMapType.BlockModels.Length && results.Length < uint(limit); i++) {
-                auto blockInfo = editor.PluginMapType.BlockModels[i];
-                if (!ModelMatchesQuery(blockInfo, query)) continue;
-                auto entry = ModelToJson(blockInfo, false);
-                entry["type"] = "block";
-                results.Add(entry);
-            }
-        }
-        if (InventoryTypeEnabled(requestedType, "item")) {
-            uint nbItems = Editor::GetInventoryNbItems();
-            for (uint i = 0; i < nbItems && results.Length < uint(limit); i++) {
-                string path = Editor::GetInventoryItemPath(i);
-                string name = Editor::GetInventoryItemName(i);
-                if (!TextMatchesQuery(path, query) && !TextMatchesQuery(name, query)) continue;
-                Json::Value entry = Json::Object();
-                entry["type"] = "item";
-                entry["name"] = name;
-                entry["path"] = path;
-                results.Add(entry);
-            }
-        }
-        if (InventoryTypeEnabled(requestedType, "macroblock")) {
-            for (uint i = 0; i < editor.PluginMapType.MacroblockModels.Length && results.Length < uint(limit); i++) {
-                auto macroblockInfo = editor.PluginMapType.MacroblockModels[i];
-                if (macroblockInfo is null) continue;
-                string name = string(macroblockInfo.Name);
-                string idName = string(macroblockInfo.IdName);
-                if (!TextMatchesQuery(name, query) && !TextMatchesQuery(idName, query)) continue;
-                results.Add(MacroblockModelToJson(macroblockInfo));
-            }
-        }
 
-        Json::Value output = Json::Object();
-        output["results"] = results;
-        output["count"] = int(results.Length);
-        output["query"] = query;
-        output["type"] = requestedType;
-        output["inventory"] = InventorySummary(editor.PluginMapType);
-        return MakeSuccess(output);
-    }
-#endif
 
-#if DEPENDENCY_EDITOR
-    Json::Value@ RefreshInventory(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
-        uint preCount = Editor::GetInventoryNbItems();
-        Editor::RefreshInventoryCache();
-        Json::Value output = Json::Object();
-        output["nbItemsBefore"] = int(preCount);
-        output["isScanningItems"] = Editor::IsInventoryScanningItems();
-        output["note"] = "rescan started; poll GetInventorySummary until isScanningItems=false, then re-query";
-        return MakeSuccess(output);
-    }
-#endif
 
-#if DEPENDENCY_EDITOR
-    Json::Value@ CreateNamedMacroblock(Json::Value &in input) {
-        if (!input.HasKey("name")) return MakeError("missing name");
-        string name = string(input["name"]);
-        if (name.Length == 0) return MakeError("name is empty");
-        bool replace = input.HasKey("replace") ? bool(input["replace"]) : false;
-        int index = FindNamedMacroblockIndex(name);
-        if (index >= 0 && !replace) return MakeError("named macroblock already exists: " + name);
 
-        auto mb = Editor::MakeMacroblockSpec();
-        if (index >= 0) {
-            @g_NamedMacroblocks[index] = mb;
-            @g_NamedMacroblockSkins[index] = NewNamedMacroblockSkinList();
-        } else {
-            g_NamedMacroblockNames.InsertLast(name);
-            g_NamedMacroblocks.InsertLast(mb);
-            g_NamedMacroblockSkins.InsertLast(NewNamedMacroblockSkinList());
-        }
-        return MakeSuccess(NamedMacroblockSummary(name, mb));
-    }
-#endif
 
-#if DEPENDENCY_EDITOR
-    Json::Value@ ListNamedMacroblocks(Json::Value &in input) {
-        Json::Value entries = Json::Array();
-        for (uint i = 0; i < g_NamedMacroblockNames.Length; i++) {
-            entries.Add(NamedMacroblockSummary(g_NamedMacroblockNames[i], g_NamedMacroblocks[i]));
-        }
 
-        Json::Value output = Json::Object();
-        output["macroblocks"] = entries;
-        output["count"] = int(entries.Length);
-        return MakeSuccess(output);
-    }
-#endif
 
-#if DEPENDENCY_EDITOR
-    Json::Value@ GetNamedMacroblockTool(Json::Value &in input) {
-        if (!input.HasKey("name")) return MakeError("missing name");
-        string name = string(input["name"]);
-        auto mb = GetNamedMacroblock(name);
-        if (mb is null) return MakeError("named macroblock not found: " + name);
 
-        int limit = input.HasKey("limit") ? int(input["limit"]) : 100;
-        if (limit < 1) limit = 1;
-        if (limit > 500) limit = 500;
-        bool includeItems = input.HasKey("includeItems") ? bool(input["includeItems"]) : true;
 
-        Json::Value blocks = Json::Array();
-        for (uint i = 0; i < mb.blocks.Length && blocks.Length < uint(limit); i++) {
-            auto obj = BlockSpecToJson(mb.blocks[i]);
-            obj["index"] = int(i);
-            blocks.Add(obj);
-        }
-
-        Json::Value items = Json::Array();
-        if (includeItems) {
-            for (uint i = 0; i < mb.items.Length && items.Length < uint(limit); i++) {
-                auto obj = ItemSpecToJson(mb.items[i]);
-                obj["index"] = int(i);
-                items.Add(obj);
-            }
-        }
-
-        Json::Value output = NamedMacroblockSummary(name, mb);
-        output["blocks"] = blocks;
-        output["items"] = items;
-        output["postSkins"] = NamedMacroblockSkinsToJson(GetNamedMacroblockSkins(name), limit);
-        output["limit"] = limit;
-        output["includeItems"] = includeItems;
-        return MakeSuccess(output);
-    }
-#endif
-
-#if DEPENDENCY_EDITOR
-    Json::Value@ ClearNamedMacroblock(Json::Value &in input) {
-        bool clearAll = input.HasKey("all") ? bool(input["all"]) : false;
-        if (clearAll) {
-            int count = int(g_NamedMacroblockNames.Length);
-            g_NamedMacroblockNames.RemoveRange(0, g_NamedMacroblockNames.Length);
-            g_NamedMacroblocks.RemoveRange(0, g_NamedMacroblocks.Length);
-            g_NamedMacroblockSkins.RemoveRange(0, g_NamedMacroblockSkins.Length);
-            Json::Value output = Json::Object();
-            output["clearedAll"] = true;
-            output["count"] = count;
-            return MakeSuccess(output);
-        }
-
-        if (!input.HasKey("name")) return MakeError("missing name or all=true");
-        string name = string(input["name"]);
-        int index = FindNamedMacroblockIndex(name);
-        if (index < 0) return MakeError("named macroblock not found: " + name);
-        g_NamedMacroblockNames.RemoveAt(index);
-        g_NamedMacroblocks.RemoveAt(index);
-        g_NamedMacroblockSkins.RemoveAt(index);
-
-        Json::Value output = Json::Object();
-        output["cleared"] = true;
-        output["name"] = name;
-        return MakeSuccess(output);
-    }
-#endif
-
-#if DEPENDENCY_EDITOR
-    Json::Value@ AddBlockToNamedMacroblock(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
-        if (!input.HasKey("name") || !input.HasKey("blockName") || !input.HasKey("x") || !input.HasKey("y") || !input.HasKey("z")) {
-            return MakeError("missing name, blockName, x, y, z");
-        }
-
-        string name = string(input["name"]);
-        string blockName = string(input["blockName"]);
-        bool create = input.HasKey("create") ? bool(input["create"]) : true;
-        auto mb = GetNamedMacroblock(name);
-        if (mb is null && create) {
-            @mb = Editor::MakeMacroblockSpec();
-            g_NamedMacroblockNames.InsertLast(name);
-            g_NamedMacroblocks.InsertLast(mb);
-            g_NamedMacroblockSkins.InsertLast(NewNamedMacroblockSkinList());
-        }
-        if (mb is null) return MakeError("named macroblock not found: " + name);
-
-        bool isTerrain = false;
-        auto blockInfo = ResolveBlockModel(editor.PluginMapType, blockName, isTerrain);
-        if (blockInfo is null) return MakeError("block not found: " + blockName);
-        if (isTerrain) return MakeError("terrain models are not supported in named freeblock macroblocks");
-
-        vec3 pos = PositionInput(input);
-        vec3 rot = RotationInput(input);
-        auto spec = Editor::MakeBlockSpec(blockInfo, pos, rot);
-        spec.SetFree();
-        spec.isGround = false;
-        spec.isGhost = false;
-        spec.variant = input.HasKey("variant") ? uint(input["variant"]) : 0;
-        bool variantOk = spec.EnsureValidVariant();
-        uint blockIndex = mb.blocks.Length;
-        mb.blocks.InsertLast(spec);
-        string fgSkin = input.HasKey("fgSkin") ? string(input["fgSkin"]) : "";
-        string bgSkin = input.HasKey("bgSkin") ? string(input["bgSkin"]) : "";
-        if (!input.HasKey("fgSkin") && input.HasKey("skin")) fgSkin = string(input["skin"]);
-        AddPostSkinToNamedMacroblock(name, blockIndex, fgSkin, bgSkin);
-
-        Json::Value output = NamedMacroblockSummary(name, mb);
-        output["added"] = true;
-        output["blockIndex"] = int(blockIndex);
-        output["variantOk"] = variantOk;
-        output["blockName"] = blockName;
-        output["modelName"] = blockInfo.Name;
-        output["modelIdName"] = blockInfo.IdName;
-        output["pos"] = Vec3ToJson(pos);
-        output["rot"] = Vec3ToJson(rot);
-        output["rotDeg"] = Vec3DegToJson(rot);
-        output["fgSkin"] = fgSkin;
-        output["bgSkin"] = bgSkin;
-        return MakeSuccess(output);
-    }
-#endif
-
-#if DEPENDENCY_EDITOR
-    Json::Value@ AddBlocksToNamedMacroblock(Json::Value &in input) {
-        if (!input.HasKey("name") || !input.HasKey("blocks")) return MakeError("missing name or blocks");
-        auto blocks = input["blocks"];
-        if (blocks.GetType() != Json::Type::Array) return MakeError("blocks must be an array");
-        string name = string(input["name"]);
-        bool create = input.HasKey("create") ? bool(input["create"]) : true;
-        bool continueOnError = input.HasKey("continueOnError") ? bool(input["continueOnError"]) : false;
-
-        Json::Value errors = Json::Array();
-        int added = 0;
-        for (uint i = 0; i < blocks.Length; i++) {
-            Json::Value block = blocks[i];
-            block["name"] = name;
-            block["create"] = create;
-            auto result = AddBlockToNamedMacroblock(block);
-            if (bool(result["success"])) {
-                added++;
-                continue;
-            }
-            Json::Value err = Json::Object();
-            err["index"] = int(i);
-            err["error"] = string(result["error"]);
-            errors.Add(err);
-            if (!continueOnError) break;
-        }
-
-        auto mb = GetNamedMacroblock(name);
-        Json::Value output = mb is null ? Json::Object() : NamedMacroblockSummary(name, mb);
-        output["requested"] = int(blocks.Length);
-        output["added"] = added;
-        output["errors"] = errors;
-        output["ok"] = errors.Length == 0;
-        return MakeSuccess(output);
-    }
-#endif
-
-#if DEPENDENCY_EDITOR
-    Json::Value@ AddItemToNamedMacroblock(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
-        if (!input.HasKey("name") || !input.HasKey("itemPath") || !input.HasKey("x") || !input.HasKey("y") || !input.HasKey("z")) {
-            return MakeError("missing name, itemPath, x, y, z");
-        }
-
-        string name = string(input["name"]);
-        string itemPath = string(input["itemPath"]);
-        bool create = input.HasKey("create") ? bool(input["create"]) : true;
-        auto mb = GetNamedMacroblock(name);
-        if (mb is null && create) {
-            @mb = Editor::MakeMacroblockSpec();
-            g_NamedMacroblockNames.InsertLast(name);
-            g_NamedMacroblocks.InsertLast(mb);
-            g_NamedMacroblockSkins.InsertLast(NewNamedMacroblockSkinList());
-        }
-        if (mb is null) return MakeError("named macroblock not found: " + name);
-
-        auto itemModel = ResolveItemModel(itemPath);
-        if (itemModel is null) return MakeError("item not found: " + itemPath);
-
-        vec3 pos = PositionInput(input);
-        vec3 rot = RotationInput(input);
-        auto spec = Editor::MakeItemSpec(itemModel, pos, rot);
-        spec.isFlying = 1;
-        spec.variantIx = input.HasKey("variant") ? uint16(input["variant"]) : 0;
-        uint itemIndex = mb.items.Length;
-        mb.items.InsertLast(spec);
-        string fgSkin = input.HasKey("fgSkin") ? string(input["fgSkin"]) : "";
-        string bgSkin = input.HasKey("bgSkin") ? string(input["bgSkin"]) : "";
-        if (!input.HasKey("fgSkin") && input.HasKey("skin")) bgSkin = string(input["skin"]);
-        AddPostItemSkinToNamedMacroblock(name, itemIndex, fgSkin, bgSkin);
-
-        Json::Value output = NamedMacroblockSummary(name, mb);
-        output["added"] = true;
-        output["itemIndex"] = int(itemIndex);
-        output["itemPath"] = itemPath;
-        output["model"] = ItemModelToJson(itemModel, itemPath);
-        output["pos"] = Vec3ToJson(pos);
-        output["rot"] = Vec3ToJson(rot);
-        output["rotDeg"] = Vec3DegToJson(rot);
-        output["variant"] = int(spec.variantIx);
-        output["fgSkin"] = fgSkin;
-        output["bgSkin"] = bgSkin;
-        return MakeSuccess(output);
-    }
-#endif
-
-#if DEPENDENCY_EDITOR
-    Json::Value@ AddItemsToNamedMacroblock(Json::Value &in input) {
-        if (!input.HasKey("name") || !input.HasKey("items")) return MakeError("missing name or items");
-        auto items = input["items"];
-        if (items.GetType() != Json::Type::Array) return MakeError("items must be an array");
-        string name = string(input["name"]);
-        bool create = input.HasKey("create") ? bool(input["create"]) : true;
-        bool continueOnError = input.HasKey("continueOnError") ? bool(input["continueOnError"]) : false;
-
-        Json::Value errors = Json::Array();
-        int added = 0;
-        for (uint i = 0; i < items.Length; i++) {
-            Json::Value item = items[i];
-            item["name"] = name;
-            item["create"] = create;
-            auto result = AddItemToNamedMacroblock(item);
-            if (bool(result["success"])) {
-                added++;
-                continue;
-            }
-            Json::Value err = Json::Object();
-            err["index"] = int(i);
-            err["error"] = string(result["error"]);
-            errors.Add(err);
-            if (!continueOnError) break;
-        }
-
-        auto mb = GetNamedMacroblock(name);
-        Json::Value output = mb is null ? Json::Object() : NamedMacroblockSummary(name, mb);
-        output["requested"] = int(items.Length);
-        output["added"] = added;
-        output["errors"] = errors;
-        output["ok"] = errors.Length == 0;
-        return MakeSuccess(output);
-    }
-#endif
-
-#if DEPENDENCY_EDITOR
-    Json::Value@ PlaceNamedMacroblock(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
-        if (!input.HasKey("name")) return MakeError("missing name");
-        string name = string(input["name"]);
-        auto mb = GetNamedMacroblock(name);
-        if (mb is null) return MakeError("named macroblock not found: " + name);
-        if (mb.blocks.Length == 0 && mb.items.Length == 0) return MakeError("named macroblock is empty: " + name);
-
-        bool addUndo = input.HasKey("addUndo") ? bool(input["addUndo"]) : true;
-        bool autofocus = input.HasKey("autofocus") ? bool(input["autofocus"]) : true;
-        vec3 offset = OptionalOffsetInput(input);
-        vec3 rotation = RotationInput(input);
-        vec3 pivot = PivotInput(input);
-        bool transformed = HasTransformInput(input);
-        auto placedMb = transformed
-            ? DuplicateAndTransformMacroblock(mb, offset, rotation, pivot)
-            : mb.Duplicate();
-
-        Json::Value mapPre = MapSummary(editor);
-        int blockBaseIndex = int(editor.Challenge.Blocks.Length);
-        int itemBaseIndex = int(editor.Challenge.AnchoredObjects.Length);
-        bool placed = false;
-        string error = "";
-        try {
-            placed = Editor::PlaceMacroblock(placedMb, addUndo);
-        } catch {
-            error = getExceptionInfo();
-        }
-
-        Json::Value skinApplication = Json::Object();
-        skinApplication["requested"] = 0;
-        bool skinsApplied = false;
-        string skinError = "";
-        auto postSkins = GetNamedMacroblockSkins(name);
-        int skinsRequested = postSkins is null ? 0 : int(postSkins.Length);
-        if (placed && skinsRequested > 0) {
-            try {
-                skinApplication = ApplyNamedMacroblockSkinsDirect(editor.PluginMapType, name, blockBaseIndex, itemBaseIndex);
-                skinsApplied = bool(skinApplication["ok"]);
-                for (uint i = 0; i < 5; i++) yield();
-            } catch {
-                skinError = getExceptionInfo();
-            }
-        }
-
-        Json::Value output = NamedMacroblockSummary(name, mb);
-        output["placed"] = placed;
-        output["skinsRequested"] = skinsRequested;
-        output["skinsApplied"] = skinsApplied;
-        output["skinApplication"] = skinApplication;
-        output["addUndo"] = addUndo;
-        output["transformed"] = transformed;
-        output["offset"] = Vec3ToJson(offset);
-        output["rot"] = Vec3ToJson(rotation);
-        output["rotDeg"] = Vec3DegToJson(rotation);
-        output["pivot"] = Vec3ToJson(pivot);
-        output["mapPre"] = mapPre;
-        output["mapPost"] = MapSummary(editor);
-        RememberMapDelta("PlaceNamedMacroblock", mapPre, output["mapPost"]);
-        if (placed) RecordTaggedNamedMacroblock(input, placedMb, blockBaseIndex, itemBaseIndex);
-        string agentTag = ResolvePlacementTag(input);
-        if (agentTag.Length > 0) output["agentTag"] = agentTag;
-        if (error.Length > 0) output["error"] = error;
-        if (skinError.Length > 0) output["skinError"] = skinError;
-        output["autofocus"] = false;
-        if (placed && autofocus && (placedMb.blocks.Length > 0 || placedMb.items.Length > 0)) {
-            vec3 bMin = vec3(1e18, 1e18, 1e18);
-            vec3 bMax = vec3(-1e18, -1e18, -1e18);
-            for (uint i = 0; i < placedMb.blocks.Length; i++) {
-                vec3 p = placedMb.blocks[i].pos;
-                bMin = vec3(Math::Min(bMin.x, p.x), Math::Min(bMin.y, p.y), Math::Min(bMin.z, p.z));
-                bMax = vec3(Math::Max(bMax.x, p.x), Math::Max(bMax.y, p.y), Math::Max(bMax.z, p.z));
-            }
-            for (uint i = 0; i < placedMb.items.Length; i++) {
-                vec3 p = placedMb.items[i].pos;
-                bMin = vec3(Math::Min(bMin.x, p.x), Math::Min(bMin.y, p.y), Math::Min(bMin.z, p.z));
-                bMax = vec3(Math::Max(bMax.x, p.x), Math::Max(bMax.y, p.y), Math::Max(bMax.z, p.z));
-            }
-            vec3 center = (bMin + bMax) * 0.5 - MacroblockInternalOffset();
-            vec3 diag = bMax - bMin;
-            float diagonal = Math::Sqrt(diag.x * diag.x + diag.y * diag.y + diag.z * diag.z);
-            float autofocusDistance = input.HasKey("autofocusDistance") ? float(input["autofocusDistance"]) : Math::Max(60.0, diagonal * 2.0);
-            output["autofocus"] = AutofocusCameraOn(center, autofocusDistance);
-            output["autofocusTarget"] = Vec3ToJson(center);
-            output["autofocusDistance"] = autofocusDistance;
-        }
-        return MakeSuccess(output);
-    }
-#endif
 
     Json::Value@ PlaceBlock(Json::Value &in input) {
         auto editor = GetEditor();
@@ -2818,203 +1949,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         return MakeSuccess(output);
     }
 
-#if DEPENDENCY_EDITOR
-    Json::Value@ PlaceBlockViaEditorPlusPlus(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
-        if (!input.HasKey("blockName") || !input.HasKey("x") || !input.HasKey("y") || !input.HasKey("z")) {
-            return MakeError("missing blockName, x, y, z");
-        }
 
-        string blockName = string(input["blockName"]);
-        bool isTerrain = false;
-        auto blockInfo = ResolveBlockModel(editor.PluginMapType, blockName, isTerrain);
-        if (blockInfo is null) return MakeError("block not found: " + blockName);
-        if (isTerrain) return MakeError("terrain models are not supported by Editor++ free-block macroblock placement");
-
-        int repeat = input.HasKey("repeat") ? int(input["repeat"]) : 1;
-        if (repeat < 1) repeat = 1;
-        if (repeat > 8) repeat = 8;
-        bool addUndo = input.HasKey("addUndo") ? bool(input["addUndo"]) : true;
-        bool autofocus = input.HasKey("autofocus") ? bool(input["autofocus"]) : true;
-        float autofocusDistance = input.HasKey("autofocusDistance") ? float(input["autofocusDistance"]) : 60.0;
-
-        vec3 basePos = vec3(float(input["x"]), float(input["y"]), float(input["z"]));
-        vec3 baseRot = RotationInput(input);
-        vec3 spacing = vec3(
-            input.HasKey("spacingX") ? float(input["spacingX"]) : 32.0,
-            input.HasKey("spacingY") ? float(input["spacingY"]) : 0.0,
-            input.HasKey("spacingZ") ? float(input["spacingZ"]) : 0.0
-        );
-
-        Json::Value placements = Json::Array();
-        Json::Value mapPre = MapSummary(editor);
-        uint beforeBlocks = editor.Challenge.Blocks.Length;
-        bool allPlaced = true;
-
-        for (int i = 0; i < repeat; i++) {
-            auto pos = basePos + spacing * float(i);
-            auto spec = Editor::MakeBlockSpec(blockInfo, pos, baseRot);
-            spec.SetFree();
-            spec.isGround = false;
-            spec.isGhost = false;
-            spec.variant = 0;
-            bool variantOk = spec.EnsureValidVariant();
-
-            Editor::BlockSpec@[] blocks;
-            blocks.InsertLast(spec);
-
-            bool placed = false;
-            try {
-                placed = Editor::PlaceBlocks(blocks, addUndo);
-            } catch {
-                allPlaced = false;
-                Json::Value failure = Json::Object();
-                failure["index"] = i;
-                failure["placed"] = false;
-                failure["variantOk"] = variantOk;
-                failure["error"] = getExceptionInfo();
-                failure["pos"] = Vec3ToJson(pos);
-                failure["rot"] = Vec3ToJson(baseRot);
-                failure["rotDeg"] = Vec3DegToJson(baseRot);
-                placements.Add(failure);
-                continue;
-            }
-
-            if (!placed) allPlaced = false;
-            Json::Value placement = Json::Object();
-            placement["index"] = i;
-            placement["placed"] = placed;
-            placement["variantOk"] = variantOk;
-            placement["pos"] = Vec3ToJson(pos);
-            placement["rot"] = Vec3ToJson(baseRot);
-            placement["rotDeg"] = Vec3DegToJson(baseRot);
-            placements.Add(placement);
-        }
-
-        Json::Value output = Json::Object();
-        output["allPlaced"] = allPlaced;
-        output["beforeBlocks"] = int(beforeBlocks);
-        output["afterBlocks"] = int(editor.Challenge.Blocks.Length);
-        output["mapPre"] = mapPre;
-        output["mapPost"] = MapSummary(editor);
-        output["blockName"] = blockName;
-        output["modelName"] = blockInfo.Name;
-        output["modelIdName"] = blockInfo.IdName;
-        output["rot"] = Vec3ToJson(baseRot);
-        output["rotDeg"] = Vec3DegToJson(baseRot);
-        output["repeat"] = repeat;
-        output["placements"] = placements;
-        output["autofocus"] = false;
-        if (autofocus && placements.Length > 0) {
-            vec3 focusPos = basePos + spacing * float(repeat - 1);
-            output["autofocus"] = AutofocusCameraOn(focusPos, autofocusDistance);
-            output["autofocusTarget"] = Vec3ToJson(focusPos);
-            output["autofocusDistance"] = autofocusDistance;
-        }
-        RememberMapDelta("PlaceBlockViaEditorPlusPlus", mapPre, output["mapPost"]);
-        RecordTaggedPlacementsFromPlaceBlock(input, output, blockName);
-        string _tagB = ResolvePlacementTag(input);
-        if (_tagB.Length > 0) output["agentTag"] = _tagB;
-        return MakeSuccess(output);
-    }
-#endif
-
-#if DEPENDENCY_EDITOR
-    Json::Value@ PlaceItemViaEditorPlusPlus(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
-        if (!input.HasKey("itemPath") || !input.HasKey("x") || !input.HasKey("y") || !input.HasKey("z")) {
-            return MakeError("missing itemPath, x, y, z");
-        }
-
-        string itemPath = string(input["itemPath"]);
-        auto itemModel = ResolveItemModel(itemPath);
-        if (itemModel is null) return MakeError("item not found: " + itemPath);
-
-        int repeat = input.HasKey("repeat") ? int(input["repeat"]) : 1;
-        if (repeat < 1) repeat = 1;
-        if (repeat > 8) repeat = 8;
-        bool addUndo = input.HasKey("addUndo") ? bool(input["addUndo"]) : true;
-        bool autofocus = input.HasKey("autofocus") ? bool(input["autofocus"]) : true;
-        float autofocusDistance = input.HasKey("autofocusDistance") ? float(input["autofocusDistance"]) : 60.0;
-        uint16 variant = input.HasKey("variant") ? uint16(input["variant"]) : 0;
-
-        vec3 basePos = PositionInput(input);
-        vec3 baseRot = RotationInput(input);
-        vec3 spacing = vec3(
-            input.HasKey("spacingX") ? float(input["spacingX"]) : 8.0,
-            input.HasKey("spacingY") ? float(input["spacingY"]) : 0.0,
-            input.HasKey("spacingZ") ? float(input["spacingZ"]) : 0.0
-        );
-
-        Json::Value placements = Json::Array();
-        Json::Value mapPre = MapSummary(editor);
-        uint beforeItems = editor.Challenge.AnchoredObjects.Length;
-        bool allPlaced = true;
-
-        for (int i = 0; i < repeat; i++) {
-            auto pos = basePos + spacing * float(i);
-            auto spec = Editor::MakeItemSpec(itemModel, pos, baseRot);
-            spec.isFlying = 1;
-            spec.variantIx = variant;
-
-            Editor::ItemSpec@[] items;
-            items.InsertLast(spec);
-
-            bool placed = false;
-            try {
-                placed = Editor::PlaceItems(items, addUndo);
-            } catch {
-                allPlaced = false;
-                Json::Value failure = Json::Object();
-                failure["index"] = i;
-                failure["placed"] = false;
-                failure["error"] = getExceptionInfo();
-                failure["pos"] = Vec3ToJson(pos);
-                failure["rot"] = Vec3ToJson(baseRot);
-                failure["rotDeg"] = Vec3DegToJson(baseRot);
-                placements.Add(failure);
-                continue;
-            }
-
-            if (!placed) allPlaced = false;
-            Json::Value placement = Json::Object();
-            placement["index"] = i;
-            placement["placed"] = placed;
-            placement["pos"] = Vec3ToJson(pos);
-            placement["rot"] = Vec3ToJson(baseRot);
-            placement["rotDeg"] = Vec3DegToJson(baseRot);
-            placements.Add(placement);
-        }
-
-        Json::Value output = Json::Object();
-        output["allPlaced"] = allPlaced;
-        output["beforeItems"] = int(beforeItems);
-        output["afterItems"] = int(editor.Challenge.AnchoredObjects.Length);
-        output["mapPre"] = mapPre;
-        output["mapPost"] = MapSummary(editor);
-        output["itemPath"] = itemPath;
-        output["model"] = ItemModelToJson(itemModel, itemPath);
-        output["rot"] = Vec3ToJson(baseRot);
-        output["rotDeg"] = Vec3DegToJson(baseRot);
-        output["repeat"] = repeat;
-        output["variant"] = int(variant);
-        output["placements"] = placements;
-        output["autofocus"] = false;
-        if (autofocus && placements.Length > 0) {
-            vec3 focusPos = basePos + spacing * float(repeat - 1);
-            output["autofocus"] = AutofocusCameraOn(focusPos, autofocusDistance);
-            output["autofocusTarget"] = Vec3ToJson(focusPos);
-            output["autofocusDistance"] = autofocusDistance;
-        }
-        RememberMapDelta("PlaceItemViaEditorPlusPlus", mapPre, output["mapPost"]);
-        RecordTaggedPlacementsFromPlaceItem(input, output, itemPath);
-        string _tag = ResolvePlacementTag(input);
-        if (_tag.Length > 0) output["agentTag"] = _tag;
-        return MakeSuccess(output);
-    }
-#endif
 
     Json::Value@ RemoveBlock(Json::Value &in input) {
         auto editor = GetEditor();
@@ -3114,122 +2049,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         return MakeSuccess(output);
     }
 
-#if DEPENDENCY_EDITOR
-    Json::Value@ RemoveRecentBlocks(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
 
-        int count = input.HasKey("count") ? int(input["count"]) : 1;
-        if (count < 1) count = 1;
-        if (count > 50) count = 50;
-        bool addUndo = input.HasKey("addUndo") ? bool(input["addUndo"]) : true;
-        int total = int(editor.Challenge.Blocks.Length);
-        if (total == 0) return MakeError("map has no blocks");
-        if (count > total) count = total;
-
-        CGameCtnBlock@[] blocks;
-        Json::Value removed = Json::Array();
-        int first = total - count;
-        for (int i = first; i < total; i++) {
-            auto block = editor.Challenge.Blocks[i];
-            if (block is null) continue;
-            blocks.InsertLast(block);
-            auto obj = BlockToJson(block);
-            obj["index"] = i;
-            removed.Add(obj);
-        }
-
-        Json::Value mapPre = MapSummary(editor);
-        int beforeBlocks = int(editor.Challenge.Blocks.Length);
-        bool allFree = true;
-        for (uint i = 0; i < blocks.Length; i++) {
-            if (!Editor::IsBlockFree(blocks[i])) allFree = false;
-        }
-
-        bool ok = false;
-        string method = allFree ? "DeleteFreeblocks" : "DeleteBlocks";
-        uint queuedFreeblocks = 0;
-        try {
-            if (allFree) {
-                queuedFreeblocks = Editor::DeleteFreeblocks(blocks);
-                for (uint i = 0; i < 30 && int(editor.Challenge.Blocks.Length) == beforeBlocks; i++) yield();
-                ok = int(editor.Challenge.Blocks.Length) <= beforeBlocks - int(blocks.Length);
-                if (ok && addUndo && editor.PluginMapType !is null) editor.PluginMapType.AutoSave();
-            } else {
-                ok = Editor::DeleteBlocks(blocks, addUndo);
-            }
-        } catch {
-            return MakeError(method + " failed: " + getExceptionInfo());
-        }
-
-        Json::Value output = Json::Object();
-        output["deleted"] = ok;
-        output["method"] = method;
-        output["queuedFreeblocks"] = int(queuedFreeblocks);
-        output["requestedCount"] = count;
-        output["matchedCount"] = int(blocks.Length);
-        output["addUndo"] = addUndo;
-        output["removed"] = removed;
-        output["mapPre"] = mapPre;
-        output["mapPost"] = MapSummary(editor);
-        return MakeSuccess(output);
-    }
-#endif
-
-#if DEPENDENCY_EDITOR
-    Json::Value@ RemoveRecentItems(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
-
-        int count = input.HasKey("count") ? int(input["count"]) : 1;
-        if (count < 1) count = 1;
-        if (count > 50) count = 50;
-        bool addUndo = input.HasKey("addUndo") ? bool(input["addUndo"]) : true;
-        bool forceBufferFallback = input.HasKey("forceBufferFallback") ? bool(input["forceBufferFallback"]) : false;
-        int total = int(editor.Challenge.AnchoredObjects.Length);
-        if (total == 0) return MakeError("map has no items");
-        if (count > total) count = total;
-
-        CGameCtnAnchoredObject@[] items;
-        Json::Value removed = Json::Array();
-        int first = total - count;
-        for (int i = first; i < total; i++) {
-            auto item = editor.Challenge.AnchoredObjects[i];
-            if (item is null) continue;
-            items.InsertLast(item);
-            auto obj = ItemToJson(item);
-            obj["index"] = i;
-            removed.Add(obj);
-        }
-
-        Json::Value mapPre = MapSummary(editor);
-        bool ok = false;
-        string method = "DeleteItems";
-        try {
-            ok = Editor::DeleteItems(items, addUndo);
-        } catch {
-            return MakeError("DeleteItems failed: " + getExceptionInfo());
-        }
-        if (!ok && forceBufferFallback && total == int(editor.Challenge.AnchoredObjects.Length) && first + count == total) {
-            method = "AnchoredObjects.RemoveRangeTail";
-            editor.Challenge.AnchoredObjects.RemoveRange(first, count);
-            ok = int(editor.Challenge.AnchoredObjects.Length) == first;
-            if (ok && addUndo && editor.PluginMapType !is null) editor.PluginMapType.AutoSave();
-        }
-
-        Json::Value output = Json::Object();
-        output["deleted"] = ok;
-        output["method"] = method;
-        output["undoSupported"] = method == "DeleteItems";
-        output["requestedCount"] = count;
-        output["matchedCount"] = int(items.Length);
-        output["addUndo"] = addUndo;
-        output["removed"] = removed;
-        output["mapPre"] = mapPre;
-        output["mapPost"] = MapSummary(editor);
-        return MakeSuccess(output);
-    }
-#endif
 
     bool ReadIndexArgs(Json::Value &in input, int total, int maxCount, array<int> &out indices, string &out err) {
         if (input.HasKey("index")) {
@@ -3266,165 +2086,9 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         return true;
     }
 
-#if DEPENDENCY_EDITOR
-    Json::Value@ RemoveBlocksByIndex(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
 
-        array<int> indices;
-        string err;
-        int total = int(editor.Challenge.Blocks.Length);
-        if (!ReadIndexArgs(input, total, 50, indices, err)) return MakeError(err);
-        bool addUndo = input.HasKey("addUndo") ? bool(input["addUndo"]) : true;
 
-        CGameCtnBlock@[] blocks;
-        Json::Value removed = Json::Array();
-        for (uint i = 0; i < indices.Length; i++) {
-            auto block = editor.Challenge.Blocks[indices[i]];
-            if (block is null) continue;
-            blocks.InsertLast(block);
-            auto obj = BlockToJson(block);
-            obj["index"] = indices[i];
-            removed.Add(obj);
-        }
 
-        Json::Value mapPre = MapSummary(editor);
-        int beforeBlocks = int(editor.Challenge.Blocks.Length);
-        bool allFree = true;
-        for (uint i = 0; i < blocks.Length; i++) {
-            if (!Editor::IsBlockFree(blocks[i])) allFree = false;
-        }
-
-        bool ok = false;
-        string method = allFree ? "DeleteFreeblocks" : "DeleteBlocks";
-        uint queuedFreeblocks = 0;
-        try {
-            if (allFree) {
-                queuedFreeblocks = Editor::DeleteFreeblocks(blocks);
-                for (uint i = 0; i < 30 && int(editor.Challenge.Blocks.Length) == beforeBlocks; i++) yield();
-                ok = int(editor.Challenge.Blocks.Length) <= beforeBlocks - int(blocks.Length);
-                if (ok && addUndo && editor.PluginMapType !is null) editor.PluginMapType.AutoSave();
-            } else {
-                ok = Editor::DeleteBlocks(blocks, addUndo);
-            }
-        } catch {
-            return MakeError(method + " failed: " + getExceptionInfo());
-        }
-
-        Json::Value output = Json::Object();
-        output["deleted"] = ok;
-        output["method"] = method;
-        output["queuedFreeblocks"] = int(queuedFreeblocks);
-        output["requestedCount"] = int(indices.Length);
-        output["matchedCount"] = int(blocks.Length);
-        output["addUndo"] = addUndo;
-        output["removed"] = removed;
-        output["mapPre"] = mapPre;
-        output["mapPost"] = MapSummary(editor);
-        return MakeSuccess(output);
-    }
-#endif
-
-#if DEPENDENCY_EDITOR
-    Json::Value@ RemoveItemsByIndex(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
-
-        array<int> indices;
-        string err;
-        int total = int(editor.Challenge.AnchoredObjects.Length);
-        if (!ReadIndexArgs(input, total, 50, indices, err)) return MakeError(err);
-        bool addUndo = input.HasKey("addUndo") ? bool(input["addUndo"]) : true;
-        bool forceBufferFallback = input.HasKey("forceBufferFallback") ? bool(input["forceBufferFallback"]) : false;
-
-        CGameCtnAnchoredObject@[] items;
-        Json::Value removed = Json::Array();
-        for (uint i = 0; i < indices.Length; i++) {
-            auto item = editor.Challenge.AnchoredObjects[indices[i]];
-            if (item is null) continue;
-            items.InsertLast(item);
-            auto obj = ItemToJson(item);
-            obj["index"] = indices[i];
-            removed.Add(obj);
-        }
-
-        Json::Value mapPre = MapSummary(editor);
-        bool ok = false;
-        string method = "DeleteItems";
-        try {
-            ok = Editor::DeleteItems(items, addUndo);
-        } catch {
-            return MakeError("DeleteItems failed: " + getExceptionInfo());
-        }
-        if (!ok && forceBufferFallback && total == int(editor.Challenge.AnchoredObjects.Length)) {
-            method = "AnchoredObjects.RemoveRangeByIndex";
-            while (indices.Length > 0) {
-                int bestPos = 0;
-                for (uint i = 1; i < indices.Length; i++) {
-                    if (indices[i] > indices[bestPos]) bestPos = int(i);
-                }
-                editor.Challenge.AnchoredObjects.RemoveRange(indices[bestPos], 1);
-                indices.RemoveAt(bestPos);
-            }
-            ok = int(editor.Challenge.AnchoredObjects.Length) == total - int(items.Length);
-            if (ok && addUndo && editor.PluginMapType !is null) editor.PluginMapType.AutoSave();
-        }
-
-        Json::Value output = Json::Object();
-        output["deleted"] = ok;
-        output["method"] = method;
-        output["undoSupported"] = method == "DeleteItems";
-        output["requestedCount"] = int(removed.Length);
-        output["matchedCount"] = int(items.Length);
-        output["addUndo"] = addUndo;
-        output["removed"] = removed;
-        output["mapPre"] = mapPre;
-        output["mapPost"] = MapSummary(editor);
-        return MakeSuccess(output);
-    }
-#endif
-
-#if DEPENDENCY_EDITOR
-    Json::Value@ SetCursorBlock(Json::Value &in input) {
-        return SelectBlockModel(input);
-    }
-#endif
-
-#if DEPENDENCY_EDITOR
-    Json::Value@ SelectBlockModel(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
-        if (!input.HasKey("blockName")) return MakeError("missing blockName");
-        string blockName = string(input["blockName"]);
-        bool isTerrain = false;
-        auto blockInfo = ResolveBlockModel(editor.PluginMapType, blockName, isTerrain);
-        if (blockInfo is null) return MakeError("block not found: " + blockName);
-        if (isTerrain) return MakeError("terrain models cannot be selected as the current block model");
-
-        string selection = input.HasKey("selection") ? string(input["selection"]).ToLower() : "both";
-        if (selection == "normal") {
-            Editor::SetSelectedNormalBlockInfo(editor, blockInfo);
-        } else if (selection == "ghost") {
-            Editor::SetSelectedGhostBlockInfo(editor, blockInfo);
-        } else if (selection == "both" || selection.Length == 0) {
-            Editor::SetSelectedBlockInfo(editor, blockInfo);
-        } else {
-            return MakeError("selection must be one of: both, normal, ghost");
-        }
-
-        Json::Value output = Json::Object();
-        output["selected"] = true;
-        output["selection"] = selection.Length == 0 ? "both" : selection;
-        output["blockName"] = blockName;
-        output["modelName"] = blockInfo.Name;
-        output["modelIdName"] = blockInfo.IdName;
-        output["currentBlockName"] = editor.CurrentBlockInfo is null ? "" : string(editor.CurrentBlockInfo.Name);
-        output["currentBlockIdName"] = editor.CurrentBlockInfo is null ? "" : string(editor.CurrentBlockInfo.IdName);
-        output["currentGhostBlockName"] = editor.CurrentGhostBlockInfo is null ? "" : string(editor.CurrentGhostBlockInfo.Name);
-        output["currentGhostBlockIdName"] = editor.CurrentGhostBlockInfo is null ? "" : string(editor.CurrentGhostBlockInfo.IdName);
-        return MakeSuccess(output);
-    }
-#endif
 
     Json::Value@ Undo(Json::Value &in input) {
         auto editor = GetEditor();

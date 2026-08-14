@@ -1,46 +1,39 @@
-"""Editor++ is optional: Editor:: calls must sit behind #if DEPENDENCY_EDITOR."""
+"""E++ extraction: no Editor dependency; Editor:: must not appear in compiled src."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1] / "src"
 
 
-def unguarded_editor_calls(path: Path) -> list[str]:
-    depth = 0
-    hits = []
-    for i, line in enumerate(path.read_text().splitlines(), 1):
-        s = line.strip()
-        if s.startswith("#if"):
-            if "DEPENDENCY_EDITOR" in s or depth:
-                depth += 1
-        elif s.startswith("#endif") and depth:
-            depth -= 1
-        if "Editor::" not in line or depth:
-            continue
-        if s.startswith("//"):
-            continue
-        if '"Editor::' in line or "'Editor::" in line:
-            continue
-        if "call Editor::" in line or "through Editor::" in line or "exposes Editor::" in line:
-            continue
-        # prose / concatenation mentioning the API
-        if s.startswith("+") and "Editor::" in s:
-            continue
-        hits.append(f"{path.name}:{i}: {s}")
-    return hits
+def test_no_editor_dependency():
+    toml = (ROOT.parent / "info.toml").read_text()
+    deps_line = next(
+        (l for l in toml.splitlines() if l.strip().startswith("optional_dependencies")),
+        "",
+    )
+    assert "Editor" not in deps_line
 
 
-def test_no_unguarded_editor_calls():
-    hits = []
-    for path in sorted(ROOT.glob("*.as")):
-        hits.extend(unguarded_editor_calls(path))
-    assert hits == [], "unguarded Editor:: calls:\n" + "\n".join(hits)
+def test_no_editor_ns_calls():
+    offenders = []
+    for p in sorted(ROOT.glob("*.as")):
+        for i, line in enumerate(p.read_text().splitlines(), 1):
+            s = line.strip()
+            if s.startswith("//"):
+                continue
+            if "Editor::" in line:
+                if p.name == "Guides.as":
+                    continue  # prose/doc strings
+                offenders.append(f"{p.name}:{i}: {s[:100]}")
+    assert offenders == [], "Editor:: remains in src:\n" + "\n".join(offenders)
 
 
-def test_info_toml_editor_is_optional():
-    text = (ROOT.parent / "info.toml").read_text()
-    assert "optional_dependencies" in text
-    assert "Editor" in text
-    # not a hard dep
-    for line in text.splitlines():
-        if line.strip().startswith("dependencies"):
-            assert "Editor" not in line
+def test_moved_stub_surface():
+    t = (ROOT / "EditorOptional.as").read_text()
+    for name in [
+        "PlaceBlockViaEditorPlusPlus", "PlaceItemViaEditorPlusPlus",
+        "PlaceNamedMacroblock", "ControlEditMode", "ControlItemEditor",
+        "SetAgentTag", "RemoveByTag", "BrowseInventoryTree",
+    ]:
+        assert name in t, name
+    assert "moved_to_pack" in t
+    assert "tm-mcp-pack-epp" in t

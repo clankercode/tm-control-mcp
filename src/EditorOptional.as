@@ -1,14 +1,13 @@
-// Editor++ is an optional dependency (info.toml optional_dependencies).
-// DEPENDENCY_EDITOR is defined only when Editor is installed at compile time.
+// Editor++ (E++) tools moved to the tm-mcp-pack-epp tool pack.
+// This plugin no longer depends on Editor++. The old tool names still
+// dispatch and return a structured "moved" error pointing at the pack.
 
 namespace TmMcp {
+    const string EPP_PACK_ID = "tm-mcp-pack-epp";
+
     bool IsEditorPlusPlusAvailable() {
-#if DEPENDENCY_EDITOR
-        auto p = Meta::GetPluginFromID("Editor");
+        auto p = Meta::GetPluginFromID(EPP_PACK_ID);
         return p !is null && p.Enabled;
-#else
-        return false;
-#endif
     }
 
     Json::Value@ MissingPluginError(const string &in pluginId) {
@@ -21,8 +20,18 @@ namespace TmMcp {
         );
     }
 
+    Json::Value@ ToolMovedToEppPackError() {
+        return MakeError(
+            "This E++ tool moved to the " + EPP_PACK_ID + " tool pack. Call " + EPP_PACK_ID + ".<Tool> instead (or install/enable the pack).",
+            "moved_to_pack",
+            false,
+            "",
+            EPP_PACK_ID
+        );
+    }
+
     Json::Value@ EditorPlusPlusMissingError() {
-        return MissingPluginError("Editor");
+        return ToolMovedToEppPackError();
     }
 
     bool ToolRequiresEditorPlusPlus(const string &in name) {
@@ -64,10 +73,8 @@ namespace TmMcp {
             || name == "RemoveByTag"
             || name == "DumpMacroblockHeader";
     }
-}
 
-#if !DEPENDENCY_EDITOR
-namespace TmMcp {
+    // --- deprecated E++ stubs: names stay dispatchable, return "moved" ---
     Json::Value@ RunGizmoApplyBlock(Json::Value &in input) { return EditorPlusPlusMissingError(); }
     Json::Value@ RunRandomFuzz(Json::Value &in input) { return EditorPlusPlusMissingError(); }
     Json::Value@ InspectMacroblockModel(Json::Value &in input) { return EditorPlusPlusMissingError(); }
@@ -107,5 +114,9 @@ namespace TmMcp {
     Json::Value@ DumpMacroblockHeader(Json::Value &in input) { return EditorPlusPlusMissingError(); }
     Json::Value@ RunDumpMacroblockHeader(Json::Value &in input) { return EditorPlusPlusMissingError(); }
     void RememberMapDelta(const string &in tool, Json::Value@ mapPre, Json::Value@ mapPost) {}
+    Json::Value@ BrowseInventoryTree(Json::Value &in input) { return EditorPlusPlusMissingError(); }
+    Json::Value@ SetAgentTag(Json::Value &in input) { return EditorPlusPlusMissingError(); }
+    Json::Value@ ListTagged(Json::Value &in input) { return EditorPlusPlusMissingError(); }
+    Json::Value@ RemoveByTag(Json::Value &in input) { return EditorPlusPlusMissingError(); }
+    Json::Value@ ClearTagIndex(Json::Value &in input) { return EditorPlusPlusMissingError(); }
 }
-#endif

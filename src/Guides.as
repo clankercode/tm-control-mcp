@@ -251,6 +251,14 @@ namespace TmMcp {
             + "Matching uses idName + world position ±eps (default 0.08m), not stale indices.\n"
             + "Tags are in-memory until plugin reload; they do not survive game restart.");
 
+        _RegisterGuide("epp-tools-moved",
+            "E++ tools moved to tm-mcp-pack-epp",
+            "All Editor++ (E++) tools now live in the tm-mcp-pack-epp tool pack:\n"
+            + "- Install/enable the tm-mcp-pack-epp plugin (depends on tm-control-mcp + Editor).\n"
+            + "- Call them as tm-mcp-pack-epp.<ToolName> (e.g. tm-mcp-pack-epp.PlaceBlock).\n"
+            + "- Old builtin names (PlaceBlockViaEditorPlusPlus, named-macroblock suite, tags,\n"
+            + "  inventory control, ControlEditMode, ControlItemEditor, ...) return a\n"
+            + "  moved_to_pack error with the pack id in hint.\n");
     }
 
     Json::Value@ ListGuides(Json::Value &in input) {
