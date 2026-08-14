@@ -2,8 +2,22 @@ namespace TmMcp {
     // Openplanet Meta:: plugin + settings surface for agents.
     // Docs: https://openplanet.dev/docs/api/Meta
 
+    // Cached handle to THIS plugin. Meta::ExecutingPlugin() returns the caller's
+    // plugin when an exported function is invoked in-process from another plugin,
+    // so "self" must be resolved once at startup, not per-call.
+    Meta::Plugin@ g_SelfPlugin = null;
+
     // When true, PluginToJson includes full SourcePath (may be Wine absolute).
     bool g_IncludePluginSourcePath = false;
+
+    void CacheSelfPlugin() {
+        @g_SelfPlugin = Meta::ExecutingPlugin();
+    }
+
+    Meta::Plugin@ SelfPlugin() {
+        if (g_SelfPlugin is null) CacheSelfPlugin();
+        return g_SelfPlugin;
+    }
 
     string SourcePathBaseName(const string &in path) {
         if (path.Length == 0) return "";
@@ -347,7 +361,7 @@ namespace TmMcp {
             output["unloaded"] = unloaded;
             output["unloadedCount"] = unloaded.Length;
         }
-        auto self = Meta::ExecutingPlugin();
+        auto self = SelfPlugin();
         if (self !is null) output["selfId"] = self.ID;
         return MakeSuccess(output);
     }
@@ -417,7 +431,7 @@ namespace TmMcp {
         auto p = ResolvePlugin(id, err);
         if (p is null) return MakeError(err, "not_found", false, "", "Use ListPlugins");
 
-        auto self = Meta::ExecutingPlugin();
+        auto self = SelfPlugin();
         bool isSelf = self !is null && p.ID == self.ID;
 
         Json::Value output = Json::Object();
@@ -504,7 +518,7 @@ namespace TmMcp {
         else if (input.HasKey("plugin")) id = string(input["plugin"]);
         else if (input.HasKey("name")) id = string(input["name"]);
         if (id.Length == 0) {
-            auto self = Meta::ExecutingPlugin();
+            auto self = SelfPlugin();
             if (self !is null) id = self.ID;
         }
         string err = "";
@@ -552,7 +566,7 @@ namespace TmMcp {
         if (varName.Length == 0) return MakeError("varName required", "bad_request", false, "", "Use ListPluginSettings");
 
         if (id.Length == 0) {
-            auto self = Meta::ExecutingPlugin();
+            auto self = SelfPlugin();
             if (self !is null) id = self.ID;
         }
         string err = "";
@@ -596,7 +610,7 @@ namespace TmMcp {
         if (!input.HasKey("value")) return MakeError("value required", "bad_request", false, "", "");
 
         if (id.Length == 0) {
-            auto self = Meta::ExecutingPlugin();
+            auto self = SelfPlugin();
             if (self !is null) id = self.ID;
         }
         string err = "";
@@ -636,7 +650,7 @@ namespace TmMcp {
         if (varName.Length == 0) return MakeError("varName required", "bad_request", false, "", "");
 
         if (id.Length == 0) {
-            auto self = Meta::ExecutingPlugin();
+            auto self = SelfPlugin();
             if (self !is null) id = self.ID;
         }
         string err = "";
