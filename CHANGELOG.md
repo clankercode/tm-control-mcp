@@ -9,6 +9,7 @@ Versions follow `info.toml` `[meta] version`.
 
 ### Added
 
+- **Tool packs** (issue #5): `RegisterToolPack` / `UnregisterToolPack` / shared `ToolPackBuilder`. Pack tools are `packId.FuncName`. Builtin `ListToolPacks`. Authoring: [docs/tool-packs.md](docs/tool-packs.md). Fixture: `tools/fixtures/tm-mcp-pack-fixture/`.
 - In-process export surface (`TmMcp_Export.as`, issue #1): `import` from `"TmMcp"` for all major tools + `CallTool`/`IsToolName`/`DispatchAsync`/`GetResult`
 - **Socket toggle** (`S_TmMcpEnableSocket`): skip TCP listener for pure in-process use
 - **Async dispatch** (`DispatchAsync` + `GetResult`, issue #3): non-blocking tool dispatch with poll semantics

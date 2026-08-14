@@ -81,6 +81,62 @@ namespace TmMcp {
         trace("TM Control MCP: InitToolSchemas loaded " + g_schemaToolNames.Length + " tool schemas");
     }
 
+    bool RegisterToolSchema(const string &in toolName, Json::Value@ schema, string &out err) {
+        err = "";
+        if (toolName.Length == 0) {
+            err = "empty tool name";
+            return false;
+        }
+        if (schema is null || schema.GetType() != Json::Type::Object) {
+            err = "schema must be a JSON object";
+            return false;
+        }
+        if (FindSchema(toolName) >= 0) {
+            err = "schema already registered";
+            return false;
+        }
+
+        ToolSchema@ rec = ToolSchema();
+        rec.toolName = toolName;
+        if (schema.HasKey("properties") && schema["properties"].GetType() == Json::Type::Object) {
+            Json::Value@ props = schema["properties"];
+            array<string> keys = props.GetKeys();
+            for (uint k = 0; k < keys.Length; k++) {
+                string key = keys[k];
+                rec.allowedKeys.InsertLast(key);
+                string typeStr = "";
+                Json::Value@ propDef = props[key];
+                if (propDef !is null && propDef.GetType() == Json::Type::Object && propDef.HasKey("type")) {
+                    Json::Value@ typeVal = propDef["type"];
+                    if (typeVal !is null && typeVal.GetType() == Json::Type::String) {
+                        typeStr = string(typeVal);
+                    }
+                }
+                rec.allowedKeyTypes.InsertLast(typeStr);
+            }
+        }
+        if (schema.HasKey("required") && schema["required"].GetType() == Json::Type::Array) {
+            Json::Value@ req = schema["required"];
+            uint reqLen = req.Length;
+            for (uint r = 0; r < reqLen; r++) {
+                Json::Value@ rv = req[r];
+                if (rv !is null && rv.GetType() == Json::Type::String) {
+                    rec.requiredKeys.InsertLast(string(rv));
+                }
+            }
+        }
+        g_schemaToolNames.InsertLast(toolName);
+        g_schemaRecords.InsertLast(rec);
+        return true;
+    }
+
+    void UnregisterToolSchema(const string &in toolName) {
+        int idx = FindSchema(toolName);
+        if (idx < 0) return;
+        g_schemaToolNames.RemoveAt(uint(idx));
+        g_schemaRecords.RemoveAt(uint(idx));
+    }
+
     // Returns empty string on success, or an error description.
     // Only validates top-level input keys (not nested object sub-properties).
     string ValidateToolInput(const string &in toolName, Json::Value@ input) {

@@ -11,4 +11,4 @@ optional_dependencies = ["Editor", "VehicleState", "Camera"]
 module = "TmMcp"
 timeout = 15000
 exports = ["TmMcp_Export.as"]
-shared_exports = ["AsyncDispatch.as"]
+shared_exports = ["AsyncDispatch.as", "ToolPackShared.as"]

@@ -858,7 +858,9 @@ namespace TmMcp {
             || name == "GetRenderCamera"
             || name == "ProjectWorldToScreen"
             || name == "SetEditorOrbitalTarget"
-            || name == "GetResult";
+            || name == "GetResult"
+            || name == "ListToolPacks"
+            || IsPackToolName(name);
     }
 
     string CompactJsonForTrace(Json::Value &in value) {
@@ -869,9 +871,18 @@ namespace TmMcp {
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
+        if (!PushCallStack(name)) {
+            return MakeError("reentrant tool call: " + name, "reentrant_tool", false);
+        }
         uint started = Time::Now;
         trace("TM Control MCP tool start " + name + " " + CompactJsonForTrace(input));
-        Json::Value@ result = DispatchTool(name, input);
+        Json::Value@ result = null;
+        try {
+            @result = DispatchTool(name, input);
+        } catch {
+            @result = MakeError("tool threw: " + getExceptionInfo(), "tool_exception", true);
+        }
+        PopCallStack();
         string status = "err";
         string extra = "";
         if (result !is null && result.HasKey("success") && bool(result["success"])) {
@@ -1009,6 +1020,9 @@ namespace TmMcp {
         if (name == "ProjectWorldToScreen") return ProjectWorldToScreen(input);
         if (name == "SetEditorOrbitalTarget") return SetEditorOrbitalTarget(input);
         if (name == "GetResult") return GetResult(input);
+        if (name == "ListToolPacks") return ListToolPacks(input);
+        Json::Value@ packResult = DispatchPackTool(name, input);
+        if (packResult !is null) return packResult;
         return MakeError("unknown tool: " + name, "unknown_tool", false, "", "");
     }
 
@@ -1136,6 +1150,8 @@ namespace TmMcp {
         tools.Add(MakeTool("ProjectWorldToScreen", "Camera::ToScreen + ToScreenSpace + IsBehind for world (x,y,z).", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}},"required":["x","y","z"],"additionalProperties":false}'));
         tools.Add(MakeTool("SetEditorOrbitalTarget", "Camera::SetEditorOrbitalTarget — focus editor orbital camera on world (x,y,z).", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}},"required":["x","y","z"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetResult", "Poll for async tool result. input: {requestId}. Returns {request_id, status:'pending'|'done'|'error', result?/error?}. Used after DispatchAsync (in-process only).", '{"type":"object","properties":{"requestId":{"type":"string"},"request_id":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("ListToolPacks", "List registered MCP tool packs (id, plugin, toolCount, enabled).", '{"type":"object","properties":{},"additionalProperties":false}'));
+        AppendPackTools(tools);
         return tools;
     }
 

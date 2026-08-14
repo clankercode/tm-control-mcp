@@ -1,0 +1,10 @@
+[meta]
+name     = "TM MCP Pack Fixture"
+author   = "XertroV"
+category = "Development"
+version  = "0.1.0"
+
+[script]
+dependencies = ["tm-control-mcp"]
+module = "TmMcpPackFixture"
+timeout = 8000

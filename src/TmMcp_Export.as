@@ -36,4 +36,9 @@ namespace TmMcp {
     import bool IsSocketEnabled() from "TmMcp";
     import bool IsSocketListening() from "TmMcp";
     import Json::Value@ GetSocketStatus() from "TmMcp";
+
+    // Tool packs — other plugins register tools into this surface.
+    import Json::Value@ RegisterToolPack(ToolPackBuilder@ builder) from "TmMcp";
+    import Json::Value@ UnregisterToolPack(const string &in packId) from "TmMcp";
+    import Json::Value@ ListToolPacks(Json::Value &in input) from "TmMcp";
 }
