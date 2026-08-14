@@ -935,7 +935,7 @@ namespace TmMcp {
         tools.Add(MakeTool("GetMapEnvironment", "Read map collection, decoration, map type/style, mood, and collection-unit metadata.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlMapObjectives", "Get or set race objectives on the current editor map: NbClones (clone mode), NbLaps / IsLapRace. action=get|set. For set: optional nbClones (0-64), nbLaps (0-99; 0=multilap hide counter), isLapRace (bool). Uses E++ offset writes for const API fields.", '{"type":"object","properties":{"action":{"type":"string"},"nbClones":{"type":"integer"},"nbLaps":{"type":"integer"},"isLapRace":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
 
-        tools.Add(MakeTool("ControlItemEditor", "Inspect/control the item editor: get state (item model name, has EntityModelEdition/EntityModel), or nullify EntityModelEdition safely (transforms surface materials to matids first, then nulls; refuses when EntityModel is null). Requires item editor mode.", '{"type":"object","properties":{"action":{"type":"string"},"notify":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
+        tools.Add(MakeTool("ControlItemEditor", "Inspect/control the item editor: get state (item model name, has EntityModelEdition/EntityModel), nullify EntityModelEdition safely (transforms surface materials to matids first, then nulls; refuses when EntityModel is null), or openItem to enter the item editor for a user item by inventory path (requires map editor).", '{"type":"object","properties":{"action":{"type":"string"},"notify":{"type":"boolean"},"itemPath":{"type":"string"}},"required":["action"],"additionalProperties":false}'));
         tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx.", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetDialog", "Inspect Trackmania's current BasicDialogs state and active dialog frame.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("RespondDialog", "Respond to Trackmania BasicDialogs. action: yes, no, cancel, ok, validate, hide.", '{"type":"object","properties":{"action":{"type":"string"}},"required":["action"],"additionalProperties":false}'));
@@ -1060,6 +1060,25 @@ namespace TmMcp {
     Json::Value@ ControlItemEditor(Json::Value &in input) {
         auto app = cast<CTrackMania>(GetApp());
         if (app is null) return MakeError("app not available", "UNKNOWN", true);
+        string action = input.HasKey("action") ? string(input["action"]) : "status";
+
+        // openItem runs FROM the map editor; everything else requires the item editor.
+        if (action == "openItem") {
+            if (!input.HasKey("itemPath")) return MakeError("itemPath required for openItem", "BAD_INPUT", false);
+            string itemPath = input["itemPath"];
+            auto mapEditor = cast<CGameCtnEditorFree>(GetApp().Editor);
+            if (mapEditor is null) {
+                return MakeError("openItem requires the map editor (got item editor or other module)", "NOT_IN_MAP_EDITOR", true, "Editor");
+            }
+            auto model = Editor::GetInventoryItemModelByPath(itemPath);
+            if (model is null) return MakeError("item model not found in inventory cache: " + itemPath + " (try RefreshInventory)", "MODEL_NOT_FOUND", false);
+            Editor::OpenItemEditor(mapEditor, model);
+            Json::Value output = Json::Object();
+            output["action"] = action;
+            output["requested"] = true;
+            return MakeSuccess(output);
+        }
+
         auto itemEditor = cast<CGameEditorItem>(app.Editor);
         if (itemEditor is null) {
             return MakeError("item editor not available (app.Editor is not a CGameEditorItem)", "NOT_IN_ITEM_EDITOR", true, "ItemEditor");
@@ -1072,19 +1091,6 @@ namespace TmMcp {
         output["hasEntityModelEdition"] = itemModel !is null && itemModel.EntityModelEdition !is null;
         output["hasEntityModel"] = itemModel !is null && itemModel.EntityModel !is null;
 
-        if (output["action"] == "openItem") {
-            // Re-entry helper: from map editor, open the item editor for a user item.
-            if (!input.HasKey("itemPath")) return MakeError("itemPath required for openItem", "BAD_INPUT", false);
-            string itemPath = input["itemPath"];
-            auto mapEditor = cast<CGameCtnEditorFree>(GetApp().Editor);
-            if (mapEditor is null) {
-                return MakeError("openItem requires the map editor (got item editor or other module)", "NOT_IN_MAP_EDITOR", true, "Editor");
-            }
-            auto model = Editor::GetInventoryItemModelByPath(itemPath);
-            if (model is null) return MakeError("item model not found in inventory cache: " + itemPath + " (try RefreshInventory)", "MODEL_NOT_FOUND", false);
-            Editor::OpenItemEditor(mapEditor, model);
-            output["requested"] = true;
-        }
         if (output["action"] == "nullifyEME") {
             if (itemModel is null) return MakeError("no item model loaded in item editor", "NO_ITEM_MODEL", false, "ItemEditor");
             bool notify = input.HasKey("notify") ? bool(input["notify"]) : true;
