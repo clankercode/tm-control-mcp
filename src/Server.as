@@ -1,16 +1,15 @@
-[Setting category="Server" name="Socket Port" description="Local TCP port for JSON control requests. Applied live (listener rebinds)."]
+[Setting hidden]
 int S_TmMcpPort = 30006;
 
-[Setting category="Server" name="Socket Host" description="Local TCP host for JSON control requests. Use 127.0.0.1 under Wine/Proton unless you specifically need localhost name resolution. Applied live."]
+[Setting hidden]
 string S_TmMcpHost = "127.0.0.1";
 
-[Setting category="Server" name="Startup Delay (ms)" description="Delay server socket startup after plugin load. This helps isolate Openplanet startup crashes from socket listener startup."]
+[Setting hidden]
 int S_TmMcpStartupDelayMs = 100;
 
-[Setting category="Server" name="Trace Requests" description="Log request and response payloads to Openplanet.log."]
+[Setting hidden]
 bool S_TmMcpTraceRequests = false;
 
-// Hidden: toggle via SetSocketEnabled / Settings tab / SetPluginSetting, not the raw checkbox.
 [Setting hidden]
 bool S_TmMcpEnableSocket = true;
 
@@ -132,14 +131,40 @@ namespace TmMcp {
             return false;
         }
 
-        trace("TM Control MCP attempting listen on " + S_TmMcpHost + ":" + S_TmMcpPort);
-        g_listening = g_socket.Listen(S_TmMcpHost, uint16(S_TmMcpPort));
+        if (S_TmMcpHost != "127.0.0.1") {
+            error("TM Control MCP refusing bind host '" + S_TmMcpHost + "'; only 127.0.0.1 is allowed");
+            S_TmMcpHost = "127.0.0.1";
+            return false;
+        }
+        if (S_TmMcpPort < 1 || S_TmMcpPort > 65535) {
+            error("TM Control MCP refusing invalid port " + S_TmMcpPort);
+            return false;
+        }
+
+        int prevPort = g_boundPort;
+        trace("TM Control MCP attempting listen on 127.0.0.1:" + S_TmMcpPort);
+        bool ok = false;
+        try {
+            ok = g_socket.Listen("127.0.0.1", uint16(S_TmMcpPort));
+        } catch {
+            error("TM Control MCP listen exception on 127.0.0.1:" + S_TmMcpPort + ": " + getExceptionInfo());
+            try { g_socket.Close(); } catch {}
+            @g_socket = null;
+            g_listening = false;
+            return false;
+        }
+        g_listening = ok;
         if (g_listening) {
-            g_boundHost = S_TmMcpHost;
+            g_boundHost = "127.0.0.1";
             g_boundPort = S_TmMcpPort;
-            trace("TM Control MCP listening on " + S_TmMcpHost + ":" + S_TmMcpPort);
+            if (prevPort != 0 && prevPort != S_TmMcpPort) {
+                print("TM Control MCP socket port changed " + prevPort + " -> " + S_TmMcpPort);
+            }
+            trace("TM Control MCP listening on 127.0.0.1:" + S_TmMcpPort);
         } else {
-            error("TM Control MCP failed to listen on " + S_TmMcpHost + ":" + S_TmMcpPort);
+            error("TM Control MCP failed to listen on 127.0.0.1:" + S_TmMcpPort);
+            try { g_socket.Close(); } catch {}
+            @g_socket = null;
         }
         return g_listening;
     }
@@ -183,6 +208,8 @@ namespace TmMcp {
         o["boundHost"] = g_boundHost;
         o["boundPort"] = g_boundPort;
         o["activeClients"] = int(g_activeClients);
+        o["traceRequests"] = S_TmMcpTraceRequests;
+        o["requestTracePath"] = TmMcpRequestTracePath();
         if (S_TmMcpEnableSocket && IsSocketListening()) o["state"] = "listening";
         else if (S_TmMcpEnableSocket && g_starting) o["state"] = "starting";
         else if (S_TmMcpEnableSocket) o["state"] = "error";
@@ -216,8 +243,7 @@ namespace TmMcp {
         string responseText = Json::Write(response);
 
         if (S_TmMcpTraceRequests) {
-            trace("TM Control MCP request: " + payload);
-            trace("TM Control MCP response: " + responseText);
+            TmMcpTraceExchange(payload, responseText);
         }
 
         try {
@@ -268,46 +294,4 @@ namespace TmMcp {
 
 void OnSettingsChanged() {
     TmMcp::ApplySocketSettings();
-}
-
-[SettingsTab name="Socket" icon="Plug" order=0]
-void RenderSocketSettingsTab() {
-    auto st = TmMcp::GetSocketStatus();
-    string state = string(st["state"]);
-    bool listening = bool(st["listening"]);
-    bool enabled = bool(st["enabled"]);
-
-    string color = "888";
-    if (state == "listening") color = "6c6";
-    else if (state == "starting") color = "cc6";
-    else if (state == "error") color = "c66";
-    else if (state == "stopped") color = "888";
-
-    UI::Text("\\\\$" + color + "Status: " + state + "\\\\$z");
-    UI::Text("Wanted: " + (enabled ? "enabled" : "disabled") + "   Listening: " + (listening ? "yes" : "no"));
-    UI::Text("Bind: " + S_TmMcpHost + ":" + S_TmMcpPort);
-    if (listening) {
-        UI::Text("Bound: " + string(st["boundHost"]) + ":" + int(st["boundPort"]));
-    }
-    UI::Text("Active clients: " + int(st["activeClients"]));
-    UI::TextWrapped("\\\\$aaaIn-process tools stay available when the socket is stopped. Host/port below apply live (no reload).");
-
-    UI::Separator();
-
-    if (listening || (enabled && state == "starting")) {
-        if (UI::Button("Stop socket")) {
-            TmMcp::StopSocket();
-        }
-    } else {
-        if (UI::Button("Start socket")) {
-            TmMcp::StartSocket();
-        }
-    }
-    UI::SameLine();
-    if (UI::Button("Apply host/port")) {
-        TmMcp::ApplySocketSettings();
-    }
-
-    UI::Separator();
-    UI::TextDisabled("Host / port / trace are in the Server settings category.");
 }

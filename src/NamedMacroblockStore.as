@@ -1,3 +1,4 @@
+#if DEPENDENCY_EDITOR
 namespace TmMcp {
     // Last mutator map snapshots for AssertPlacement convenience
     Json::Value@ g_LastMapPre = null;
@@ -468,3 +469,4 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 }
+#endif

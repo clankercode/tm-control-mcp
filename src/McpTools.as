@@ -1,9 +1,10 @@
+#if DEPENDENCY_EDITOR
 namespace Editor {
     import vec3 GetBlockLocation(CGameCtnBlock@ block, bool forceFree = false) from "Editor";
     import vec3 GetBlockRotation(CGameCtnBlock@ block) from "Editor";
     import bool IsBlockFree(CGameCtnBlock@ block) from "Editor";
-    // GetNodPointer is provided by Editor's Exports/Functions.as, no need to re-import.
 }
+#endif
 
 namespace TmMcp {
     array<string> g_NamedMacroblockNames;
@@ -806,10 +807,41 @@ namespace TmMcp {
             || name == "GetRaceData"
             || name == "GetPlayers"
             || name == "GetServerInfo"
+            || name == "GetVehicleState"
+            || name == "ListVehicleVis"
+            || name == "GetVehicleVis"
+            || name == "GetRenderCamera"
+            || name == "ProjectWorldToScreen"
+            || name == "SetEditorOrbitalTarget"
             || name == "GetResult";
     }
 
+    string CompactJsonForTrace(Json::Value &in value) {
+        string s = "{}";
+        try { s = Json::Write(value); } catch {}
+        if (s.Length > 180) s = s.SubStr(0, 180) + "...";
+        return s;
+    }
+
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
+        uint started = Time::Now;
+        trace("TM Control MCP tool start " + name + " " + CompactJsonForTrace(input));
+        Json::Value@ result = DispatchTool(name, input);
+        string status = "err";
+        string extra = "";
+        if (result !is null && result.HasKey("success") && bool(result["success"])) {
+            status = "ok";
+        } else if (result !is null && result.HasKey("code")) {
+            extra = " " + string(result["code"]);
+        }
+        trace("TM Control MCP tool done " + name + " " + status + extra + " " + (Time::Now - started) + "ms");
+        return result;
+    }
+
+    Json::Value@ DispatchTool(const string &in name, Json::Value &in input) {
+        if (ToolRequiresEditorPlusPlus(name) && !IsEditorPlusPlusAvailable()) {
+            return EditorPlusPlusMissingError();
+        }
         if (name == "GetMode") return GetMode(input);
         if (name == "OpenMapInEditor") return OpenMapInEditor(input);
         if (name == "GetMapInfo") return GetMapInfo(input);
@@ -923,6 +955,12 @@ namespace TmMcp {
         if (name == "GetRaceData") return GetRaceData(input);
         if (name == "GetPlayers") return GetPlayers(input);
         if (name == "GetServerInfo") return GetServerInfo(input);
+        if (name == "GetVehicleState") return GetVehicleState(input);
+        if (name == "ListVehicleVis") return ListVehicleVis(input);
+        if (name == "GetVehicleVis") return GetVehicleVis(input);
+        if (name == "GetRenderCamera") return GetRenderCamera(input);
+        if (name == "ProjectWorldToScreen") return ProjectWorldToScreen(input);
+        if (name == "SetEditorOrbitalTarget") return SetEditorOrbitalTarget(input);
         if (name == "GetResult") return GetResult(input);
         return MakeError("unknown tool: " + name, "unknown_tool", false, "", "");
     }
@@ -1044,6 +1082,12 @@ namespace TmMcp {
         tools.Add(MakeTool("GetRaceData", "Get live race data via MLFeed::GetRaceData_V4. Requires an active playground (Race mode). Returns map name, CP count, lap count, and sorted players.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetPlayers", "Get live player data via MLFeed::GetRaceData_V4. Richer than GetRaceData: includes login, currentLap, teamNum, isMVP, respawnRank. Requires Race mode.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetServerInfo", "Get current server connection info from CTrackManiaNetwork. Returns serverName, connected, playerCount, maxPlayers.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetVehicleState", "VehicleState:: viewing dump: GetViewingPlayer + ViewingPlayerState plus RPM/sideSpeed/turbo/reactor/cruise/vehicleType/wheel dirt+falling. Needs Race/replay vis.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("ListVehicleVis", "VehicleState::GetAllVis — all vehicle vis in GameScene. limit default 32.", '{"type":"object","properties":{"limit":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetVehicleVis", "VehicleState::GetSingularVis, GetVisFromId (entityId), or GetVis(player) via name/login.", '{"type":"object","properties":{"entityId":{"type":"integer"},"name":{"type":"string"},"login":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetRenderCamera", "Camera::GetCurrent (or find=true → FindCurrent) + GetCurrentPosition + projection/fov/clip.", '{"type":"object","properties":{"find":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("ProjectWorldToScreen", "Camera::ToScreen + ToScreenSpace + IsBehind for world (x,y,z).", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}},"required":["x","y","z"],"additionalProperties":false}'));
+        tools.Add(MakeTool("SetEditorOrbitalTarget", "Camera::SetEditorOrbitalTarget — focus editor orbital camera on world (x,y,z).", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}},"required":["x","y","z"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetResult", "Poll for async tool result. input: {requestId}. Returns {request_id, status:'pending'|'done'|'error', result?/error?}. Used after DispatchAsync (in-process only).", '{"type":"object","properties":{"requestId":{"type":"string"},"request_id":{"type":"string"}},"additionalProperties":false}'));
         return tools;
     }
@@ -1076,6 +1120,86 @@ namespace TmMcp {
             Json::Value output = Json::Object();
             output["action"] = action;
             output["requested"] = true;
+            return MakeSuccess(output);
+        }
+
+        if (action == "dumpTestCursor") {
+            string report;
+            try {
+                report = Editor::SpikeDumpTestVehicleCursor();
+            } catch {
+                return MakeError("dump failed: " + getExceptionInfo(), "DUMP_FAILED", false);
+            }
+            Json::Value output = Json::Object();
+            output["action"] = action;
+            auto parsed = Json::Parse(report);
+            if (parsed.GetType() == Json::Type::Object) output["report"] = parsed;
+            else output["reportRaw"] = report;
+            return MakeSuccess(output);
+        }
+
+        if (action == "leaveTestMode") {
+            string report;
+            try { report = Editor::SpikeLeaveTestMode(); } catch {
+                return MakeError("leaveTestMode failed: " + getExceptionInfo(), "SPIKE_FAILED", false);
+            }
+            Json::Value output = Json::Object();
+            output["action"] = action;
+            auto parsed = Json::Parse(report);
+            if (parsed.GetType() == Json::Type::Object) output["report"] = parsed;
+            else output["reportRaw"] = report;
+            return MakeSuccess(output);
+        }
+
+        if (action == "enterGizmoOnLatestStart") {
+            string report;
+            try { report = Editor::SpikeEnterGizmoOnLatestStart(); } catch {
+                return MakeError("enterGizmo failed: " + getExceptionInfo(), "SPIKE_FAILED", false);
+            }
+            Json::Value output = Json::Object();
+            output["action"] = action;
+            auto parsed = Json::Parse(report);
+            if (parsed.GetType() == Json::Type::Object) output["report"] = parsed;
+            else output["reportRaw"] = report;
+            return MakeSuccess(output);
+        }
+
+        if (action == "exitGizmo") {
+            string report;
+            try { report = Editor::SpikeExitGizmo(); } catch {
+                return MakeError("exitGizmo failed: " + getExceptionInfo(), "SPIKE_FAILED", false);
+            }
+            Json::Value output = Json::Object();
+            output["action"] = action;
+            auto parsed = Json::Parse(report);
+            if (parsed.GetType() == Json::Type::Object) output["report"] = parsed;
+            else output["reportRaw"] = report;
+            return MakeSuccess(output);
+        }
+
+        if (action == "keepVehiclePatchOn" || action == "keepVehiclePatchOff") {
+            string report;
+            try { report = Editor::SpikeSetKeepVehiclePatch(action == "keepVehiclePatchOn"); } catch {
+                return MakeError("keepVehiclePatch failed: " + getExceptionInfo(), "SPIKE_FAILED", false);
+            }
+            Json::Value output = Json::Object();
+            output["action"] = action;
+            auto parsed = Json::Parse(report);
+            if (parsed.GetType() == Json::Type::Object) output["report"] = parsed;
+            else output["reportRaw"] = report;
+            return MakeSuccess(output);
+        }
+
+        if (action == "enterTestAtLatestStart") {
+            string report;
+            try { report = Editor::SpikeEnterTestAtLatestStart(); } catch {
+                return MakeError("enterTest failed: " + getExceptionInfo(), "SPIKE_FAILED", false);
+            }
+            Json::Value output = Json::Object();
+            output["action"] = action;
+            auto parsed = Json::Parse(report);
+            if (parsed.GetType() == Json::Type::Object) output["report"] = parsed;
+            else output["reportRaw"] = report;
             return MakeSuccess(output);
         }
 

@@ -997,6 +997,21 @@ namespace TmMcp {
         auto s = p.GetSetting(varName);
         if (s is null) return MakeError("setting not found: " + varName, "not_found", false, "", "Use ListPluginSettings for varName");
 
+        auto selfCheck = SelfPlugin();
+        bool writingSelf = selfCheck !is null && p.ID == selfCheck.ID;
+        if (writingSelf && varName == "S_TmMcpHost") {
+            string want = string(input["value"]);
+            if (want != "127.0.0.1") {
+                return MakeError("only 127.0.0.1 is allowed as the bind host", "forbidden", false, "", "Localhost-only socket; no auth");
+            }
+        }
+        if (writingSelf && varName == "S_TmMcpPort") {
+            int port = int(input["value"]);
+            if (port < 1 || port > 65535) {
+                return MakeError("port must be 1-65535", "bad_value", false, "", "");
+            }
+        }
+
         string werr = "";
         if (!WriteSettingValue(s, input["value"], werr)) {
             return MakeError(werr, "bad_value", false, "", "Type=" + SettingTypeToString(s.Type));

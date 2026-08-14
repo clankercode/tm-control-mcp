@@ -1,3 +1,4 @@
+#if DEPENDENCY_EDITOR
 namespace TmMcp {
     string EditModeToString(CGameEditorPluginMap::EditMode mode) {
         if (mode == CGameEditorPluginMap::EditMode::Unknown) return "Unknown";
@@ -338,3 +339,4 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 }
+#endif

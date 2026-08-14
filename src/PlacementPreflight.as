@@ -1,3 +1,4 @@
+#if DEPENDENCY_EDITOR
 namespace TmMcp {
     class PreflightStats {
         bool hasAny = false;
@@ -138,3 +139,4 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 }
+#endif

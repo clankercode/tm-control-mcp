@@ -153,7 +153,11 @@ namespace TmMcp {
             && !name.ToLower().Contains(idLower) && !n2.ToLower().Contains(idLower)) return false;
         vec3 pos;
         try {
+#if DEPENDENCY_EDITOR
             pos = Editor::GetBlockLocation(block, true);
+#else
+            pos = vec3(float(block.Coord.x) * 32.0, (float(block.Coord.y) - 8.0) * 8.0, float(block.Coord.z) * 32.0);
+#endif
         } catch {
             pos = vec3(float(block.Coord.x) * 32.0, (float(block.Coord.y) - 8.0) * 8.0, float(block.Coord.z) * 32.0);
         }
@@ -172,6 +176,7 @@ namespace TmMcp {
         return candidateCount == 1 ? match : -1;
     }
 
+#if DEPENDENCY_EDITOR
     void RecordTaggedNamedMacroblock(Json::Value &in input, Editor::MacroblockSpec@ placedMb, int blockBaseIndex, int itemBaseIndex) {
         string tag = ResolvePlacementTag(input);
         if (tag.Length == 0 || placedMb is null) return;
@@ -186,6 +191,7 @@ namespace TmMcp {
             RecordTaggedPlacement(tag, "item", item.name, item.pos - MacroblockInternalOffset(), itemBaseIndex + int(i));
         }
     }
+#endif
 
     Json::Value@ SetAgentTag(Json::Value &in input) {
         string tag = input.HasKey("tag") ? string(input["tag"]) : "";
@@ -372,7 +378,11 @@ namespace TmMcp {
             if (itemsToDelete.Length > 0) {
                 itemMethod = "DeleteItems";
                 try {
+#if DEPENDENCY_EDITOR
                     itemsOk = Editor::DeleteItems(itemsToDelete, addUndo);
+#else
+                    return EditorPlusPlusMissingError();
+#endif
                 } catch {
                     return MakeError("DeleteItems failed: " + getExceptionInfo(), "DELETE_FAILED", true);
                 }
@@ -380,7 +390,11 @@ namespace TmMcp {
             if (blocksToDelete.Length > 0) {
                 blockMethod = "DeleteBlocks";
                 try {
+#if DEPENDENCY_EDITOR
                     blocksOk = Editor::DeleteBlocks(blocksToDelete, addUndo);
+#else
+                    return EditorPlusPlusMissingError();
+#endif
                 } catch {
                     return MakeError("DeleteBlocks failed: " + getExceptionInfo(), "DELETE_FAILED", true);
                 }

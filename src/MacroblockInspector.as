@@ -1,3 +1,4 @@
+#if DEPENDENCY_EDITOR
 namespace TmMcp {
     CGameCtnMacroBlockInfo@ ResolveMacroblockModel(CGameEditorPluginMap@ pmt, Json::Value &in input, string &out source) {
         source = "";
@@ -183,3 +184,4 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 }
+#endif

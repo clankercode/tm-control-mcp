@@ -103,6 +103,7 @@ namespace TmMcp {
         checks["inventoryReady"] = inventoryReady;
         checks["hasChallenge"] = hasChallenge;
         checks["menuModuleAvailable"] = MenuModuleAvailable();
+        checks["editorPlusPlus"] = IsEditorPlusPlusAvailable();
 
         bool ready = blocking.Length == 0;
         // Soft: inventory scanning alone shouldn't hard-fail "any"

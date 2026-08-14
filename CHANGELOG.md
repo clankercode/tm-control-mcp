@@ -17,6 +17,10 @@ Versions follow `info.toml` `[meta] version`.
 - Migration guide: [docs/migration-from-mcptm.md](docs/migration-from-mcptm.md)
 - `ControlPlugin` RemoteBuild-parity: `load` by plugin id (`Plugins/<id>/` or `<id>.op`), unload-then-load rebuild, `getLogs` from `Openplanet.log`
 - Socket Settings tab + exported `StartSocket` / `StopSocket` / `SetSocketEnabled` / `GetSocketStatus`
+- Editor++ (`Editor`) is now an **optional** dependency; E++ tools return `missing_dependency` if it is not loaded
+- Request-payload trace writes to plugin storage (`request-trace.log`), not `Openplanet.log`
+- `GetVehicleState` / `ListVehicleVis` / `GetVehicleVis` (VehicleState::) and `GetRenderCamera` / `ProjectWorldToScreen` / `SetEditorOrbitalTarget` (Camera::)
+- One-line Openplanet `trace` at each tool start (name + args) and finish (ok/err + ms)
 
 ### Changed
 

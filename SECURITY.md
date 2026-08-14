@@ -57,10 +57,11 @@ If that is unacceptable for your environment, **do not load the plugin**.
 
 6. **Settings writes**  
    `SetPluginSetting` + `SavePluginSettings` persist Openplanet settings.  
-   Host/port changes need a **plugin reload** to take effect; a hostile local client could still change them.
+   Host/port/enable apply live (no reload). Bind host is 127.0.0.1 only.
 
 7. **Logs**  
-   `Trace Requests` logs full request/response payloads to `Openplanet.log` — disable unless debugging.
+   `Trace Requests` appends full request/response payloads to plugin storage
+   (`request-trace.log`), not `Openplanet.log`. Disable unless debugging.
 
 8. **Script timeout**  
    `info.toml` `timeout = 15000` limits runaway script time; it is not a security boundary.

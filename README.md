@@ -13,7 +13,8 @@ themselves — without clicking the UI by hand.
 | **Socket** | `127.0.0.1:30006` (configurable) |
 | **Protocol** | One newline-terminated JSON request per TCP connection; newline JSON response; socket closes |
 | **Platform** | Trackmania (current) + [Openplanet](https://openplanet.dev/) |
-| **Hard deps** | [Editor++](https://openplanet.dev/plugin/editor) (`Editor`) · [MLHook](https://openplanet.dev/plugin/mlhook) |
+| **Hard deps** | [MLHook](https://openplanet.dev/plugin/mlhook) · MLFeedRaceData |
+| **Optional** | [Editor++](https://openplanet.dev/plugin/editor) (`Editor`) · Openplanet builtins `VehicleState` + `Camera` |
 | **License** | Dual **[Unlicense](./UNLICENSE)** **or** **[CC0 1.0](./CC0-1.0)** — public domain / no attribution required (GitHub may show “Other”) |
 | **Status** | Active development (`info.toml` `0.2.0`) — first tagged public release |
 | **Script timeout** | `15000` ms (`info.toml` `[script] timeout`) — long menu/place/wait tools need headroom |
@@ -89,9 +90,8 @@ Pointer peeks, safe memory reads, gizmo/fuzz helpers, macroblock header dumps �
 1. **Trackmania** (Nadeo) running under your normal install (native Windows or Proton/Wine).
 2. **[Openplanet](https://openplanet.dev/)** for Trackmania.
 3. Plugins (install from Openplanet site or your usual channel):
-   - **[Editor++](https://openplanet.dev/plugin/editor)** — dependency id `Editor`  
-     Tested with **0.8.x** (including letter/dev builds that export free placement + map objectives).  
-     Needs a build that exports `PlaceBlocks` / `DeleteItems` / `GetMapNbClones` (etc.).
+   - **[Editor++](https://openplanet.dev/plugin/editor)** — optional, id `Editor`  
+     Tested with **0.8.x**. Needed for free placement, inventory cache, named macroblocks, E++ delete. Without it the plugin still loads; those tools return `missing_dependency`.  
    - **[MLHook](https://openplanet.dev/plugin/mlhook)** — dependency id `MLHook`  
      Tested with **≥ 0.5.4** (site id 252). Required for menu `Router_Push` and Manialink inject.
    - **[MLFeedRaceData](https://openplanet.dev/)** — dependency id `MLFeedRaceData`  
@@ -148,12 +148,12 @@ normal settings UI **and** via MCP tools (`ListPluginSettings` / `SetPluginSetti
    - **Socket Host** — default `127.0.0.1` (keep localhost-only)
    - **Socket Port** — default `30006`
    - **Startup Delay (ms)** — delay before the listener binds
-   - **Trace Requests** — log request/response payloads to `Openplanet.log`
+   - **Trace Requests** — append request/response payloads to plugin storage (`request-trace.log`), not Openplanet.log
    - **Socket tab** — live status, start/stop (the enable flag is hidden)
 
-Host/port/enable **apply live** (no reload). Stopping the socket leaves in-process
-imports working. `S_TmMcpEnableSocket` is hidden; use the Socket tab,
-`TmMcp::SetSocketEnabled`, or `SetPluginSetting`.
+Host/port/enable **apply live** (no reload). Bind host is **127.0.0.1 only**.
+`S_TmMcpEnableSocket` is hidden; use the Socket tab, `TmMcp::SetSocketEnabled`,
+or `SetPluginSetting`.
 
 **Script execution timeout** is **not** a runtime setting: it is
 `timeout = 15000` in `info.toml` (15s). Raise it there and rebuild/reload if a

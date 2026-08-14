@@ -1,3 +1,4 @@
+#if DEPENDENCY_EDITOR
 namespace TmMcp {
     Json::Value BlockInfoToJson(CGameCtnBlockInfo@ blockInfo) {
         if (blockInfo is null) return Json::Value();
@@ -40,3 +41,4 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 }
+#endif

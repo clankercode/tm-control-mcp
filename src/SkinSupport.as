@@ -1,3 +1,4 @@
+#if DEPENDENCY_EDITOR
 namespace TmMcp {
     class NamedMacroblockSkin {
         uint blockIndex;
@@ -264,3 +265,4 @@ namespace TmMcp {
         }
     }
 }
+#endif

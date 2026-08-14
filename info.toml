@@ -6,7 +6,8 @@ version  = "0.2.0"
 
 [script]
 #__DEFINES__
-dependencies = ["Editor", "MLHook", "MLFeedRaceData"]
+dependencies = ["MLHook", "MLFeedRaceData"]
+optional_dependencies = ["Editor", "VehicleState", "Camera"]
 module = "TmMcp"
 timeout = 15000
 exports = ["TmMcp_Export.as"]

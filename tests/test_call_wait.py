@@ -265,5 +265,22 @@ def test_enrich_max_lines_garbage_does_not_crash(tmp_path, monkeypatch):
     assert response["data"]["result"]["output"]["log"]["source"] == "host"
 
 
+def test_socket_lifecycle_fixture_exists():
+    root = Path(__file__).resolve().parents[1]
+    assert (root / "tools" / "verify_socket_lifecycle.py").is_file()
+    assert (root / "tools" / "fixtures" / "tm-mcp-socket-probe" / "Main.as").is_file()
+    assert (root / "tools" / "fixtures" / "tm-mcp-socket-probe" / "info.toml").is_file()
+    src = (root / "src" / "TmMcp_Export.as").read_text()
+    for name in (
+        "SetSocketEnabled",
+        "StartSocket",
+        "StopSocket",
+        "IsSocketEnabled",
+        "IsSocketListening",
+        "GetSocketStatus",
+    ):
+        assert name in src
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

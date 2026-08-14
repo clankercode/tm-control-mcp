@@ -1,3 +1,4 @@
+#if DEPENDENCY_EDITOR
 namespace TmMcp {
     Json::Value@ ControlInventory(Json::Value &in input) {
         auto editor = GetEditor();
@@ -160,3 +161,4 @@ namespace TmMcp {
         return null;
     }
 }
+#endif

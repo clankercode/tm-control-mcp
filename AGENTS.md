@@ -1,6 +1,6 @@
 ## Project Notes
 
-Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu control over a localhost JSON socket (`127.0.0.1:30006`). Sibling of E++; depends on `Editor` + `MLHook`.
+Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu control over a localhost JSON socket (`127.0.0.1:30006`). Sibling of E++; hard deps `MLHook` + `MLFeedRaceData`; `Editor` is optional.
 
 ### Build / reload
 
@@ -12,6 +12,7 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
 - **DEV tools:** only with `./build.sh dev` (`#if DEV`). Release builds omit DevSafeRead/fuzz/etc.
 - Security: localhost-only, no auth — `SECURITY.md`.
 - Live smoke when game up: `python3 tools/smoke_tag_cleanup.py`
+- Socket lifecycle (exports + enable/disable): `python3 tools/verify_socket_lifecycle.py`
 - `tools/call.py` returns compact JSON by default and checks for a real `Trackmania.exe` process before socket calls (`--skip-process-check` only for raw socket debug).
 - Wait helpers: `--wait-mode Editor|Menu|Race`, `--until-ready editor|menu|any`, `--wait-timeout 30`.
 

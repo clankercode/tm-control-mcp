@@ -1,3 +1,4 @@
+#if DEPENDENCY_EDITOR
 namespace TmMcp {
     Json::Value@ RunGizmoApplyBlock(Json::Value &in input) {
         auto editor = GetEditor();
@@ -108,3 +109,4 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 }
+#endif
