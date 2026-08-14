@@ -1,3 +1,4 @@
+#if DEPENDENCY_EDITOR
 namespace TmMcp {
     Json::Value@ RunComputeItemsDiagnostic(Json::Value &in input) {
         auto editor = GetEditor();
@@ -182,3 +183,4 @@ namespace TmMcp {
         return result;
     }
 }
+#endif

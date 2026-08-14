@@ -27,7 +27,6 @@ namespace TmMcp {
 
     bool ToolRequiresEditorPlusPlus(const string &in name) {
         return name == "FocusCamera"
-            || name == "GetInventorySummary"
             || name == "FindInventory"
             || name == "RefreshInventory"
             || name == "InspectMacroblockModel"
@@ -98,12 +97,15 @@ namespace TmMcp {
     Json::Value@ RemoveRecentItems(Json::Value &in input) { return EditorPlusPlusMissingError(); }
     Json::Value@ RemoveBlocksByIndex(Json::Value &in input) { return EditorPlusPlusMissingError(); }
     Json::Value@ RemoveItemsByIndex(Json::Value &in input) { return EditorPlusPlusMissingError(); }
-    Json::Value@ GetInventorySummary(Json::Value &in input) { return EditorPlusPlusMissingError(); }
+    Json::Value@ ControlItemEditor(Json::Value &in input) { return EditorPlusPlusMissingError(); }
+    Json::Value@ ControlMapObjectives(Json::Value &in input) { return EditorPlusPlusMissingError(); }
+    Json::Value@ SetCursorBlock(Json::Value &in input) { return EditorPlusPlusMissingError(); }
     Json::Value@ FindInventory(Json::Value &in input) { return EditorPlusPlusMissingError(); }
     Json::Value@ RefreshInventory(Json::Value &in input) { return EditorPlusPlusMissingError(); }
     Json::Value@ FocusCamera(Json::Value &in input) { return EditorPlusPlusMissingError(); }
     Json::Value@ SelectBlockModel(Json::Value &in input) { return EditorPlusPlusMissingError(); }
-    Json::Value@ SpikeGizmoVehiclePreview(Json::Value &in input) { return EditorPlusPlusMissingError(); }
+    Json::Value@ DumpMacroblockHeader(Json::Value &in input) { return EditorPlusPlusMissingError(); }
+    Json::Value@ RunDumpMacroblockHeader(Json::Value &in input) { return EditorPlusPlusMissingError(); }
     void RememberMapDelta(const string &in tool, Json::Value@ mapPre, Json::Value@ mapPost) {}
 }
 #endif

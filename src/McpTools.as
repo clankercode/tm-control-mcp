@@ -8,8 +8,10 @@ namespace Editor {
 
 namespace TmMcp {
     array<string> g_NamedMacroblockNames;
+#if DEPENDENCY_EDITOR
     array<Editor::MacroblockSpec@> g_NamedMacroblocks;
     array<NamedMacroblockSkin@[]@> g_NamedMacroblockSkins;
+#endif
 
     CGameCtnEditorFree@ GetEditor() {
         auto app = cast<CTrackMania>(GetApp());
@@ -199,6 +201,7 @@ namespace TmMcp {
         return vec2(h, v);
     }
 
+#if DEPENDENCY_EDITOR
     bool FocusCameraOn(vec3 pos, float distance) {
         auto editor = GetEditor();
         auto orbital = editor is null ? null : editor.OrbitalCameraControl;
@@ -207,10 +210,12 @@ namespace TmMcp {
         if (dir.LengthSquared() < 1.0e-6) dir = vec3(0, 0, 1);
         return Editor::SetCamAnimationGoTo(LookDirToOrbitalAngles(dir), pos, distance);
     }
+#endif
 
     // High-angle autofocus: look down at `pos` from above, keeping the horizontal yaw
     // pointing from the target back toward the current camera so the transition animates
     // naturally from the user's viewpoint.
+#if DEPENDENCY_EDITOR
     bool AutofocusCameraOn(vec3 pos, float distance) {
         auto editor = GetEditor();
         auto orbital = editor is null ? null : editor.OrbitalCameraControl;
@@ -222,6 +227,7 @@ namespace TmMcp {
         vec3 lookDir = horiz * -Math::Cos(pitchDown) + vec3(0, -Math::Sin(pitchDown), 0);
         return Editor::SetCamAnimationGoTo(LookDirToOrbitalAngles(lookDir), pos, distance);
     }
+#endif
 
     Json::Value BasicDialogSummary() {
         auto app = cast<CTrackMania>(GetApp());
@@ -452,6 +458,7 @@ namespace TmMcp {
             obj["name"] = block.BlockInfo.Name;
             obj["idName"] = block.BlockInfo.IdName;
         }
+#if DEPENDENCY_EDITOR
         bool isFree = Editor::IsBlockFree(block);
         obj["isFree"] = isFree;
         obj["variant"] = int(block.BlockInfoVariantIndex);
@@ -463,7 +470,17 @@ namespace TmMcp {
         auto rot = Editor::GetBlockRotation(block);
         obj["rot"] = Vec3ToJson(rot);
         obj["rotDeg"] = Vec3DegToJson(rot);
+#else
+        obj["isFree"] = false;
+        obj["variant"] = int(block.BlockInfoVariantIndex);
+        obj["mobilIndex"] = int(block.MobilIndex);
+        obj["mobilVariant"] = int(block.MobilVariantIndex);
+        obj["isGround"] = block.IsGround;
+        obj["isGhost"] = block.IsGhostBlock();
+#endif
+#if DEPENDENCY_EDITOR
         obj["skin"] = BlockSkinToJson(block);
+#endif
         return obj;
     }
 
@@ -487,7 +504,9 @@ namespace TmMcp {
             obj["idName"] = item.ItemModel.IdName;
             obj["waypointType"] = int(item.ItemModel.WaypointType);
         }
+#if DEPENDENCY_EDITOR
         obj["skin"] = ItemSkinToJson(item);
+#endif
         return obj;
     }
 
@@ -550,12 +569,15 @@ namespace TmMcp {
         return -1;
     }
 
+#if DEPENDENCY_EDITOR
     Editor::MacroblockSpec@ GetNamedMacroblock(const string &in name) {
         int index = FindNamedMacroblockIndex(name);
         if (index < 0) return null;
         return g_NamedMacroblocks[index];
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Json::Value NamedMacroblockSummary(const string &in name, Editor::MacroblockSpec@ mb) {
         Json::Value output = Json::Object();
         auto skins = GetNamedMacroblockSkins(name);
@@ -568,11 +590,13 @@ namespace TmMcp {
         output["nbSkins"] = int(output["nbRawSkins"]) + int(output["nbPostSkins"]);
         return output;
     }
+#endif
 
     vec3 MacroblockInternalOffset() {
         return vec3(0, 56, 0);
     }
 
+#if DEPENDENCY_EDITOR
     Json::Value BlockSpecToJson(Editor::BlockSpec@ block) {
         Json::Value obj = Json::Object();
         if (block is null) return obj;
@@ -591,7 +615,9 @@ namespace TmMcp {
         obj["isGhost"] = block.isGhost;
         return obj;
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Json::Value ItemSpecToJson(Editor::ItemSpec@ item) {
         Json::Value obj = Json::Object();
         if (item is null) return obj;
@@ -605,21 +631,27 @@ namespace TmMcp {
         obj["isFlying"] = item.isFlying != 0;
         return obj;
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     void ApplyTransformToSpec(Editor::BlockSpec@ block, const mat4 &in transform) {
         auto blockMat = mat4::Translate(block.pos) * Editor::EulerToMat(block.pyr);
         auto transformed = transform * blockMat;
         block.pos = (transformed * vec3()).xyz;
         block.pyr = Editor::PitchYawRollFromRotationMatrix(mat4::Translate(block.pos * -1.0) * transformed);
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     void ApplyTransformToSpec(Editor::ItemSpec@ item, const mat4 &in transform) {
         auto itemMat = mat4::Translate(item.pos) * Editor::EulerToMat(item.pyr);
         auto transformed = transform * itemMat;
         item.pos = (transformed * vec3()).xyz;
         item.pyr = Editor::PitchYawRollFromRotationMatrix(mat4::Translate(item.pos * -1.0) * transformed);
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Editor::MacroblockSpec@ DuplicateAndTransformMacroblock(Editor::MacroblockSpec@ mb, vec3 offset, vec3 rotation, vec3 pivot) {
         auto copy = mb.Duplicate();
         auto internalPivot = pivot + MacroblockInternalOffset();
@@ -634,6 +666,7 @@ namespace TmMcp {
         }
         return copy;
     }
+#endif
 
     bool TextMatchesQuery(const string &in text, const string &in lowerQuery) {
         return lowerQuery.Length == 0 || text.ToLower().Contains(lowerQuery);
@@ -654,10 +687,20 @@ namespace TmMcp {
         output["source"] = "pluginMap";
         output["nbBlocks"] = int(pmt.BlockModels.Length);
         output["nbTerrainBlocks"] = int(pmt.TerrainBlockModels.Length);
-        output["nbItems"] = int(Editor::GetInventoryNbItems());
+        output["nbItems"] =
+#if DEPENDENCY_EDITOR
+            int(Editor::GetInventoryNbItems());
+#else
+            0;
+#endif
         output["nbMacroblocks"] = int(pmt.MacroblockModels.Length);
         output["isScanningBlocks"] = false;
-        output["isScanningItems"] = Editor::IsInventoryScanningItems();
+        output["isScanningItems"] =
+#if DEPENDENCY_EDITOR
+            Editor::IsInventoryScanningItems();
+#else
+            false;
+#endif
         output["isScanningMacroblocks"] = false;
         output["loadingStatus"] = "loaded from CGameEditorPluginMap";
         output["loadingStatusShort"] = "ready";
@@ -689,9 +732,11 @@ namespace TmMcp {
         return null;
     }
 
+#if DEPENDENCY_EDITOR
     CGameItemModel@ ResolveItemModel(const string &in itemPath) {
         return Editor::GetInventoryItemModelByPath(itemPath);
     }
+#endif
 
     bool IsToolName(const string &in name) {
         return name == "GetMode"
@@ -874,13 +919,15 @@ namespace TmMcp {
         if (name == "ListMacroblockInstances") return ListMacroblockInstances(input);
         if (name == "FindBlockModels") return FindBlockModels(input);
 #if DEV
+#if DEPENDENCY_EDITOR
         if (name == "RunGizmoApplyBlock") return RunGizmoApplyBlock(input);
         if (name == "RunRandomFuzz") return RunRandomFuzz(input);
         if (name == "RunComputeItemsDiagnostic") return RunComputeItemsDiagnostic(input);
+        if (name == "DumpMacroblockHeader") return RunDumpMacroblockHeader(input);
+        if (name == "DevComputeItemsPointers") return RunDevComputeItemsPointers(input);
+#endif
         if (name == "DevSafeRead") return RunDevSafeRead(input);
         if (name == "DevGetPointers") return RunDevGetPointers(input);
-        if (name == "DevComputeItemsPointers") return RunDevComputeItemsPointers(input);
-        if (name == "DumpMacroblockHeader") return RunDumpMacroblockHeader(input);
 #endif
         if (name == "CreateNamedMacroblock") return CreateNamedMacroblock(input);
         if (name == "GetNamedMacroblock") return GetNamedMacroblockTool(input);
@@ -1101,6 +1148,7 @@ namespace TmMcp {
     }
 
     // Item editor control: state readout + safe EME nullify via E++ (issue #28).
+#if DEPENDENCY_EDITOR
     Json::Value@ ControlItemEditor(Json::Value &in input) {
         auto app = cast<CTrackMania>(GetApp());
         if (app is null) return MakeError("app not available", "UNKNOWN", true);
@@ -1243,6 +1291,7 @@ namespace TmMcp {
         }
         return MakeSuccess(output);
     }
+#endif
 
     Json::Value@ GetMode(Json::Value &in input) {
         auto app = cast<CTrackMania>(GetApp());
@@ -1482,6 +1531,7 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
+#if DEPENDENCY_EDITOR
     Json::Value@ ControlMapObjectives(Json::Value &in input) {
         auto editor = cast<CGameCtnEditorFree>(GetApp().Editor);
         if (editor is null || editor.Challenge is null) return MakeError("Not in editor with a map", "wrong_mode", false, "editor");
@@ -1537,6 +1587,7 @@ namespace TmMcp {
         }
         return MakeSuccess(result);
     }
+#endif
 
 Json::Value@ GetMapInfo(Json::Value &in input) {
         auto editor = GetEditor();
@@ -1854,9 +1905,12 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         bool animate = input.HasKey("animate") ? bool(input["animate"]) : false;
 
         bool animated = false;
+#if DEPENDENCY_EDITOR
         if (animate) {
             animated = Editor::SetCamAnimationGoTo(vec2(h, v), target, distance);
-        } else {
+        }
+#endif
+        if (!animated) {
             pmt.CameraTargetPosition = target;
             pmt.CameraToTargetDistance = distance;
             pmt.CameraHAngle = h;
@@ -1964,6 +2018,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         return MakeSuccess(output);
     }
 
+#if DEPENDENCY_EDITOR
     Json::Value@ FocusCamera(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
@@ -1978,6 +2033,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["distance"] = distance;
         return MakeSuccess(output);
     }
+#endif
 
     Json::Value@ TakeScreenshot(Json::Value &in input) {
         auto app = GetApp();
@@ -2033,12 +2089,18 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
             if (block is null) continue;
             if (query.Length > 0 && !ModelMatchesQuery(block.BlockInfo, query)) continue;
 
+#if DEPENDENCY_EDITOR
             bool isFree = Editor::IsBlockFree(block);
+#else
+            bool isFree = false;
+#endif
             if (filterFree && isFree != wantFree) continue;
 
             if (hasCenter) {
                 if (world) {
+#if DEPENDENCY_EDITOR
                     if ((Editor::GetBlockLocation(block) - worldCenter).Length() > radius) continue;
+#endif
                 } else if (float(Nat3Distance(block.Coord, coordCenter)) > radius) {
                     continue;
                 }
@@ -2200,6 +2262,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         return MakeSuccess(InventorySummary(editor.PluginMapType));
     }
 
+#if DEPENDENCY_EDITOR
     Json::Value@ FindInventory(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
@@ -2251,7 +2314,9 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["inventory"] = InventorySummary(editor.PluginMapType);
         return MakeSuccess(output);
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Json::Value@ RefreshInventory(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
@@ -2263,7 +2328,9 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["note"] = "rescan started; poll GetInventorySummary until isScanningItems=false, then re-query";
         return MakeSuccess(output);
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Json::Value@ CreateNamedMacroblock(Json::Value &in input) {
         if (!input.HasKey("name")) return MakeError("missing name");
         string name = string(input["name"]);
@@ -2283,7 +2350,9 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         }
         return MakeSuccess(NamedMacroblockSummary(name, mb));
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Json::Value@ ListNamedMacroblocks(Json::Value &in input) {
         Json::Value entries = Json::Array();
         for (uint i = 0; i < g_NamedMacroblockNames.Length; i++) {
@@ -2295,7 +2364,9 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["count"] = int(entries.Length);
         return MakeSuccess(output);
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Json::Value@ GetNamedMacroblockTool(Json::Value &in input) {
         if (!input.HasKey("name")) return MakeError("missing name");
         string name = string(input["name"]);
@@ -2331,7 +2402,9 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["includeItems"] = includeItems;
         return MakeSuccess(output);
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Json::Value@ ClearNamedMacroblock(Json::Value &in input) {
         bool clearAll = input.HasKey("all") ? bool(input["all"]) : false;
         if (clearAll) {
@@ -2358,7 +2431,9 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["name"] = name;
         return MakeSuccess(output);
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Json::Value@ AddBlockToNamedMacroblock(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
@@ -2412,7 +2487,9 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["bgSkin"] = bgSkin;
         return MakeSuccess(output);
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Json::Value@ AddBlocksToNamedMacroblock(Json::Value &in input) {
         if (!input.HasKey("name") || !input.HasKey("blocks")) return MakeError("missing name or blocks");
         auto blocks = input["blocks"];
@@ -2447,7 +2524,9 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["ok"] = errors.Length == 0;
         return MakeSuccess(output);
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Json::Value@ AddItemToNamedMacroblock(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
@@ -2495,7 +2574,9 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["bgSkin"] = bgSkin;
         return MakeSuccess(output);
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Json::Value@ AddItemsToNamedMacroblock(Json::Value &in input) {
         if (!input.HasKey("name") || !input.HasKey("items")) return MakeError("missing name or items");
         auto items = input["items"];
@@ -2530,7 +2611,9 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["ok"] = errors.Length == 0;
         return MakeSuccess(output);
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Json::Value@ PlaceNamedMacroblock(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
@@ -2620,6 +2703,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         }
         return MakeSuccess(output);
     }
+#endif
 
     Json::Value@ PlaceBlock(Json::Value &in input) {
         auto editor = GetEditor();
@@ -2716,6 +2800,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         return MakeSuccess(output);
     }
 
+#if DEPENDENCY_EDITOR
     Json::Value@ PlaceBlockViaEditorPlusPlus(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
@@ -2815,7 +2900,9 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         if (_tagB.Length > 0) output["agentTag"] = _tagB;
         return MakeSuccess(output);
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Json::Value@ PlaceItemViaEditorPlusPlus(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.PluginMapType is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
@@ -2909,6 +2996,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         if (_tag.Length > 0) output["agentTag"] = _tag;
         return MakeSuccess(output);
     }
+#endif
 
     Json::Value@ RemoveBlock(Json::Value &in input) {
         auto editor = GetEditor();
@@ -3008,6 +3096,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         return MakeSuccess(output);
     }
 
+#if DEPENDENCY_EDITOR
     Json::Value@ RemoveRecentBlocks(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
@@ -3067,7 +3156,9 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["mapPost"] = MapSummary(editor);
         return MakeSuccess(output);
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Json::Value@ RemoveRecentItems(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
@@ -3120,6 +3211,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["mapPost"] = MapSummary(editor);
         return MakeSuccess(output);
     }
+#endif
 
     bool ReadIndexArgs(Json::Value &in input, int total, int maxCount, array<int> &out indices, string &out err) {
         if (input.HasKey("index")) {
@@ -3156,6 +3248,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         return true;
     }
 
+#if DEPENDENCY_EDITOR
     Json::Value@ RemoveBlocksByIndex(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
@@ -3212,7 +3305,9 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["mapPost"] = MapSummary(editor);
         return MakeSuccess(output);
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Json::Value@ RemoveItemsByIndex(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
@@ -3269,11 +3364,15 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["mapPost"] = MapSummary(editor);
         return MakeSuccess(output);
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Json::Value@ SetCursorBlock(Json::Value &in input) {
         return SelectBlockModel(input);
     }
+#endif
 
+#if DEPENDENCY_EDITOR
     Json::Value@ SelectBlockModel(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
@@ -3307,6 +3406,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["currentGhostBlockIdName"] = editor.CurrentGhostBlockInfo is null ? "" : string(editor.CurrentGhostBlockInfo.IdName);
         return MakeSuccess(output);
     }
+#endif
 
     Json::Value@ Undo(Json::Value &in input) {
         auto editor = GetEditor();

@@ -5,6 +5,15 @@ namespace TmMcp {
         return Text::FormatPointer(ptr);
     }
 
+    uint64 NodPointerOrZero(CMwNod@ nod) {
+        if (nod is null) return 0;
+#if DEPENDENCY_EDITOR
+        return Editor::GetNodPointer(nod);
+#else
+        return 0;
+#endif
+    }
+
     // Accept either a JSON string ("0x...", "1234") or an integer (uint64 range).
     bool TryParsePtr(Json::Value@ v, uint64 &out ptr) {
         if (v is null) return false;
@@ -233,7 +242,7 @@ namespace TmMcp {
             o["isNull"] = true;
             return o;
         }
-        uint64 ptr = Editor::GetNodPointer(nod);
+        uint64 ptr = NodPointerOrZero(nod);
         o["ptr"] = PtrToHex(ptr);
         o["isNull"] = false;
         // Peek vtable & refcount - a healthy CMwNod has a readable vtable at +0 and refcount at +0x8.
@@ -342,7 +351,7 @@ namespace TmMcp {
 
         Json::Value output = Json::Object();
         output["mbPath"] = mbPath;
-        output["modelPtr"] = PtrToHex(Editor::GetNodPointer(model));
+        output["modelPtr"] = PtrToHex(NodPointerOrZero(model));
 
         CGameEditorMapMacroBlockInstance@ inst;
         string instError = "";
@@ -355,7 +364,7 @@ namespace TmMcp {
             output["error"] = instError.Length > 0 ? instError : "CreateMacroblockInstance returned null";
             return MakeSuccess(output);
         }
-        output["instancePtr"] = PtrToHex(Editor::GetNodPointer(inst));
+        output["instancePtr"] = PtrToHex(NodPointerOrZero(inst));
 
         string computeError = "";
         try {
@@ -381,7 +390,7 @@ namespace TmMcp {
                 arr.Add(entry);
                 continue;
             }
-            uint64 wptr = Editor::GetNodPointer(w);
+            uint64 wptr = NodPointerOrZero(w);
             entry["ptr"] = PtrToHex(wptr);
             entry["probe"] = ProbePointer(wptr);
             // Peek vtable + refcount so we can compare wrapper layouts without field accesses.
@@ -395,6 +404,7 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
+#if DEPENDENCY_EDITOR
     // Dump CGameCtnMacroBlockInfo public flags + buffer lens + raw header words.
     // Used to RE what differs between native item-bearing MBs and our temp-written donors.
     Json::Value@ RunDumpMacroblockHeader(Json::Value &in input) {
@@ -406,7 +416,7 @@ namespace TmMcp {
         if (model is null) return MakeError("macroblock model not found via " + source);
 
         uint64 ptr = 0;
-        try { ptr = Editor::GetNodPointer(model); } catch {}
+        try { ptr = NodPointerOrZero(model); } catch {}
         if (ptr == 0) return MakeError("could not resolve nod pointer");
 
         Json::Value output = Json::Object();
@@ -426,16 +436,17 @@ namespace TmMcp {
         try { output["refCount"] = Reflection::GetRefCount(model); } catch { output["refCount"] = -1; }
 
         // Buffer lengths: prefer E++ MacroblockSpec conversion (always available)
+#if DEPENDENCY_EDITOR
         try {
             auto spec = Editor::MakeMacroblockSpec(model);
             if (spec !is null) {
                 output["nbBlocks"] = int(spec.blocks.Length);
                 output["nbItems"] = int(spec.items.Length);
-                // skins not always on shared interface
             }
         } catch {
             output["specError"] = getExceptionInfo();
         }
+#endif
 
         // Known E++ offsets (Dev.as) — avoid GetOffset (not available in MCP)
         // HasMultilap@0x148 → blocks 0x150, skins 0x160, items 0x170
@@ -480,7 +491,7 @@ namespace TmMcp {
         // GeneratedBlockInfo / Model pointers
         try {
             if (model.GeneratedBlockInfo !is null) {
-                output["generatedBlockInfoPtr"] = PtrToHex(Editor::GetNodPointer(model.GeneratedBlockInfo));
+                output["generatedBlockInfoPtr"] = PtrToHex(NodPointerOrZero(model.GeneratedBlockInfo));
                 output["generatedBlockInfoName"] = string(model.GeneratedBlockInfo.IdName);
             } else {
                 output["generatedBlockInfoPtr"] = "null";
@@ -490,7 +501,7 @@ namespace TmMcp {
         }
         try {
             if (model.GeneratedBlockModel !is null) {
-                output["generatedBlockModelPtr"] = PtrToHex(Editor::GetNodPointer(model.GeneratedBlockModel));
+                output["generatedBlockModelPtr"] = PtrToHex(NodPointerOrZero(model.GeneratedBlockModel));
                 output["generatedBlockModelName"] = string(model.GeneratedBlockModel.IdName);
             } else {
                 output["generatedBlockModelPtr"] = "null";
@@ -536,4 +547,5 @@ namespace TmMcp {
 
         return MakeSuccess(output);
     }
+#endif
 }
