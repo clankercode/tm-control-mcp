@@ -7,6 +7,8 @@ Versions follow `info.toml` `[meta] version`.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-08-15
+
 ### Added
 
 - **Tool packs** (issue #5): `RegisterToolPack` / `UnregisterToolPack` / shared `ToolPackBuilder`. Pack tools are `packId.FuncName`. Builtin `ListToolPacks`. Authoring: [docs/tool-packs.md](docs/tool-packs.md). Fixture: `tools/fixtures/tm-mcp-pack-fixture/`.
@@ -18,13 +20,14 @@ Versions follow `info.toml` `[meta] version`.
 - Migration guide: [docs/migration-from-mcptm.md](docs/migration-from-mcptm.md)
 - `ControlPlugin` RemoteBuild-parity: `load` by plugin id (`Plugins/<id>/` or `<id>.op`), unload-then-load rebuild, `getLogs` from `Openplanet.log`
 - Socket Settings tab + exported `StartSocket` / `StopSocket` / `SetSocketEnabled` / `GetSocketStatus`
-- Editor++ (`Editor`) is now an **optional** dependency; E++ tools return `missing_dependency` if it is not loaded
+- ~~Editor++ (`Editor`) optional~~ → E++ tools moved out entirely in 0.3.0
 - Request-payload trace writes to plugin storage (`request-trace.log`), not `Openplanet.log`
 - `GetVehicleState` / `ListVehicleVis` / `GetVehicleVis` (VehicleState::) and `GetRenderCamera` / `ProjectWorldToScreen` / `SetEditorOrbitalTarget` (Camera::)
 - One-line Openplanet `trace` at each tool start (name + args) and finish (ok/err + ms)
 
 ### Changed
 
+- **E++ tools moved to [tm-mcp-pack-epp](https://github.com/clankercode/tm-mcp-pack-epp)** (breaking): freeblock/item placement, named macroblocks, tag provenance, inventory control/edit-mode/item-editor, macroblock inspection, E++ camera focus. `Editor` removed from `optional_dependencies`. Old builtin names return `moved_to_pack`.
 - Plugin list/get default to `sourcePathBase` (basename); full path via `includeSourcePath`
 - `call.py` screenshot detection adds `linuxPathHomeRelative`
 - README documents tested Editor++ 0.8.x and MLHook ≥ 0.5.4
