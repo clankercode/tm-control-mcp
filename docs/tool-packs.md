@@ -61,3 +61,5 @@ Pack dispatch may call `TmMcp::CallTool`. Same tool must not re-enter itself (`r
 - Builtin `ListToolPacks`: `{id, plugin, toolCount, enabled}`.
 
 See `tools/fixtures/tm-mcp-pack-fixture/` for a working Ping / Echo / GetMode pack.
+
+Hermes skill (agent trigger): `tm-mcp-tool-pack`.
