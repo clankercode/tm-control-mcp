@@ -19,6 +19,12 @@ namespace TmMcp {
     import Json::Value@ CallTool(const string &in name, Json::Value &in input) from "TmMcp";
     import bool IsToolName(const string &in name) from "TmMcp";
 
+    // Tool registry — names, descriptions, and input schemas in Anthropic
+    // tool format ({name, description, input_schema}). Lets in-process
+    // consumers (tm-agent) forward the live registry instead of
+    // maintaining a duplicate list that drifts.
+    import Json::Value@ GetToolList() from "TmMcp";
+
     // Async dispatch (issue #3) — non-blocking + poll.
     import Json::Value@ DispatchAsync(const string &in tool, Json::Value@ input) from "TmMcp";
     import Json::Value@ GetResult(Json::Value &in input) from "TmMcp";
