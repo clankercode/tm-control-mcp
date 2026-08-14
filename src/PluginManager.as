@@ -20,14 +20,313 @@ namespace TmMcp {
     }
 
     string SourcePathBaseName(const string &in path) {
-        if (path.Length == 0) return "";
-        int slash = path.LastIndexOf("/");
-        int bslash = path.LastIndexOf("\\");
+        string p = path;
+        while (p.Length > 0) {
+            string last = p.SubStr(p.Length - 1, 1);
+            if (last == "/" || last == "\\") p = p.SubStr(0, p.Length - 1);
+            else break;
+        }
+        if (p.Length == 0) return "";
+        int slash = p.LastIndexOf("/");
+        int bslash = p.LastIndexOf("\\");
         int cut = slash;
         if (bslash > cut) cut = bslash;
-        if (cut < 0) return path;
-        if (cut + 1 >= int(path.Length)) return "";
-        return path.SubStr(cut + 1);
+        if (cut < 0) return p;
+        if (cut + 1 >= int(p.Length)) return "";
+        return p.SubStr(cut + 1);
+    }
+
+    string NormalizePluginPath(const string &in path) {
+        string p = path.Replace("\\", "/");
+        while (p.Length > 0 && p.SubStr(p.Length - 1, 1) == "/") {
+            p = p.SubStr(0, p.Length - 1);
+        }
+        return p.ToLower();
+    }
+
+    string PluginStemFromPath(const string &in path) {
+        string stem = SourcePathBaseName(path);
+        string low = stem.ToLower();
+        if (low.EndsWith(".op")) return stem.SubStr(0, stem.Length - 3);
+        if (low.EndsWith(".zip")) return stem.SubStr(0, stem.Length - 4);
+        return stem;
+    }
+
+    bool IsSafePluginId(const string &in id) {
+        if (id.Length == 0) return false;
+        string t = id.Trim();
+        if (t.Length == 0) return false;
+        if (t == "." || t == "..") return false;
+        if (t.Contains("..") || t.Contains("/") || t.Contains("\\")) return false;
+        bool onlyDots = true;
+        for (uint i = 0; i < t.Length; i++) {
+            string ch = t.SubStr(i, 1);
+            if (ch != "." && ch != " " && ch != "\t") {
+                onlyDots = false;
+                break;
+            }
+        }
+        return !onlyDots;
+    }
+
+    bool LineLooksLikeLoaded(const string &in line) {
+        return line.Contains("Loaded plugin '")
+            || line.Contains("Loaded zipped plugin '")
+            || line.Contains("Loaded legacy plugin '");
+    }
+
+    bool LineLooksLikeCompileLog(const string &in line) {
+        return line.Contains(" ERR ")
+            || line.Contains(":  ERR :")
+            || line.Contains(" WARN ")
+            || line.Contains(": WARN :")
+            || LineLooksLikeLoaded(line)
+            || line.Contains("Script compilation")
+            || line.Contains("Starting build")
+            || line.Contains("compilation failed");
+    }
+
+    bool LineLooksLikeCompileFail(const string &in line) {
+        return line.Contains(":  ERR :")
+            || line.Contains(" ERR ")
+            || line.Contains("compilation failed")
+            || line.Contains("Script compilation failed");
+    }
+
+    Meta::Plugin@ FindLoadedPluginForRebuild(const string &in pluginId, const string &in path) {
+        if (pluginId.Length > 0) {
+            auto byId = Meta::GetPluginFromID(pluginId);
+            if (byId !is null) return byId;
+        }
+        auto all = Meta::AllPlugins();
+        if (all is null) return null;
+        string wantPath = NormalizePluginPath(path);
+        string wantStem = pluginId.Length > 0 ? pluginId : PluginStemFromPath(path);
+        string wantBase = SourcePathBaseName(path);
+        for (uint i = 0; i < all.Length; i++) {
+            auto p = all[i];
+            if (p is null) continue;
+            if (wantStem.Length > 0 && p.ID == wantStem) return p;
+            string src = NormalizePluginPath(p.SourcePath);
+            if (wantPath.Length > 0 && src.Length > 0 && src == wantPath) return p;
+            string srcBase = SourcePathBaseName(p.SourcePath);
+            if (wantBase.Length > 0 && srcBase == wantBase) return p;
+            if (wantStem.Length > 0 && srcBase == wantStem) return p;
+        }
+        return null;
+    }
+
+    bool IsSelfPluginTarget(const string &in pluginId, const string &in path) {
+        auto self = SelfPlugin();
+        if (self is null) return false;
+        if (pluginId.Length > 0 && pluginId == self.ID) return true;
+        string stem = PluginStemFromPath(path);
+        if (stem.Length > 0 && stem == self.ID) return true;
+        string selfPath = NormalizePluginPath(self.SourcePath);
+        string want = NormalizePluginPath(path);
+        if (selfPath.Length > 0 && want.Length > 0) {
+            if (selfPath == want) return true;
+            if (selfPath.StartsWith(want + "/") || want.StartsWith(selfPath + "/")) return true;
+        }
+        return false;
+    }
+
+    // Unload the plugin that owns path/id so LoadPlugin can reopen a locked .op.
+    string UnloadIfLoadedForRebuild(const string &in pluginId, const string &in path, bool &out rebuilt) {
+        rebuilt = false;
+        if (IsSelfPluginTarget(pluginId, path)) {
+            return "refusing to unload+load the executing MCP plugin";
+        }
+        auto existing = FindLoadedPluginForRebuild(pluginId, path);
+        if (existing is null) return "";
+        auto self = SelfPlugin();
+        if (self !is null && existing.ID == self.ID) {
+            return "refusing to unload+load the executing MCP plugin";
+        }
+        try {
+            Meta::UnloadPlugin(existing);
+            @existing = null;
+            yield();
+            rebuilt = true;
+        } catch {
+            return "UnloadPlugin before load failed: " + getExceptionInfo();
+        }
+        return "";
+    }
+
+    Json::Value@ CollectPluginLogLines(const string &in pluginId, uint maxLines, bool compileOnly) {
+        Json::Value report = Json::Object();
+        Json::Value lines = Json::Array();
+        string path = IO::FromDataFolder("Openplanet.log");
+        report["logPathBase"] = "Openplanet.log";
+        if (!IO::FileExists(path)) {
+            report["error"] = "Openplanet.log not found";
+            report["lines"] = lines;
+            report["count"] = 0;
+            return report;
+        }
+
+        string body = "";
+        try {
+            IO::File f(path, IO::FileMode::Read);
+            body = f.ReadToEnd();
+            f.Close();
+        } catch {
+            report["error"] = "failed to read Openplanet.log: " + getExceptionInfo();
+            report["lines"] = lines;
+            report["count"] = 0;
+            return report;
+        }
+
+        const int tailCap = 524288;
+        if (int(body.Length) > tailCap) {
+            body = body.SubStr(int(body.Length) - tailCap);
+            report["truncated"] = true;
+        }
+
+        array<string>@ rawLines = body.Split("\n");
+        array<string> compileLines;
+        for (uint i = 0; i < rawLines.Length; i++) {
+            string line = rawLines[i];
+            if (line.Length > 0 && line.SubStr(line.Length - 1, 1) == "\r") {
+                line = line.SubStr(0, line.Length - 1);
+            }
+            if (compileOnly) {
+                if (LineLooksLikeCompileLog(line)) compileLines.InsertLast(line);
+            } else if (pluginId.Length == 0 || line.Contains(pluginId)) {
+                compileLines.InsertLast(line);
+            }
+        }
+
+        int sessionStart = -1;
+        string startNeedle1 = "Starting build for \"" + pluginId + "\"";
+        string startNeedle2 = "Starting build for '" + pluginId + "'";
+        for (uint i = 0; i < compileLines.Length; i++) {
+            if (pluginId.Length > 0 && (compileLines[i].Contains(startNeedle1) || compileLines[i].Contains(startNeedle2))) {
+                sessionStart = int(i);
+            }
+        }
+        int sessionEnd = int(compileLines.Length);
+        if (sessionStart >= 0) {
+            for (uint i = uint(sessionStart) + 1; i < compileLines.Length; i++) {
+                if (compileLines[i].Contains("Starting build for ") && !compileLines[i].Contains(pluginId)) {
+                    sessionEnd = int(i);
+                    break;
+                }
+                if ((compileLines[i].Contains(startNeedle1) || compileLines[i].Contains(startNeedle2)) && int(i) != sessionStart) {
+                    sessionEnd = int(i);
+                    break;
+                }
+            }
+        }
+
+        array<string> session;
+        if (sessionStart >= 0) {
+            for (int i = sessionStart; i < sessionEnd; i++) {
+                session.InsertLast(compileLines[i]);
+            }
+        } else {
+            for (uint i = 0; i < compileLines.Length; i++) {
+                if (pluginId.Length == 0 || compileLines[i].Contains(pluginId) || LineLooksLikeCompileFail(compileLines[i])) {
+                    session.InsertLast(compileLines[i]);
+                }
+            }
+        }
+
+        uint errorCount = 0;
+        uint warnCount = 0;
+        bool sawLoaded = false;
+        bool sawFail = false;
+        for (uint i = 0; i < session.Length; i++) {
+            string line = session[i];
+            if (line.Contains(" ERR ") || line.Contains(":  ERR :")) errorCount++;
+            if (line.Contains(" WARN ") || line.Contains(": WARN :")) warnCount++;
+            if (LineLooksLikeLoaded(line) && (pluginId.Length == 0 || line.Contains(pluginId))) sawLoaded = true;
+            if (LineLooksLikeCompileFail(line)) sawFail = true;
+        }
+
+        uint start = 0;
+        if (session.Length > maxLines) start = session.Length - maxLines;
+        for (uint i = start; i < session.Length; i++) {
+            if (compileOnly && pluginId.Length > 0 && !session[i].Contains(pluginId) && !LineLooksLikeCompileFail(session[i]) && !session[i].Contains("Starting build")) {
+                continue;
+            }
+            lines.Add(session[i]);
+        }
+        report["lines"] = lines;
+        report["count"] = lines.Length;
+        report["matched"] = session.Length;
+        report["errorCount"] = errorCount;
+        report["warnCount"] = warnCount;
+        report["loaded"] = sawLoaded;
+        report["compileFailed"] = sawFail;
+        return report;
+    }
+
+    // RemoteBuild-style path: user Plugins/<id>/ or <id>.op, or app Openplanet/Plugins/.
+    string ResolveRemoteBuildPluginPath(
+        const string &in pluginId,
+        const string &in sourceS,
+        const string &in typeS,
+        string &out err,
+        Meta::PluginSource &out source,
+        Meta::PluginType &out ptype
+    ) {
+        err = "";
+        source = Meta::PluginSource::UserFolder;
+        ptype = Meta::PluginType::Folder;
+        if (!IsSafePluginId(pluginId)) {
+            err = "plugin id must be a folder/.op name (no path separators)";
+            return "";
+        }
+
+        string srcNorm = sourceS.ToLower();
+        string base = "";
+        if (srcNorm.Length == 0 || srcNorm == "user" || srcNorm == "userfolder") {
+            source = Meta::PluginSource::UserFolder;
+            base = IO::FromDataFolder("Plugins/");
+        } else if (srcNorm == "app" || srcNorm == "application" || srcNorm == "applicationfolder") {
+            source = Meta::PluginSource::ApplicationFolder;
+            base = IO::FromAppFolder("Openplanet/Plugins/");
+        } else {
+            err = "unknown source: " + sourceS + " (user|app)";
+            return "";
+        }
+
+        string typeNorm = typeS.ToLower();
+        string folderPath = base + pluginId;
+        string zipPath = base + pluginId + ".op";
+        bool folderOk = IO::FolderExists(folderPath) || IO::FolderExists(folderPath + "/");
+        bool zipOk = IO::FileExists(zipPath);
+
+        if (typeNorm == "folder" || typeNorm == "") {
+            if (folderOk) {
+                ptype = Meta::PluginType::Folder;
+                return folderPath + "/";
+            }
+            if (typeNorm == "" && zipOk) {
+                ptype = Meta::PluginType::Zip;
+                return zipPath;
+            }
+            if (typeNorm == "folder") {
+                err = "folder plugin not found: " + folderPath;
+                return "";
+            }
+        }
+        if (typeNorm == "zip" || typeNorm == "op") {
+            if (zipOk) {
+                ptype = Meta::PluginType::Zip;
+                return zipPath;
+            }
+            err = "zip plugin not found: " + zipPath;
+            return "";
+        }
+        if (typeNorm.Length > 0) {
+            err = "unknown type: " + typeS + " (folder|zip)";
+            return "";
+        }
+        err = "plugin not found under " + base + " as folder or .op: " + pluginId;
+        return "";
     }
 
     Meta::Plugin@ ResolvePlugin(const string &in idOrName, string &out err) {
@@ -397,30 +696,103 @@ namespace TmMcp {
     Json::Value@ ControlPlugin(Json::Value &in input) {
         string action = input.HasKey("action") ? string(input["action"]) : "";
         if (action.Length == 0) {
-            return MakeError("action required", "bad_request", false, "", "enable|disable|reload|unload|load|openSettings|setEnabled");
+            return MakeError("action required", "bad_request", false, "", "enable|disable|reload|unload|load|openSettings|setEnabled|getLogs");
         }
         string act = action.ToLower();
 
         if (act == "load") {
             string path = input.HasKey("path") ? string(input["path"]) : "";
-            if (path.Length == 0) return MakeError("path required for load", "bad_request", false, "", "Absolute path to folder or .op/.zip");
-            string sourceS = input.HasKey("source") ? string(input["source"]) : "UserFolder";
-            string typeS = input.HasKey("type") ? string(input["type"]) : "Folder";
+            string sourceS = input.HasKey("source") ? string(input["source"]) : "user";
+            string typeS = input.HasKey("type") ? string(input["type"]) : "";
+            string loadId = "";
+            if (input.HasKey("id")) loadId = string(input["id"]);
+            else if (input.HasKey("plugin")) loadId = string(input["plugin"]);
+
             Meta::PluginSource source = Meta::PluginSource::UserFolder;
-            if (sourceS == "ApplicationFolder" || sourceS.ToLower() == "application") source = Meta::PluginSource::ApplicationFolder;
             Meta::PluginType ptype = Meta::PluginType::Folder;
-            if (typeS == "Zip" || typeS.ToLower() == "zip" || typeS.ToLower() == "op") ptype = Meta::PluginType::Zip;
+            bool rebuilt = false;
+
+            if (path.Length == 0) {
+                if (loadId.Length == 0) {
+                    return MakeError("path or id required for load", "bad_request", false, "", "id=folder name (RemoteBuild-style) or absolute path");
+                }
+                string resolveErr = "";
+                path = ResolveRemoteBuildPluginPath(loadId, sourceS, typeS, resolveErr, source, ptype);
+                if (path.Length == 0) return MakeError(resolveErr, "not_found", false, "", "Use ListPlugins or check Plugins/<id>");
+            } else {
+                if (sourceS == "ApplicationFolder" || sourceS.ToLower() == "application" || sourceS.ToLower() == "app") {
+                    source = Meta::PluginSource::ApplicationFolder;
+                }
+                string typeNorm = typeS.ToLower();
+                string pathLower = path.ToLower();
+                if (typeNorm == "zip" || typeNorm == "op" || pathLower.EndsWith(".op") || pathLower.EndsWith(".zip")) {
+                    ptype = Meta::PluginType::Zip;
+                }
+                if (loadId.Length == 0) loadId = PluginStemFromPath(path);
+            }
+
+            if (IsSelfPluginTarget(loadId, path)) {
+                return MakeError("refusing to unload+load the executing MCP plugin", "forbidden", false, "", "Use action=reload for self");
+            }
+
+            string unloadErr = UnloadIfLoadedForRebuild(loadId, path, rebuilt);
+            if (unloadErr.Length > 0) {
+                string code = unloadErr.StartsWith("refusing") ? "forbidden" : "plugin_control_failed";
+                string hint = unloadErr.StartsWith("refusing") ? "Use action=reload for self" : ".op files are locked while loaded";
+                return MakeError(unloadErr, code, !unloadErr.StartsWith("refusing"), "", hint);
+            }
+
+            string logId = loadId.Length > 0 ? loadId : PluginStemFromPath(path);
             try {
                 auto loaded = Meta::LoadPlugin(path, source, ptype);
-                if (loaded is null) return MakeError("LoadPlugin returned null", "load_failed", true, "", "Check path/source/type");
+                if (loaded is null) {
+                    Json::Value@ fail = MakeError("LoadPlugin returned null", "load_failed", true, "", "Check path/source/type; compile/getLogs for ScriptEngine errors");
+                    Json::Value output = Json::Object();
+                    output["action"] = "load";
+                    output["compile"] = CollectPluginLogLines(logId, 40, true);
+                    fail["output"] = output;
+                    return fail;
+                }
+                yield();
                 Json::Value output = Json::Object();
                 output["action"] = "load";
                 output["plugin"] = PluginToJson(loaded);
-                output["note"] = "Plugin loaded into memory";
+                output["rebuilt"] = rebuilt;
+                output["note"] = rebuilt ? "Unloaded existing plugin then loaded from disk (RemoteBuild-style)" : "Plugin loaded into memory";
+                if (logId.Length == 0) logId = loaded.ID;
+                output["compile"] = CollectPluginLogLines(logId, 40, true);
                 return MakeSuccess(output);
             } catch {
-                return MakeError("LoadPlugin exception: " + getExceptionInfo(), "load_failed", true, "", "Path must be absolute");
+                Json::Value@ fail = MakeError("LoadPlugin exception: " + getExceptionInfo(), "load_failed", true, "", "Path must be absolute, or pass id=plugin folder name");
+                Json::Value output = Json::Object();
+                output["action"] = "load";
+                output["compile"] = CollectPluginLogLines(logId, 40, true);
+                fail["output"] = output;
+                return fail;
             }
+        }
+
+        if (act == "getlogs" || act == "get_logs") {
+            string logId = "";
+            if (input.HasKey("id")) logId = string(input["id"]);
+            else if (input.HasKey("plugin")) logId = string(input["plugin"]);
+            else if (input.HasKey("name")) logId = string(input["name"]);
+            if (logId.Length == 0) return MakeError("id required for getLogs", "bad_request", false, "", "Plugin folder/id to filter Openplanet.log");
+            uint maxLines = 80;
+            if (input.HasKey("maxLines")) {
+                int n = int(input["maxLines"]);
+                if (n < 1) n = 1;
+                if (n > 400) n = 400;
+                maxLines = uint(n);
+            }
+            bool compileOnly = !(input.HasKey("compileOnly") && !bool(input["compileOnly"]));
+            Json::Value output = Json::Object();
+            output["action"] = "getLogs";
+            output["id"] = logId;
+            output["compileOnly"] = compileOnly;
+            Json::Value@ collected = CollectPluginLogLines(logId, maxLines, compileOnly);
+            output["log"] = collected;
+            return MakeSuccess(output);
         }
 
         string id = "";
@@ -485,6 +857,7 @@ namespace TmMcp {
             if (isSelf) {
                 output["warning"] = "Reloading self; socket will drop until plugin finishes reload";
             }
+            string reloadId = p.ID;
             try {
                 Meta::ReloadPlugin(p);
             } catch {
@@ -492,6 +865,10 @@ namespace TmMcp {
             }
             output["queued"] = true;
             output["note"] = "Reload queued; Plugin handle invalid next frame";
+            if (!isSelf) {
+                yield();
+                output["compile"] = CollectPluginLogLines(reloadId, 40, true);
+            }
             return MakeSuccess(output);
         }
 
@@ -509,7 +886,7 @@ namespace TmMcp {
             return MakeSuccess(output);
         }
 
-        return MakeError("unknown action: " + action, "bad_request", false, "", "enable|disable|reload|unload|load|openSettings|setEnabled");
+        return MakeError("unknown action: " + action, "bad_request", false, "", "enable|disable|reload|unload|load|openSettings|setEnabled|getLogs");
     }
 
     Json::Value@ ListPluginSettings(Json::Value &in input) {
@@ -636,7 +1013,16 @@ namespace TmMcp {
         output["type"] = SettingTypeToString(s.Type);
         output["value"] = ReadSettingValue(s);
         output["saved"] = save;
-        output["note"] = "Some settings (e.g. socket host/port) require plugin reload to take effect";
+        auto self = SelfPlugin();
+        bool isSelf = self !is null && p.ID == self.ID;
+        if (isSelf && (varName == "S_TmMcpEnableSocket" || varName == "S_TmMcpHost" || varName == "S_TmMcpPort")) {
+            ApplySocketSettings();
+            output["applied"] = true;
+            output["note"] = "Socket enable/host/port apply live (no reload)";
+            output["socket"] = GetSocketStatus();
+        } else {
+            output["note"] = "Some settings may need a plugin reload to take effect";
+        }
         return MakeSuccess(output);
     }
 

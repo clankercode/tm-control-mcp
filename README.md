@@ -149,9 +149,11 @@ normal settings UI **and** via MCP tools (`ListPluginSettings` / `SetPluginSetti
    - **Socket Port** — default `30006`
    - **Startup Delay (ms)** — delay before the listener binds
    - **Trace Requests** — log request/response payloads to `Openplanet.log`
+   - **Socket tab** — live status, start/stop (the enable flag is hidden)
 
-**Host/port changes require a plugin reload** (disable/enable the plugin, or
-`ControlPlugin action=reload` on this plugin — the socket drops until reload finishes).
+Host/port/enable **apply live** (no reload). Stopping the socket leaves in-process
+imports working. `S_TmMcpEnableSocket` is hidden; use the Socket tab,
+`TmMcp::SetSocketEnabled`, or `SetPluginSetting`.
 
 **Script execution timeout** is **not** a runtime setting: it is
 `timeout = 15000` in `info.toml` (15s). Raise it there and rebuild/reload if a
@@ -163,9 +165,11 @@ kills the script if a single invocation exceeds this budget.
 ```bash
 python3 tools/call.py ListPluginSettings '{"category":"Server"}'
 python3 tools/call.py GetPluginSetting '{"varName":"S_TmMcpPort"}'
-# Example: change port (then reload plugin + point call.py --port)
+# Example: change port (applies live; point call.py --port at the new value)
 python3 tools/call.py SetPluginSetting '{"varName":"S_TmMcpPort","value":30007}'
-python3 tools/call.py ControlPlugin '{"action":"reload","id":"tm-control-mcp"}'
+# Stop/start the TCP listener without unloading the plugin
+python3 tools/call.py SetPluginSetting '{"varName":"S_TmMcpEnableSocket","value":false}'
+python3 tools/call.py SetPluginSetting '{"varName":"S_TmMcpEnableSocket","value":true}'
 ```
 
 ### Plugin manager tools
@@ -174,13 +178,19 @@ python3 tools/call.py ControlPlugin '{"action":"reload","id":"tm-control-mcp"}'
 |------|------|
 | `ListPlugins` | `Meta::AllPlugins` (+ optional unloaded) |
 | `GetPlugin` | One plugin by id/name; optional embedded settings |
-| `ControlPlugin` | `enable` / `disable` / `setEnabled` / `reload` / `unload` / `load` / `openSettings` |
+| `ControlPlugin` | `enable` / `disable` / `setEnabled` / `reload` / `unload` / `load` / `openSettings` / `getLogs` |
 | `ListPluginSettings` | List typed settings for a plugin (default: self) |
 | `GetPluginSetting` / `SetPluginSetting` / `ResetPluginSetting` | Read / write / reset |
 | `SavePluginSettings` | `Meta::SaveSettings()` |
 
-`ControlPlugin` refuses **disable/unload of itself** so agents cannot brick the
+`ControlPlugin` refuses **disable/unload/rebuild of itself** so agents cannot brick the
 control channel by accident. `reload` of self is allowed but drops the socket.
+
+`load` is RemoteBuild-compatible: pass `{action:"load", id:"my-plugin"}` to load
+`Plugins/my-plugin/` (or `my-plugin.op`). If that plugin is already loaded it is
+unloaded then loaded from disk (required for `.op` archives — Openplanet locks
+them while loaded). `getLogs` tails `Openplanet.log` for compile errors (host-side
+in `call.py` when the in-game reader cannot open the locked log).
 ---
 
 ## Protocol
@@ -427,7 +437,7 @@ Only registered when the plugin is built with `defines = ["DEV"]`
 |------|---------|
 | `ListPlugins` | Loaded plugins (`query`, `includeDisabled`, `includeUnloaded`). |
 | `GetPlugin` | One plugin by id/name; `includeSettings` optional. |
-| `ControlPlugin` | enable/disable/reload/unload/load/openSettings (no self-disable/unload). |
+| `ControlPlugin` | enable/disable/reload/unload/load/openSettings/getLogs (no self-disable/unload/rebuild). |
 | `ListPluginSettings` | Settings for a plugin (default: this MCP plugin). |
 | `GetPluginSetting` / `SetPluginSetting` / `ResetPluginSetting` | Typed get/set/reset. |
 | `SavePluginSettings` | Persist settings to disk. |

@@ -28,4 +28,12 @@ namespace TmMcp {
     // Async dispatch (issue #3) — non-blocking + poll.
     import Json::Value@ DispatchAsync(const string &in tool, Json::Value@ input) from "TmMcp";
     import Json::Value@ GetResult(Json::Value &in input) from "TmMcp";
+
+    // Socket lifecycle — no plugin reload required.
+    import void SetSocketEnabled(bool enabled) from "TmMcp";
+    import void StartSocket() from "TmMcp";
+    import void StopSocket() from "TmMcp";
+    import bool IsSocketEnabled() from "TmMcp";
+    import bool IsSocketListening() from "TmMcp";
+    import Json::Value@ GetSocketStatus() from "TmMcp";
 }

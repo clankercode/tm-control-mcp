@@ -27,6 +27,8 @@ namespace TmMcp {
             Json::Value data = Json::Object();
             data["alive"] = true;
             data["port"] = S_TmMcpPort;
+            data["host"] = S_TmMcpHost;
+            data["socket"] = GetSocketStatus();
             auto self = Meta::ExecutingPlugin();
             if (self !is null) {
                 data["plugin"] = self.Name;

@@ -9,18 +9,21 @@ Versions follow `info.toml` `[meta] version`.
 
 ### Added
 
-- **In-process export surface** (`TmMcp_Export.as`, issue #1): `import` from `"TmMcp"` for all major tools + `CallTool`/`IsToolName`/`DispatchAsync`/`GetResult`
+- In-process export surface (`TmMcp_Export.as`, issue #1): `import` from `"TmMcp"` for all major tools + `CallTool`/`IsToolName`/`DispatchAsync`/`GetResult`
 - **Socket toggle** (`S_TmMcpEnableSocket`): skip TCP listener for pure in-process use
 - **Async dispatch** (`DispatchAsync` + `GetResult`, issue #3): non-blocking tool dispatch with poll semantics
 - **Race tools** (issue #2): `GetRaceData`, `GetPlayers`, `GetServerInfo` — ported from tm-mcptm
 - `MLFeedRaceData` dependency added
 - Migration guide: [docs/migration-from-mcptm.md](docs/migration-from-mcptm.md)
+- `ControlPlugin` RemoteBuild-parity: `load` by plugin id (`Plugins/<id>/` or `<id>.op`), unload-then-load rebuild, `getLogs` from `Openplanet.log`
+- Socket Settings tab + exported `StartSocket` / `StopSocket` / `SetSocketEnabled` / `GetSocketStatus`
 
 ### Changed
 
 - Plugin list/get default to `sourcePathBase` (basename); full path via `includeSourcePath`
 - `call.py` screenshot detection adds `linuxPathHomeRelative`
 - README documents tested Editor++ 0.8.x and MLHook ≥ 0.5.4
+- Socket enable/host/port apply live (no plugin reload). `S_TmMcpEnableSocket` is hidden.
 
 ## [0.2.0] — 2026-08-12
 

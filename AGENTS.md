@@ -8,7 +8,7 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
 - **Before any release tag:** `TM_PLUGIN_SKIP_LSP=1 ./build.sh release-check` (stage **without** DEV defines, reload, confirm green). See `RELEASE.md`.
 - If `openplanet-lsp` floods nested-enum / dependency false positives, `TM_PLUGIN_SKIP_LSP=1 ./build.sh dev` is OK when the **in-game Openplanet compile is green**.
 - `info.toml` `[script] timeout = 15000` (ms). Long tools need this headroom; raise + rebuild if Openplanet kills the script.
-- Server host/port are Openplanet **Settings → TM Control MCP → Server**. Host/port changes need plugin reload. Also via `ListPluginSettings` / `SetPluginSetting`.
+- Server host/port/enable are Openplanet **Settings → TM Control MCP → Server / Socket**. Changes apply live (no reload). `S_TmMcpEnableSocket` is hidden; toggle via the Socket tab, `SetSocketEnabled`, or `SetPluginSetting`.
 - **DEV tools:** only with `./build.sh dev` (`#if DEV`). Release builds omit DevSafeRead/fuzz/etc.
 - Security: localhost-only, no auth — `SECURITY.md`.
 - Live smoke when game up: `python3 tools/smoke_tag_cleanup.py`
@@ -31,7 +31,7 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
 - **Inventory:** browse tools + **`ControlInventory`**. Path-place still preferred for headless placement.
 - **Menu automation (OnAction):** `ClickMenuButton`, `CreateMapViaMenu`. Never `TriggerPageAction`.
 - **AssertPlacement:** verify deltas / near{x,y,z} / tags after place.
-- **Plugins/settings:** `ListPlugins`, `ControlPlugin`, `ListPluginSettings`, `SetPluginSetting`, …
+- **Plugins/settings:** `ListPlugins`, `ControlPlugin` (load-by-id / unload / reload / getLogs), `ListPluginSettings`, `SetPluginSetting`, …
 - **Guides:** `ListGuides` / `GetGuide`.
 
 ### RunManialinkScript

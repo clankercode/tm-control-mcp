@@ -285,6 +285,217 @@ def wait_until_ready(host: str, port: int, timeout: float, want: str, budget_s: 
     )
 
 
+def openplanet_log_path() -> Path:
+    configured = os.environ.get("TM_OPENPLANET_LOG")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / "OpenplanetNext" / "Openplanet.log"
+
+
+def line_looks_like_loaded(line: str) -> bool:
+    return (
+        "Loaded plugin '" in line
+        or "Loaded zipped plugin '" in line
+        or "Loaded legacy plugin '" in line
+    )
+
+
+def line_looks_like_compile_log(line: str) -> bool:
+    return (
+        " ERR " in line
+        or ":  ERR :" in line
+        or " WARN " in line
+        or ": WARN :" in line
+        or line_looks_like_loaded(line)
+        or "Script compilation" in line
+        or "Starting build" in line
+        or "compilation failed" in line
+    )
+
+
+def line_looks_like_compile_fail(line: str) -> bool:
+    return (
+        ":  ERR :" in line
+        or " ERR " in line
+        or "compilation failed" in line
+        or "Script compilation failed" in line
+    )
+
+
+def collect_host_plugin_logs(plugin_id: str, max_lines: int = 80, compile_only: bool = True) -> dict:
+    """RemoteBuild-style: read Openplanet.log from the host (game holds an exclusive lock)."""
+    path = openplanet_log_path()
+    report: dict = {"logPathBase": "Openplanet.log", "source": "host"}
+    if not path.is_file():
+        report["error"] = f"Openplanet.log not found: {path}"
+        report["lines"] = []
+        report["count"] = 0
+        return report
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        report["error"] = f"failed to read Openplanet.log: {exc}"
+        report["lines"] = []
+        report["count"] = 0
+        return report
+    tail_cap = 524288
+    if len(data) > tail_cap:
+        data = data[-tail_cap:]
+        report["truncated"] = True
+    text = data.decode("utf-8", errors="replace")
+
+    compile_lines: list[str] = []
+    for raw in text.splitlines():
+        line = raw.rstrip("\r")
+        if compile_only:
+            if line_looks_like_compile_log(line):
+                compile_lines.append(line)
+        elif not plugin_id or plugin_id in line:
+            compile_lines.append(line)
+
+    session_start = -1
+    start_a = f'Starting build for "{plugin_id}"'
+    start_b = f"Starting build for '{plugin_id}'"
+    if plugin_id:
+        for i, line in enumerate(compile_lines):
+            if start_a in line or start_b in line:
+                session_start = i
+    session_end = len(compile_lines)
+    if session_start >= 0:
+        for i in range(session_start + 1, len(compile_lines)):
+            line = compile_lines[i]
+            if "Starting build for " in line and plugin_id not in line:
+                session_end = i
+                break
+            if (start_a in line or start_b in line) and i != session_start:
+                session_end = i
+                break
+        session = compile_lines[session_start:session_end]
+    else:
+        session = [
+            line
+            for line in compile_lines
+            if not plugin_id or plugin_id in line or line_looks_like_compile_fail(line)
+        ]
+
+    error_count = 0
+    warn_count = 0
+    saw_loaded = False
+    saw_fail = False
+    for line in session:
+        if " ERR " in line or ":  ERR :" in line:
+            error_count += 1
+        if " WARN " in line or ": WARN :" in line:
+            warn_count += 1
+        if line_looks_like_loaded(line) and (not plugin_id or plugin_id in line):
+            saw_loaded = True
+        if line_looks_like_compile_fail(line):
+            saw_fail = True
+
+    shown: list[str] = []
+    for line in session[-max(1, max_lines) :]:
+        if (
+            compile_only
+            and plugin_id
+            and plugin_id not in line
+            and not line_looks_like_compile_fail(line)
+            and "Starting build" not in line
+        ):
+            continue
+        shown.append(line)
+    report["lines"] = shown
+    report["count"] = len(shown)
+    report["matched"] = len(session)
+    report["errorCount"] = error_count
+    report["warnCount"] = warn_count
+    report["loaded"] = saw_loaded
+    report["compileFailed"] = saw_fail
+    return report
+
+
+def _plugin_id_for_logs(input_data: dict, output: dict) -> str:
+    plugin = output.get("plugin") if isinstance(output.get("plugin"), dict) else {}
+    plugin_id = str(
+        input_data.get("id")
+        or input_data.get("plugin")
+        or input_data.get("name")
+        or plugin.get("id")
+        or output.get("id")
+        or ""
+    )
+    if plugin_id:
+        return plugin_id
+    path = str(input_data.get("path") or "")
+    if not path:
+        return ""
+    stem = Path(path.rstrip("/\\")).name
+    low = stem.lower()
+    if low.endswith(".op"):
+        stem = stem[:-3]
+    elif low.endswith(".zip"):
+        stem = stem[:-4]
+    return stem
+
+
+def _clamp_max_lines(value: object, default: int = 80) -> int:
+    try:
+        n = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(400, n))
+
+
+def enrich_control_plugin_logs(response: dict, tool: str, input_data: object) -> None:
+    """Fill compile/getLogs from the host log when the in-game reader is locked out."""
+    if tool != "ControlPlugin" or not isinstance(response, dict) or not isinstance(input_data, dict):
+        return
+    data = response.get("data")
+    if not isinstance(data, dict):
+        return
+    result = data.get("result")
+    if not isinstance(result, dict):
+        return
+    output = result.get("output")
+    if not isinstance(output, dict):
+        output = {}
+        result["output"] = output
+    action = str(input_data.get("action") or output.get("action") or "").lower()
+    plugin_id = _plugin_id_for_logs(input_data, output)
+    if not plugin_id:
+        return
+
+    def needs_host(blob: object) -> bool:
+        if not isinstance(blob, dict):
+            return True
+        err = str(blob.get("error") or "")
+        if "Permission denied" in err or "Unable to open file" in err:
+            return True
+        count = blob.get("count")
+        if count in (None, 0) and bool(err):
+            return True
+        # R8: empty compile snapshot after load/reload — host may have newer lines
+        if action in {"load", "reload"} and count in (None, 0):
+            return True
+        return False
+
+    if action in {"getlogs", "get_logs"}:
+        log = output.get("log")
+        if needs_host(log):
+            max_lines = _clamp_max_lines(input_data.get("maxLines"), 80)
+            compile_only = input_data.get("compileOnly", True)
+            if not isinstance(compile_only, bool):
+                compile_only = True
+            host = collect_host_plugin_logs(plugin_id, max_lines=max_lines, compile_only=compile_only)
+            output["log"] = host
+            output["logSource"] = "host"
+    elif action in {"load", "reload"}:
+        compile_blob = output.get("compile")
+        if needs_host(compile_blob):
+            host = collect_host_plugin_logs(plugin_id, max_lines=40, compile_only=True)
+            output["compile"] = host
+            output["compileSource"] = "host"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Call the TM Control MCP Openplanet plugin")
     parser.add_argument("route_or_tool", nargs="?", help="Route name or tool name")
@@ -418,6 +629,8 @@ def main() -> int:
             call_timeout = max(call_timeout, extra / 1000.0 + 2.0)
         except (TypeError, ValueError):
             pass
+    if args.route_or_tool == "ControlPlugin":
+        call_timeout = max(call_timeout, 15.0)
 
     try:
         with socket.create_connection((args.host, args.port), timeout=call_timeout) as sock:
@@ -465,6 +678,9 @@ def main() -> int:
 
     if screenshot_before is not None:
         attach_screenshot_path(response, find_new_screenshot(screenshot_before, screenshot_ext, args.timeout))
+
+    if args.route_or_tool not in {"status", "tools"}:
+        enrich_control_plugin_logs(response, args.route_or_tool, input_data)
 
     # Surface structured tool errors on stderr lightly when present
     if isinstance(response, dict):

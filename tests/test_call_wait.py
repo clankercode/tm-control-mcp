@@ -120,5 +120,150 @@ def test_wait_timeout_out_of_range_is_rejected(capsys):
     assert "must be between 0 and 60" in capsys.readouterr().err
 
 
+def test_collect_host_plugin_logs_filters_compile_lines(tmp_path, monkeypatch):
+    log = tmp_path / "Openplanet.log"
+    log.write_text(
+        "\n".join(
+            [
+                '[    ScriptEngine] [ TRAC] [00:00:00.000] [RemoteBuild]  Starting build for "tm-mcp-rb-probe"',
+                "[    ScriptEngine] [ERROR] [00:00:00.001] [RemoteBuild]  C:/users/steamuser/OpenplanetNext/Plugins/tm-mcp-rb-probe/Main.as (2, 5) :  ERR : Unexpected token",
+                "[    ScriptEngine] [ERROR] [00:00:00.002] [RemoteBuild]  Script compilation failed!",
+                "[   ScriptRuntime] [  LOG] [00:00:00.003] [tm-mcp-rb-probe]  hello runtime",
+                "[    ScriptEngine] [ TRAC] [00:00:00.004] [other]  Loaded plugin 'other'",
+            ]
+        )
+        + "\n"
+    )
+    monkeypatch.setenv("TM_OPENPLANET_LOG", str(log))
+    report = call_mod.collect_host_plugin_logs("tm-mcp-rb-probe", max_lines=20, compile_only=True)
+    assert report["errorCount"] == 1
+    assert report["compileFailed"] is True
+    assert report["loaded"] is False
+    assert any("ERR" in line for line in report["lines"])
+    assert all("hello runtime" not in line for line in report["lines"])
+
+
+def test_collect_host_plugin_logs_real_fail_then_loaded(tmp_path, monkeypatch):
+    log = tmp_path / "Openplanet.log"
+    log.write_text(
+        "\n".join(
+            [
+                '[    ScriptEngine] [ TRAC]  Starting build for "tm-mcp-rb-probe"',
+                "[    ScriptEngine] [ERROR]  Plugins/tm-mcp-rb-probe/Main.as :  ERR : boom",
+                "[    ScriptEngine] [ERROR]  Script compilation failed!",
+                "[    ScriptEngine] [ TRAC]  Loaded plugin 'tm-mcp-rb-probe' (version 0.1.0)",
+            ]
+        )
+        + "\n"
+    )
+    monkeypatch.setenv("TM_OPENPLANET_LOG", str(log))
+    report = call_mod.collect_host_plugin_logs("tm-mcp-rb-probe", max_lines=20, compile_only=True)
+    assert report["compileFailed"] is True
+    assert report["loaded"] is True
+    assert report["errorCount"] >= 1
+
+
+def test_collect_host_plugin_logs_zipped_and_legacy(tmp_path, monkeypatch):
+    log = tmp_path / "Openplanet.log"
+    log.write_text(
+        "\n".join(
+            [
+                '[    ScriptEngine] [ TRAC]  Starting build for "MLHook"',
+                "[    ScriptEngine] [ TRAC]  Loaded zipped plugin 'MLHook' (version 0.5.4)",
+            ]
+        )
+        + "\n"
+    )
+    monkeypatch.setenv("TM_OPENPLANET_LOG", str(log))
+    report = call_mod.collect_host_plugin_logs("MLHook", max_lines=20, compile_only=True)
+    assert report["loaded"] is True
+    assert report["compileFailed"] is False
+
+
+def test_collect_host_plugin_logs_last_session_wins(tmp_path, monkeypatch):
+    log = tmp_path / "Openplanet.log"
+    log.write_text(
+        "\n".join(
+            [
+                '[    ScriptEngine] [ TRAC]  Starting build for "tm-mcp-rb-probe"',
+                "[    ScriptEngine] [ERROR]  Plugins/tm-mcp-rb-probe/Main.as :  ERR : boom",
+                '[    ScriptEngine] [ TRAC]  Starting build for "tm-mcp-rb-probe"',
+                "[    ScriptEngine] [ TRAC]  Loaded plugin 'tm-mcp-rb-probe' (version 0.1.0)",
+            ]
+        )
+        + "\n"
+    )
+    monkeypatch.setenv("TM_OPENPLANET_LOG", str(log))
+    report = call_mod.collect_host_plugin_logs("tm-mcp-rb-probe", max_lines=20, compile_only=True)
+    assert report["loaded"] is True
+    assert report["compileFailed"] is False
+
+
+def test_enrich_control_plugin_logs_replaces_permission_denied(tmp_path, monkeypatch):
+    log = tmp_path / "Openplanet.log"
+    log.write_text("[    ScriptEngine] [ TRAC] [00:00:00.000]  Loaded plugin 'tm-mcp-rb-probe' (version 0.1.0)\n")
+    monkeypatch.setenv("TM_OPENPLANET_LOG", str(log))
+    response = {
+        "ok": True,
+        "data": {
+            "result": {
+                "success": True,
+                "output": {
+                    "action": "getLogs",
+                    "log": {"error": "failed to read Openplanet.log: Permission denied", "lines": [], "count": 0},
+                },
+            }
+        },
+    }
+    call_mod.enrich_control_plugin_logs(response, "ControlPlugin", {"action": "getLogs", "id": "tm-mcp-rb-probe"})
+    log_blob = response["data"]["result"]["output"]["log"]
+    assert log_blob.get("source") == "host"
+    assert log_blob["loaded"] is True
+    assert log_blob["count"] >= 1
+
+
+def test_enrich_failed_load_attaches_compile(tmp_path, monkeypatch):
+    log = tmp_path / "Openplanet.log"
+    log.write_text(
+        '[    ScriptEngine] [ TRAC]  Starting build for "tm-mcp-rb-probe"\n'
+        "[    ScriptEngine] [ERROR]  Plugins/tm-mcp-rb-probe/Main.as :  ERR : boom\n"
+        "[    ScriptEngine] [ERROR]  Script compilation failed!\n"
+    )
+    monkeypatch.setenv("TM_OPENPLANET_LOG", str(log))
+    response = {
+        "ok": True,
+        "data": {
+            "result": {
+                "success": False,
+                "code": "load_failed",
+                "error": "LoadPlugin returned null",
+            }
+        },
+    }
+    call_mod.enrich_control_plugin_logs(response, "ControlPlugin", {"action": "load", "id": "tm-mcp-rb-probe"})
+    compile_blob = response["data"]["result"]["output"]["compile"]
+    assert compile_blob["compileFailed"] is True
+    assert compile_blob["errorCount"] >= 1
+
+
+def test_enrich_max_lines_garbage_does_not_crash(tmp_path, monkeypatch):
+    log = tmp_path / "Openplanet.log"
+    log.write_text("[    ScriptEngine] [ TRAC]  Loaded plugin 'tm-mcp-rb-probe'\n")
+    monkeypatch.setenv("TM_OPENPLANET_LOG", str(log))
+    response = {
+        "ok": True,
+        "data": {
+            "result": {
+                "success": True,
+                "output": {"action": "getLogs", "log": {"error": "Permission denied", "count": 0}},
+            }
+        },
+    }
+    call_mod.enrich_control_plugin_logs(
+        response, "ControlPlugin", {"action": "getLogs", "id": "tm-mcp-rb-probe", "maxLines": "nope"}
+    )
+    assert response["data"]["result"]["output"]["log"]["source"] == "host"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

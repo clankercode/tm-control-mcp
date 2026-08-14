@@ -52,7 +52,7 @@ If that is unacceptable for your environment, **do not load the plugin**.
    Release `.op` builds omit them from the tool list. Still: do not expose the socket on shared hosts.
 
 5. **Plugin manager guards**  
-   `ControlPlugin` refuses **disable/unload of itself** so a client cannot brick the channel accidentally.  
+   `ControlPlugin` refuses **disable/unload/rebuild of itself** so a client cannot brick the channel accidentally.  
    `reload` of self still drops the socket until reload finishes.
 
 6. **Settings writes**  
