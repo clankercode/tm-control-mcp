@@ -875,7 +875,7 @@ namespace TmMcp {
         tools.Add(MakeTool("GetCursor", "Get editor cursor coordinate and selected block.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlCursor", "Use the editor cursor API: status, raise, lower, rotate, move, moveToCameraTarget, followCamera, disableMouseDetection, releaseLock, resetRGB, setRGB.", '{"type":"object","properties":{"action":{"type":"string"},"direction":{"type":"string"},"directionKind":{"type":"string"},"count":{"type":"integer"},"clockwise":{"type":"boolean"},"follow":{"type":"boolean"},"disable":{"type":"boolean"},"r":{"type":"number"},"g":{"type":"number"},"b":{"type":"number"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetEditorCamera", "Get editor camera target, angles, distance, and current orbital position.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("SetEditorCamera", "Set editor camera target, angles, and target distance. Angles default to degrees; use hAngleRad/vAngleRad for radians.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"hAngle":{"type":"number"},"vAngle":{"type":"number"},"hAngleRad":{"type":"number"},"vAngleRad":{"type":"number"},"distance":{"type":"number"},"animate":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("SetEditorCamera", "Set editor camera target, angles, and target distance. Angles default to degrees; use hAngleRad/vAngleRad for radians. vAngle beyond +/-90 degrees flips the camera upside-down (world appears rotated 180); the response carries a warning with the equivalent upright vAngle/hAngle when that happens.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"hAngle":{"type":"number"},"vAngle":{"type":"number"},"hAngleRad":{"type":"number"},"vAngleRad":{"type":"number"},"distance":{"type":"number"},"animate":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlCamera", "Use the editor camera API: status, centerOnCursor, moveToMapCenter, watchWholeMap, watchStart, watchClosestFinishLine, watchClosestCheckpoint, zoom, zoomIn, zoomOut, look, followCursor, ignoreCollisions, releaseLock, setVStep.", '{"type":"object","properties":{"action":{"type":"string"},"smooth":{"type":"boolean"},"loop":{"type":"boolean"},"clockwise":{"type":"boolean"},"halfSteps":{"type":"boolean"},"level":{"type":"string"},"direction":{"type":"string"},"directionKind":{"type":"string"},"follow":{"type":"boolean"},"ignore":{"type":"boolean"},"step":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("TakeScreenshot", "Native viewport screenshot. Waits for the file and returns its game-side path (fullName) + size. Options: format jpg|webp|tga|dds (default jpg), waitMs (default 5000, 0 or noWait skips waiting), hideOverlay (omit HUD/overlays for one frame), forceRes+width+height (render at a forced resolution, restored after). focus:{x,y,z} aims the editor camera at a world position for the shot (e.g. a placed checkpoint from GetBlockLocation pos) with distance (meters, default 80 — smaller = tighter zoom), optional vAngle/hAngle (degrees), then restores the camera afterwards unless restore:false. Capture is asynchronous; on timeout output includes timedOut=true — see the 'screenshots' guide.", '{"type":"object","properties":{"format":{"type":"string"},"waitMs":{"type":"integer"},"noWait":{"type":"boolean"},"hideOverlay":{"type":"boolean"},"forceRes":{"type":"boolean"},"width":{"type":"integer"},"height":{"type":"integer"},"focus":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}}},"distance":{"type":"number"},"vAngle":{"type":"number"},"hAngle":{"type":"number"},"restore":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetBlocks", "Get blocks by optional grid/world radius, model query, and freeblock filter.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"radius":{"type":"number"},"world":{"type":"boolean"},"query":{"type":"string"},"isFree":{"type":"boolean"},"limit":{"type":"integer"}},"additionalProperties":false}'));
@@ -1513,6 +1513,14 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         float v = hasV ? AngleInputRad(input, "vAngle", "vAngleRad", Math::ToDeg(pmt.CameraVAngle)) : pmt.CameraVAngle;
         bool animate = input.HasKey("animate") ? bool(input["animate"]) : false;
 
+        // upside-down detection: |vAngle| past 90deg flips the camera over the
+        // pole — the world appears rotated 180deg. Warn (don't clamp); the
+        // equivalent upright view is v'=180-v, h'=h+180.
+        float vDeg = Math::ToDeg(v);
+        while (vDeg > 180.0) vDeg -= 360.0;
+        while (vDeg <= -180.0) vDeg += 360.0;
+        bool upsideDown = Math::Abs(vDeg) > 90.0;
+
         bool animated = false;
         if (!animated) {
             pmt.CameraTargetPosition = target;
@@ -1528,6 +1536,14 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         Json::Value output = CameraToJson(editor);
         output["animated"] = animated;
         output["animateRequested"] = animate;
+        if (upsideDown) {
+            float equivV = 180.0 - vDeg;
+            // normalize the suggested upright angle into the natural [-90,90] domain
+            while (equivV > 90.0) equivV -= 360.0;
+            while (equivV < -90.0) equivV += 360.0;
+            float equivH = Math::ToDeg(h) + 180.0;
+            output["warning"] = "vAngle " + tostring(int(Math::Round(vDeg))) + " is beyond +/-90deg: the camera is upside-down (the world appears flipped 180deg). If that was not intended, the equivalent upright view is vAngle=" + tostring(int(Math::Round(equivV))) + ", hAngle=" + tostring(int(Math::Round(equivH))) + ".";
+        }
         return MakeSuccess(output);
     }
 
