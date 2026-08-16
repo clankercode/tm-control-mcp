@@ -249,11 +249,25 @@ Checklist when you do publish there:
 [ ] pytest tests/test_call_wait.py
 [ ] live smoke status/GetMode
 [ ] ./build.sh release → .op
-[ ] push master; CI green
+[ ] PUSH MASTER (never local-only releases)
 [ ] git tag vX.Y.Z && push tag
 [ ] gh release create with HAND-WRITTEN notes + .op asset
 [ ] verify release page
 ```
+
+## Releaser tooling
+
+There is also a generic version-bump/tag helper: [`op-plugin-releaser`](../../op-plugin-releaser)
+(`op-releaser.py`, `click`-based; `release patch|minor|major`). It predates this checklist and
+**does not match this repo's conventions** — verify or adapt before using it here:
+
+- it tags `X.Y.Z` (bare) while this repo tags **`vX.Y.Z`**
+- it commits the built `.op` into git (this repo: `.op` is gitignored, release asset only)
+- it does **not** push or create the GitHub release — the push + `gh release create` steps here
+  are mandatory and not optional extras
+
+The bulk `tm-*` plugin repos use its bare-tag flow; this repo deliberately uses the fuller
+`v`-tag + GH-release flow above.
 
 ## What not to do
 
@@ -262,3 +276,4 @@ Checklist when you do publish there:
 - Do not commit `.op` / `.zip` into git
 - Do not bind the control socket off localhost in docs/examples
 - Do not disable/unload the MCP plugin via automation during release smoke
+- Do not finish a release without pushing master + tag and creating the GitHub release
