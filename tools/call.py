@@ -629,6 +629,12 @@ def main() -> int:
             call_timeout = max(call_timeout, extra / 1000.0 + 2.0)
         except (TypeError, ValueError):
             pass
+    if args.route_or_tool == "TakeScreenshot" and isinstance(input_data, dict):
+        try:
+            wait_ms = float(input_data.get("waitMs", 5000)) / 1000.0
+            call_timeout = max(call_timeout, wait_ms + 2.0)
+        except (TypeError, ValueError):
+            call_timeout = max(call_timeout, 7.0)
     if args.route_or_tool == "ControlPlugin":
         call_timeout = max(call_timeout, 15.0)
 

@@ -42,7 +42,7 @@ themselves — without clicking the UI by hand.
   `requiredMode`, `hint` (plus the classic `error` string)
 - **In-plugin guides** — `ListGuides` / `GetGuide` (menu nav, vistas, skins,
   cleanup, manialink runner, …)
-- **Screenshots** — `TakeScreenshot` with optional Linux-side path detection via `call.py`
+- **Screenshots** — `TakeScreenshot` native viewport capture with in-plugin file detection, `hideOverlay`, `forceRes`; `call.py` adds Linux-side path detection
 
 ### Editor control
 
@@ -339,7 +339,7 @@ Prefer `{"route":"tools"}` at runtime if this list drifts.
 | `GetEditorCamera` / `SetEditorCamera` | Numeric camera target/angles/distance. |
 | `ControlCamera` | centerOnCursor, watchWholeMap/start/CP/finish, zoom, look, … |
 | `FocusCamera` | Focus on world `(x,y,z)` via E++ animation. |
-| `TakeScreenshot` | Built-in viewport screenshot. |
+| `TakeScreenshot` | Native viewport screenshot with file detection (`fullName`), `hideOverlay`, `forceRes`. |
 
 ### Blocks / items (read)
 
@@ -468,7 +468,9 @@ Block/item specs support `variant`, `bgSkin`, `fgSkin`. Skins apply after succes
 
 ### Screenshots
 
-`TakeScreenshot` triggers the game’s viewport capture. `call.py` can detect the new file under the Proton user folder (`TM_USER_GAME_FOLDER` override).
+`TakeScreenshot` triggers the game's **native viewport capture** (same path as the in-game screenshot key), waits for the file, and returns its game-side `fullName` + `sizeBytes`. Options: `format` (`jpg` default / `webp` / `tga` / `dds`), `waitMs` (default 5000; `0`/`noWait` = fire-and-forget), `hideOverlay` (clean shot without HUD/overlays), `forceRes` + `width`/`height` (capture at a forced resolution; restored after). Crash-prone native paths (360° capture, tiled supersampling, alpha/pixel-output switching) are deliberately **not** exposed — see the `screenshots` guide (`GetGuide {"topic":"screenshots"}`).
+
+`call.py` additionally reports `detectedScreenshot.linuxPath` by diffing the folder before/after (`TM_USER_GAME_FOLDER` override).
 
 ### Menu automation details
 

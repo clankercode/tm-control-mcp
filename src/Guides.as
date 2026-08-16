@@ -251,6 +251,40 @@ namespace TmMcp {
             + "Matching uses idName + world position ±eps (default 0.08m), not stale indices.\n"
             + "Tags are in-memory until plugin reload; they do not survive game restart.");
 
+        _RegisterGuide("screenshots",
+            "Taking screenshots safely",
+            "TakeScreenshot uses the native CHmsViewport capture queue (ScreenShotDoCapture"
+            + "Jpg/Webp/Tga/Dds) — the same path as the in-game F12 screenshot, so it is the"
+            + " safest capture mechanism. Capture is asynchronous: the call queues the shot,"
+            + " then polls Viewport.ScreenShotFullName until the file exists with size>0"
+            + " (waitMs, default 5000; 0/noWait = fire-and-forget). On success output has"
+            + " fullName (game-side path like C:/users/.../ScreenShotNN.jpg) + sizeBytes.\n"
+            + "\n"
+            + "Files land in the USER GAME FOLDER ROOT (Documents/Trackmania), not the"
+            + " ScreenShots subfolder, named ScreenShotNN.<ext>. jpg/webp numbering are"
+            + " independent counters (ScreenShot52.jpg next to ScreenShot01.webp is normal).\n"
+            + "\n"
+            + "Options:\n"
+            + "- format: jpg (default) | webp | tga | dds\n"
+            + "- hideOverlay:true — sets Viewport.DisableOverlayRender for the capture frame"
+            + "  (no HUD/Manialink overlays), then restores it. Useful for clean editor shots.\n"
+            + "- forceRes:true + width/height — sets Viewport.ScreenShotForceRes/W/H for the"
+            + "  capture (higher-than-window resolution), restored after. Large forced sizes"
+            + " cost VRAM/time; if the wait times out, retry without forceRes.\n"
+            + "- call.py additionally reports detectedScreenshot.linuxPath by diffing the"
+            + " folder before/after — use that for the host-side path.\n"
+            + "\n"
+            + "NOT exposed on purpose (known to crash / destabilize the game when driven"
+            + " programmatically — do NOT poke them via Dev tools):\n"
+            + "- ScreenShot360 / ScreenShot360_Height — 360 panorama captures;\n"
+            + "- ScreenShotTileX/Y — tiled supersampled captures (memory-heavy);\n"
+            + "- ScreenShotUseAlpha / PixelOutput — alpha/format output switching;\n"
+            + "- writing ScreenshotExt / capture settings on CGameDisplaySettingsWrapper"
+            + "  mid-session ( DialogGraphicSettings_* ) — config-dialog territory.\n"
+            + "\n"
+            + "If the game crashes after a capture, check LogCrash_<HASH>.txt (see the"
+            + " crash-debugging guide) — repeated crashes overwrite the same file.");
+
         _RegisterGuide("epp-tools-moved",
             "E++ tools moved to tm-mcp-pack-epp",
             "All Editor++ (E++) tools now live in the tm-mcp-pack-epp tool pack:\n"

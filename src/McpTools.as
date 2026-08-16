@@ -877,7 +877,7 @@ namespace TmMcp {
         tools.Add(MakeTool("GetEditorCamera", "Get editor camera target, angles, distance, and current orbital position.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("SetEditorCamera", "Set editor camera target, angles, and target distance. Angles default to degrees; use hAngleRad/vAngleRad for radians.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"hAngle":{"type":"number"},"vAngle":{"type":"number"},"hAngleRad":{"type":"number"},"vAngleRad":{"type":"number"},"distance":{"type":"number"},"animate":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlCamera", "Use the editor camera API: status, centerOnCursor, moveToMapCenter, watchWholeMap, watchStart, watchClosestFinishLine, watchClosestCheckpoint, zoom, zoomIn, zoomOut, look, followCursor, ignoreCollisions, releaseLock, setVStep.", '{"type":"object","properties":{"action":{"type":"string"},"smooth":{"type":"boolean"},"loop":{"type":"boolean"},"clockwise":{"type":"boolean"},"halfSteps":{"type":"boolean"},"level":{"type":"string"},"direction":{"type":"string"},"directionKind":{"type":"string"},"follow":{"type":"boolean"},"ignore":{"type":"boolean"},"step":{"type":"string"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("TakeScreenshot", "Trigger a built-in viewport screenshot and return the game ScreenShots folder to inspect.", '{"type":"object","properties":{"format":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("TakeScreenshot", "Native viewport screenshot. Waits for the file and returns its game-side path (fullName) + size. Options: format jpg|webp|tga|dds (default jpg), waitMs (default 5000, 0 or noWait skips waiting), hideOverlay (omit HUD/overlays for one frame), forceRes+width+height (render at a forced resolution, restored after). Capture is asynchronous; on timeout output includes timedOut=true — see the 'screenshots' guide.", '{"type":"object","properties":{"format":{"type":"string"},"waitMs":{"type":"integer"},"noWait":{"type":"boolean"},"hideOverlay":{"type":"boolean"},"forceRes":{"type":"boolean"},"width":{"type":"integer"},"height":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetBlocks", "Get blocks by optional grid/world radius, model query, and freeblock filter.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"radius":{"type":"number"},"world":{"type":"boolean"},"query":{"type":"string"},"isFree":{"type":"boolean"},"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetRecentBlocks", "Get the last N blocks in map block order, useful for freeblock placement readback.", '{"type":"object","properties":{"count":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetBlockAt", "Get block info at exact grid coordinate.", '{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"}},"required":["x","y","z"],"additionalProperties":false}'));
@@ -1629,30 +1629,114 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
 
         string format = input.HasKey("format") ? string(input["format"]).ToLower() : "jpg";
         if (format == "jpeg") format = "jpg";
+        if (format != "jpg" && format != "webp" && format != "tga" && format != "dds") {
+            return MakeError("unknown format: " + format, "INVALID_INPUT", false, "", "format: jpg (default), webp, tga, dds");
+        }
+
+        int waitMs = input.HasKey("waitMs") ? int(input["waitMs"]) : 5000;
+        if (waitMs < 0) waitMs = 0;
+        if (waitMs > 15000) waitMs = 15000;
+        bool noWait = input.HasKey("noWait") ? bool(input["noWait"]) : false;
+        if (noWait) waitMs = 0;
+
+        bool hideOverlay = input.HasKey("hideOverlay") ? bool(input["hideOverlay"]) : false;
+        bool forceRes = input.HasKey("forceRes") ? bool(input["forceRes"]) : false;
+        if (input.HasKey("width") || input.HasKey("height")) forceRes = true;
+        uint width = input.HasKey("width") ? uint(Math::Max(1, int(input["width"]))) : 1920;
+        uint height = input.HasKey("height") ? uint(Math::Max(1, int(input["height"]))) : 1080;
+
+        CHmsViewport@ vp = app.Viewport;
+        // Baseline before capture: the name of the last completed capture (or empty).
+        string fullNameBefore = string(vp.ScreenShotFullName);
+
+        // Native override state (restored after the file lands or the wait times out).
+        bool overlaySaved = vp.DisableOverlayRender;
+        bool forceResSaved = vp.ScreenShotForceRes;
+        uint widthSaved = vp.ScreenShotWidth;
+        uint heightSaved = vp.ScreenShotHeight;
 
         try {
-            if (format == "webp") {
-                app.Viewport.ScreenShotDoCaptureWebp();
-            } else if (format == "tga") {
-                app.Viewport.ScreenShotDoCaptureTga();
-            } else if (format == "dds") {
-                app.Viewport.ScreenShotDoCaptureDDS();
-            } else {
-                format = "jpg";
-                app.Viewport.ScreenShotDoCaptureJpg();
+            if (hideOverlay) vp.DisableOverlayRender = true;
+            if (forceRes) {
+                vp.ScreenShotForceRes = true;
+                vp.ScreenShotWidth = width;
+                vp.ScreenShotHeight = height;
             }
+            // Let override flags apply for at least one rendered frame before queuing the capture.
+            yield();
+
+            if (format == "webp") vp.ScreenShotDoCaptureWebp();
+            else if (format == "tga") vp.ScreenShotDoCaptureTga();
+            else if (format == "dds") vp.ScreenShotDoCaptureDDS();
+            else vp.ScreenShotDoCaptureJpg();
         } catch {
+            vp.DisableOverlayRender = overlaySaved;
+            vp.ScreenShotForceRes = forceResSaved;
+            vp.ScreenShotWidth = widthSaved;
+            vp.ScreenShotHeight = heightSaved;
             return MakeError("screenshot capture failed: " + getExceptionInfo());
         }
+
+        // Poll for the finished file. ScreenShotFullName updates to the new capture's
+        // path once the game queues/completes it; file existence + size confirm the write.
+        string fullName = "";
+        bool detected = false;
+        uint64 sizeBytes = 0;
+        uint64 waitedStart = Time::Now;
+        string pollError = "";
+        try {
+            while (Time::Now - waitedStart < uint(waitMs)) {
+                yield();
+                string candidate = string(vp.ScreenShotFullName);
+                if (candidate.Length > 0 && candidate != fullNameBefore) {
+                    if (IO::FileExists(candidate)) {
+                        uint64 sz = uint64(IO::FileSize(candidate));
+                        if (sz > 0) {
+                            fullName = candidate;
+                            sizeBytes = sz;
+                            detected = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        } catch {
+            pollError = getExceptionInfo();
+        }
+
+        // Always restore native override state — including on poll errors, so a bad
+        // path can never leave DisableOverlayRender/ForceRes stuck on.
+        vp.DisableOverlayRender = overlaySaved;
+        vp.ScreenShotForceRes = forceResSaved;
+        vp.ScreenShotWidth = widthSaved;
+        vp.ScreenShotHeight = heightSaved;
 
         Json::Value output = Json::Object();
         output["requested"] = true;
         output["format"] = format;
         output["extension"] = ScreenshotExtForFormat(format);
+        output["detected"] = detected;
+        output["waitMs"] = waitMs;
+        output["waitedMs"] = int(Time::Now - waitedStart);
+        if (detected) {
+            output["fullName"] = fullName;
+            output["sizeBytes"] = int64(sizeBytes);
+        } else if (waitMs > 0) {
+            output["timedOut"] = true;
+            output["fullNameBefore"] = fullNameBefore;
+            output["hint"] = "Capture is asynchronous and the file did not appear within waitMs. Retry, raise waitMs, or use call.py Linux-side detection (detectedScreenshot).";
+        }
+        if (pollError.Length > 0) output["pollError"] = pollError;
         output["gameFolder"] = IO::FromUserGameFolder("");
         output["folder"] = IO::FromUserGameFolder("ScreenShots");
         output["defaultPattern"] = "ScreenShot*" + ScreenshotExtForFormat(format);
-        output["note"] = "Capture is asynchronous. Trackmania usually writes viewport captures as ScreenShotNN.jpg in the user game folder, not the ScreenShots subfolder.";
+        output["note"] = "Trackmania writes viewport captures as ScreenShotNN.<ext> in the user game folder root (gameFolder), not the ScreenShots subfolder. fullName is the game-side path from the viewport; convert to a Linux path via the Proton prefix or use call.py detectedScreenshot.";
+        if (hideOverlay) output["hideOverlay"] = true;
+        if (forceRes) {
+            output["forceRes"] = true;
+            output["width"] = int(width);
+            output["height"] = int(height);
+        }
         return MakeSuccess(output);
     }
 

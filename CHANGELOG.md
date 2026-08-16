@@ -7,6 +7,14 @@ Versions follow `info.toml` `[meta] version`.
 
 ## [Unreleased]
 
+### Changed
+
+- **`TakeScreenshot`** now waits for the capture file and reports it: `fullName` (game-side path from `Viewport.ScreenShotFullName`) + `sizeBytes` + `detected`, with `waitMs` (default 5000, `noWait`/`0` for fire-and-forget) and `timedOut` on miss. New options: `hideOverlay` (native `DisableOverlayRender`, restored after), `forceRes`+`width`/`height` (native `ScreenShotForceRes/W/H`, restored after). `format` is now validated (`jpg|webp|tga|dds`). Crash-prone native paths (360°, tiling, alpha/pixel-output) remain unexposed — documented in the new `screenshots` guide.
+
+### Added
+
+- `screenshots` guide (`GetGuide {"topic":"screenshots"}`): native capture pipeline, file locations/numbering, safe options, and the deliberately-unexposed crash-prone viewport settings.
+
 ## [0.3.0] — 2026-08-15
 
 ### Added
