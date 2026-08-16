@@ -258,16 +258,20 @@ Checklist when you do publish there:
 ## Releaser tooling
 
 There is also a generic version-bump/tag helper: [`op-plugin-releaser`](../../op-plugin-releaser)
-(`op-releaser.py`, `click`-based; `release patch|minor|major`). It predates this checklist and
-**does not match this repo's conventions** — verify or adapt before using it here:
+(`op-releaser.py`, `click`-based; `release patch|minor|major`). As of its `48b6fa3` commit it
+supports **both flows**:
 
-- it tags `X.Y.Z` (bare) while this repo tags **`vX.Y.Z`**
-- it commits the built `.op` into git (this repo: `.op` is gitignored, release asset only)
-- it does **not** push or create the GitHub release — the push + `gh release create` steps here
-  are mandatory and not optional extras
+- **plugin mode (default)** — historical bulk `tm-*` flow: tags `X.Y.Z` (bare), commits the
+  built `.op` into git, pushes branch + tag.
+- **app mode (`--app`)** — this repo's flow: tags **`vX.Y.Z`**, keeps the `.op` out of git,
+  creates the GitHub release via `gh release create` (`--notes` / `--notes-file` / `--draft`),
+  pushes branch + tag. Both modes always push — local-only releases are not supported.
 
-The bulk `tm-*` plugin repos use its bare-tag flow; this repo deliberately uses the fuller
-`v`-tag + GH-release flow above.
+For this repo the releaser can automate the mechanical steps, but it does **not** run the
+DEV-off `release-check` gate, pytest, live smoke, or CHANGELOG editing — those remain manual
+per the checklist above. Prefer running the full checklist by hand; the releaser's
+`--app --skip-build` mode can substitute for steps 1/5/6 (bump+commit, push, tag, GH release)
+if you've already built the `.op`.
 
 ## What not to do
 
