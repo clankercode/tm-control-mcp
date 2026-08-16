@@ -16,7 +16,7 @@ themselves — without clicking the UI by hand.
 | **Hard deps** | [MLHook](https://openplanet.dev/plugin/mlhook) · MLFeedRaceData |
 | **Optional** | [Editor++](https://openplanet.dev/plugin/editor) (`Editor`) · Openplanet builtins `VehicleState` + `Camera` |
 | **License** | Dual **[Unlicense](./UNLICENSE)** **or** **[CC0 1.0](./CC0-1.0)** — public domain / no attribution required (GitHub may show “Other”) |
-| **Status** | Active development (`info.toml` `0.2.0`) — first tagged public release |
+| **Status** | Active development (`info.toml` `0.4.0`) |
 | **Script timeout** | `15000` ms (`info.toml` `[script] timeout`) — long menu/place/wait tools need headroom |
 | **Security** | Localhost JSON, **no auth** → [SECURITY.md](./SECURITY.md) |
 | **Releasing** | Agent checklist → [RELEASE.md](./RELEASE.md) · history → [CHANGELOG.md](./CHANGELOG.md) |
