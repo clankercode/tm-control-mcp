@@ -5,7 +5,7 @@ All notable changes to **tm-control-mcp** are documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/).
 Versions follow `info.toml` `[meta] version`.
 
-## [Unreleased]
+## [0.4.0] — 2026-08-16
 
 ### Changed
 
