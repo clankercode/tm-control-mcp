@@ -877,7 +877,7 @@ namespace TmMcp {
         tools.Add(MakeTool("GetEditorCamera", "Get editor camera target, angles, distance, and current orbital position.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("SetEditorCamera", "Set editor camera target, angles, and target distance. Angles default to degrees; use hAngleRad/vAngleRad for radians.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"hAngle":{"type":"number"},"vAngle":{"type":"number"},"hAngleRad":{"type":"number"},"vAngleRad":{"type":"number"},"distance":{"type":"number"},"animate":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlCamera", "Use the editor camera API: status, centerOnCursor, moveToMapCenter, watchWholeMap, watchStart, watchClosestFinishLine, watchClosestCheckpoint, zoom, zoomIn, zoomOut, look, followCursor, ignoreCollisions, releaseLock, setVStep.", '{"type":"object","properties":{"action":{"type":"string"},"smooth":{"type":"boolean"},"loop":{"type":"boolean"},"clockwise":{"type":"boolean"},"halfSteps":{"type":"boolean"},"level":{"type":"string"},"direction":{"type":"string"},"directionKind":{"type":"string"},"follow":{"type":"boolean"},"ignore":{"type":"boolean"},"step":{"type":"string"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("TakeScreenshot", "Native viewport screenshot. Waits for the file and returns its game-side path (fullName) + size. Options: format jpg|webp|tga|dds (default jpg), waitMs (default 5000, 0 or noWait skips waiting), hideOverlay (omit HUD/overlays for one frame), forceRes+width+height (render at a forced resolution, restored after). Capture is asynchronous; on timeout output includes timedOut=true — see the 'screenshots' guide.", '{"type":"object","properties":{"format":{"type":"string"},"waitMs":{"type":"integer"},"noWait":{"type":"boolean"},"hideOverlay":{"type":"boolean"},"forceRes":{"type":"boolean"},"width":{"type":"integer"},"height":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("TakeScreenshot", "Native viewport screenshot. Waits for the file and returns its game-side path (fullName) + size. Options: format jpg|webp|tga|dds (default jpg), waitMs (default 5000, 0 or noWait skips waiting), hideOverlay (omit HUD/overlays for one frame), forceRes+width+height (render at a forced resolution, restored after). focus:{x,y,z} aims the editor camera at a world position for the shot (e.g. a placed checkpoint from GetBlockLocation pos) with distance (meters, default 80 — smaller = tighter zoom), optional vAngle/hAngle (degrees), then restores the camera afterwards unless restore:false. Capture is asynchronous; on timeout output includes timedOut=true — see the 'screenshots' guide.", '{"type":"object","properties":{"format":{"type":"string"},"waitMs":{"type":"integer"},"noWait":{"type":"boolean"},"hideOverlay":{"type":"boolean"},"forceRes":{"type":"boolean"},"width":{"type":"integer"},"height":{"type":"integer"},"focus":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}}},"distance":{"type":"number"},"vAngle":{"type":"number"},"hAngle":{"type":"number"},"restore":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetBlocks", "Get blocks by optional grid/world radius, model query, and freeblock filter.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"radius":{"type":"number"},"world":{"type":"boolean"},"query":{"type":"string"},"isFree":{"type":"boolean"},"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetRecentBlocks", "Get the last N blocks in map block order, useful for freeblock placement readback.", '{"type":"object","properties":{"count":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetBlockAt", "Get block info at exact grid coordinate.", '{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"}},"required":["x","y","z"],"additionalProperties":false}'));
@@ -1623,6 +1623,22 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
     }
 
 
+    // Restore the editor camera after a focused screenshot. Shared by the
+    // capture-failure and success paths so a bad capture can't strand the
+    // camera on the focus target.
+    void RestoreFocusCam(CGameCtnEditorFree@ editor, bool restore, const vec3 &in target, float distance, float h, float v) {
+        if (!restore || editor is null || editor.PluginMapType is null) return;
+        auto pmt = editor.PluginMapType;
+        pmt.CameraTargetPosition = target;
+        pmt.CameraToTargetDistance = distance;
+        pmt.CameraHAngle = h;
+        pmt.CameraVAngle = v;
+        if (editor.OrbitalCameraControl !is null) {
+            editor.OrbitalCameraControl.m_TargetedPosition = target;
+            editor.OrbitalCameraControl.m_CameraToTargetDistance = distance;
+        }
+    }
+
     Json::Value@ TakeScreenshot(Json::Value &in input) {
         auto app = GetApp();
         if (app is null || app.Viewport is null) return MakeError("viewport not available");
@@ -1641,6 +1657,24 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
 
         bool hideOverlay = input.HasKey("hideOverlay") ? bool(input["hideOverlay"]) : false;
         bool forceRes = input.HasKey("forceRes") ? bool(input["forceRes"]) : false;
+
+        // Optional focus: aim the editor camera at a world position (meters)
+        // for the capture, then restore. Collapses the
+        // GetBlockLocation -> SetEditorCamera -> TakeScreenshot dance into
+        // one call and leaves the user's camera untouched.
+        bool hasFocus = input.HasKey("focus")
+            && input["focus"].GetType() == Json::Type::Object
+            && input["focus"].HasKey("x") && input["focus"].HasKey("y") && input["focus"].HasKey("z");
+        if (input.HasKey("focus") && !hasFocus) {
+            return MakeError("focus must be an object with x, y, z (world meters)", "INVALID_INPUT", false, "",
+                "e.g. focus:{\"x\":1248,\"y\":128,\"z\":864} — from GetBlockLocation/GetBlocks pos");
+        }
+        float focusDistance = input.HasKey("distance") ? float(input["distance"]) : 80.0;
+        if (focusDistance < 10.0) focusDistance = 10.0;
+        if (focusDistance > 2000.0) focusDistance = 2000.0;
+        float focusV = input.HasKey("vAngle") ? float(input["vAngle"]) : 40.0;
+        float focusH = input.HasKey("hAngle") ? float(input["hAngle"]) : 30.0;
+        bool restoreCam = input.HasKey("restore") ? bool(input["restore"]) : true;
         if (input.HasKey("width") || input.HasKey("height")) forceRes = true;
         uint width = input.HasKey("width") ? uint(Math::Max(1, int(input["width"]))) : 1920;
         uint height = input.HasKey("height") ? uint(Math::Max(1, int(input["height"]))) : 1080;
@@ -1654,6 +1688,40 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         bool forceResSaved = vp.ScreenShotForceRes;
         uint widthSaved = vp.ScreenShotWidth;
         uint heightSaved = vp.ScreenShotHeight;
+
+        // Editor camera state for focus (restored alongside the native flags).
+        auto focusEditor = GetEditor();
+        bool camSaved = false;
+        vec3 savedTarget = vec3();
+        float savedDistance = 0.0;
+        float savedH = 0.0;
+        float savedV = 0.0;
+        bool focusApplied = false;
+        if (hasFocus && focusEditor !is null && focusEditor.PluginMapType !is null) {
+            auto pmt = focusEditor.PluginMapType;
+            camSaved = true;
+            savedTarget = pmt.CameraTargetPosition;
+            savedDistance = pmt.CameraToTargetDistance;
+            savedH = pmt.CameraHAngle;
+            savedV = pmt.CameraVAngle;
+            Json::Value@ f = input["focus"];
+            vec3 target = vec3(float(f["x"]), float(f["y"]), float(f["z"]));
+            try {
+                pmt.CameraTargetPosition = target;
+                pmt.CameraToTargetDistance = focusDistance;
+                pmt.CameraHAngle = Math::ToRad(focusH);
+                pmt.CameraVAngle = Math::ToRad(focusV);
+                if (focusEditor.OrbitalCameraControl !is null) {
+                    focusEditor.OrbitalCameraControl.m_TargetedPosition = target;
+                    focusEditor.OrbitalCameraControl.m_CameraToTargetDistance = focusDistance;
+                }
+                focusApplied = true;
+            } catch {
+                return MakeError("focus camera move failed: " + getExceptionInfo(), "camera_error", true, "Editor");
+            }
+        } else if (hasFocus) {
+            return MakeError("focus requires the map editor", "NOT_IN_EDITOR", true, "Editor");
+        }
 
         try {
             if (hideOverlay) vp.DisableOverlayRender = true;
@@ -1674,6 +1742,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
             vp.ScreenShotForceRes = forceResSaved;
             vp.ScreenShotWidth = widthSaved;
             vp.ScreenShotHeight = heightSaved;
+            RestoreFocusCam(focusEditor, camSaved && restoreCam, savedTarget, savedDistance, savedH, savedV);
             return MakeError("screenshot capture failed: " + getExceptionInfo());
         }
 
@@ -1710,9 +1779,15 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         vp.ScreenShotForceRes = forceResSaved;
         vp.ScreenShotWidth = widthSaved;
         vp.ScreenShotHeight = heightSaved;
+        RestoreFocusCam(focusEditor, camSaved && restoreCam, savedTarget, savedDistance, savedH, savedV);
 
         Json::Value output = Json::Object();
         output["requested"] = true;
+        output["focused"] = focusApplied;
+        if (focusApplied) {
+            output["focusDistance"] = focusDistance;
+            output["cameraRestored"] = restoreCam;
+        }
         output["format"] = format;
         output["extension"] = ScreenshotExtForFormat(format);
         output["detected"] = detected;
