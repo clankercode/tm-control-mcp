@@ -877,7 +877,7 @@ namespace TmMcp {
         tools.Add(MakeTool("GetEditorCamera", "Get editor camera target, angles, distance, and current orbital position.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("SetEditorCamera", "Set editor camera target, angles, and target distance. Angles default to degrees; use hAngleRad/vAngleRad for radians. vAngle beyond +/-90 degrees flips the camera upside-down (world appears rotated 180); the response carries a warning with the equivalent upright vAngle/hAngle when that happens.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"hAngle":{"type":"number"},"vAngle":{"type":"number"},"hAngleRad":{"type":"number"},"vAngleRad":{"type":"number"},"distance":{"type":"number"},"animate":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlCamera", "Use the editor camera API: status, centerOnCursor, moveToMapCenter, watchWholeMap, watchStart, watchClosestFinishLine, watchClosestCheckpoint, zoom, zoomIn, zoomOut, look, followCursor, ignoreCollisions, releaseLock, setVStep.", '{"type":"object","properties":{"action":{"type":"string"},"smooth":{"type":"boolean"},"loop":{"type":"boolean"},"clockwise":{"type":"boolean"},"halfSteps":{"type":"boolean"},"level":{"type":"string"},"direction":{"type":"string"},"directionKind":{"type":"string"},"follow":{"type":"boolean"},"ignore":{"type":"boolean"},"step":{"type":"string"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("TakeScreenshot", "Native viewport screenshot. Waits for the file and returns its game-side path (fullName) + size. Options: format jpg|webp|tga|dds (default jpg), waitMs (default 5000, 0 or noWait skips waiting), hideOverlay (omit HUD/overlays for one frame), forceRes+width+height (render at a forced resolution, restored after). focus:{x,y,z} aims the editor camera at a world position for the shot (e.g. a placed checkpoint from GetBlockLocation pos) with distance (meters, default 80 — smaller = tighter zoom), optional vAngle/hAngle (degrees), then restores the camera afterwards unless restore:false. Capture is asynchronous; on timeout output includes timedOut=true — see the 'screenshots' guide.", '{"type":"object","properties":{"format":{"type":"string"},"waitMs":{"type":"integer"},"noWait":{"type":"boolean"},"hideOverlay":{"type":"boolean"},"forceRes":{"type":"boolean"},"width":{"type":"integer"},"height":{"type":"integer"},"focus":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}}},"distance":{"type":"number"},"vAngle":{"type":"number"},"hAngle":{"type":"number"},"restore":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("TakeScreenshot", "Native viewport screenshot. Waits for the file and returns its game-side path (fullName) + size. Options: format jpg|webp|tga|dds (default jpg), waitMs (default 5000, 0 or noWait skips waiting), hideOverlay (omit HUD/overlays for one frame), forceRes+width+height (render at a forced resolution, restored after). focus:{x,y,z} aims the editor camera at a world position for the shot (e.g. a placed checkpoint from GetBlockLocation pos) with distance (meters, default 80 — smaller = tighter zoom), optional vAngle/hAngle (degrees), then restores the camera afterwards unless restore:false. preset (with focus): fixed named camera angles for consistent shots — top (near-overhead), iso (default 3/4 view), high (steep 3/4), front, side, back. currentView:true captures the view exactly as-is (no camera change; cannot combine with focus/preset). Capture is asynchronous; on timeout output includes timedOut=true — see the 'screenshots' guide.", '{"type":"object","properties":{"format":{"type":"string"},"waitMs":{"type":"integer"},"noWait":{"type":"boolean"},"hideOverlay":{"type":"boolean"},"forceRes":{"type":"boolean"},"width":{"type":"integer"},"height":{"type":"integer"},"focus":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}}},"distance":{"type":"number"},"vAngle":{"type":"number"},"hAngle":{"type":"number"},"preset":{"type":"string","enum":["top","iso","high","front","side","back"]},"currentView":{"type":"boolean"},"restore":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetBlocks", "Get blocks by optional grid/world radius, model query, and freeblock filter.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"radius":{"type":"number"},"world":{"type":"boolean"},"query":{"type":"string"},"isFree":{"type":"boolean"},"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetRecentBlocks", "Get the last N blocks in map block order, useful for freeblock placement readback.", '{"type":"object","properties":{"count":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetBlockAt", "Get block info at exact grid coordinate.", '{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"}},"required":["x","y","z"],"additionalProperties":false}'));
@@ -1691,6 +1691,29 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         float focusV = input.HasKey("vAngle") ? float(input["vAngle"]) : 40.0;
         float focusH = input.HasKey("hAngle") ? float(input["hAngle"]) : 30.0;
         bool restoreCam = input.HasKey("restore") ? bool(input["restore"]) : true;
+
+        // Fixed camera presets: same angles every shot, so successive captures
+        // (and captures across maps/sessions) are directly comparable.
+        // Requires focus (a preset needs a target). Preset overrides
+        // vAngle/hAngle unless they were explicitly given too.
+        string preset = input.HasKey("preset") ? string(input["preset"]) : "";
+        bool currentView = input.HasKey("currentView") ? bool(input["currentView"]) : false;
+        if (currentView && (preset.Length > 0 || hasFocus)) {
+            return MakeError("currentView captures the view as-is and cannot be combined with focus/preset", "INVALID_INPUT");
+        }
+        if (preset.Length > 0 && !hasFocus) {
+            return MakeError("preset requires focus:{x,y,z} — a preset needs a target to orbit", "INVALID_INPUT", false, "",
+                "e.g. {\"focus\":{\"x\":1248,\"y\":128,\"z\":864},\"preset\":\"top\"}");
+        }
+        if (preset == "top") { if (!input.HasKey("vAngle")) focusV = 89.0; if (!input.HasKey("hAngle")) focusH = 0.0; }
+        else if (preset == "iso") { if (!input.HasKey("vAngle")) focusV = 40.0; if (!input.HasKey("hAngle")) focusH = 30.0; }
+        else if (preset == "high") { if (!input.HasKey("vAngle")) focusV = 65.0; if (!input.HasKey("hAngle")) focusH = 45.0; }
+        else if (preset == "front") { if (!input.HasKey("vAngle")) focusV = 10.0; if (!input.HasKey("hAngle")) focusH = 0.0; }
+        else if (preset == "side") { if (!input.HasKey("vAngle")) focusV = 10.0; if (!input.HasKey("hAngle")) focusH = 90.0; }
+        else if (preset == "back") { if (!input.HasKey("vAngle")) focusV = 10.0; if (!input.HasKey("hAngle")) focusH = 180.0; }
+        else if (preset.Length > 0) {
+            return MakeError("unknown preset: " + preset + " (top|iso|high|front|side|back)", "INVALID_INPUT");
+        }
         if (input.HasKey("width") || input.HasKey("height")) forceRes = true;
         uint width = input.HasKey("width") ? uint(Math::Max(1, int(input["width"]))) : 1920;
         uint height = input.HasKey("height") ? uint(Math::Max(1, int(input["height"]))) : 1080;
@@ -1800,6 +1823,8 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         Json::Value output = Json::Object();
         output["requested"] = true;
         output["focused"] = focusApplied;
+        if (preset.Length > 0) output["preset"] = preset;
+        if (currentView) output["currentView"] = true;
         if (focusApplied) {
             output["focusDistance"] = focusDistance;
             output["cameraRestored"] = restoreCam;
