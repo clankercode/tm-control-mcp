@@ -127,7 +127,11 @@ def attach_screenshot_path(response: object, screenshot_info: dict) -> None:
 
 CACHE_PATH = Path.home() / ".cache/tm-control-mcp/schemas.json"
 CACHE_TTL_SECONDS = 24 * 60 * 60
-MAX_WAIT_TIMEOUT_SECONDS = 60.0
+# Idle WaitUntil budget (no loading screen yet). Once a load starts the
+# plugin keeps waiting; the socket must stay open for big-map loads.
+DEFAULT_WAIT_TIMEOUT_SECONDS = 20.0
+MAX_WAIT_TIMEOUT_SECONDS = 1800.0
+LOADING_WAIT_SOCKET_SECONDS = 1800.0
 
 
 def send_request(host: str, port: int, timeout: float, request: dict) -> dict:
@@ -235,12 +239,21 @@ def tool_result_output(response: dict) -> dict | None:
 
 
 def wait_socket_timeout(timeout: float, timeout_ms: object) -> float:
-    """Return a socket deadline matching WaitUntil's 0-60 second server budget."""
+    """Socket deadline for WaitUntil.
+
+    The idle budget is timeoutMs (default 20s). Once a loading screen is up
+    the plugin pauses that clock, so the socket must outlive a long map load.
+    timeoutMs=0 is an immediate check and does not get the loading grace.
+    """
     try:
         budget_s = float(timeout_ms) / 1000.0
     except (TypeError, ValueError):
         return timeout
-    return max(timeout, min(MAX_WAIT_TIMEOUT_SECONDS, max(0.0, budget_s)) + 2.0)
+    if budget_s < 0:
+        return timeout
+    if budget_s > 0:
+        budget_s = max(budget_s, LOADING_WAIT_SOCKET_SECONDS)
+    return max(timeout, min(MAX_WAIT_TIMEOUT_SECONDS, budget_s) + 2.0)
 
 
 def wait_until_mode(host: str, port: int, timeout: float, mode: str, budget_s: float) -> dict:
@@ -509,11 +522,11 @@ def main() -> int:
     parser.add_argument("--refresh-schemas", action="store_true", help="Force refetch of tool schemas (implies --strict)")
     parser.add_argument("--wait-mode", default="", help="Before the call, WaitUntil mode equals this (Editor|Menu|Race)")
     parser.add_argument("--until-ready", default="", help="Before the call, WaitUntil readiness want=editor|menu|any|race")
-    parser.add_argument("--wait-timeout", type=float, default=30.0, help="Budget seconds for --wait-mode / --until-ready, 0-60 (default 30)")
+    parser.add_argument("--wait-timeout", type=float, default=DEFAULT_WAIT_TIMEOUT_SECONDS, help="Idle budget seconds for --wait-mode / --until-ready (default 20). Loading screens keep waiting up to 30 min.")
     args = parser.parse_args()
 
     if not 0.0 <= args.wait_timeout <= MAX_WAIT_TIMEOUT_SECONDS:
-        parser.error("--wait-timeout must be between 0 and 60 seconds")
+        parser.error(f"--wait-timeout must be between 0 and {int(MAX_WAIT_TIMEOUT_SECONDS)} seconds")
     if args.route_or_tool is None and not (args.wait_mode or args.until_ready):
         parser.error("route_or_tool is required unless --wait-mode or --until-ready is provided")
 
@@ -622,7 +635,9 @@ def main() -> int:
     # Long-running tools need a bigger socket timeout
     call_timeout = args.timeout
     if args.route_or_tool == "WaitUntil" and isinstance(input_data, dict):
-        call_timeout = wait_socket_timeout(call_timeout, input_data.get("timeoutMs", 0))
+        # Plugin default is 20s when timeoutMs is omitted.
+        wait_ms = input_data["timeoutMs"] if "timeoutMs" in input_data else int(DEFAULT_WAIT_TIMEOUT_SECONDS * 1000)
+        call_timeout = wait_socket_timeout(call_timeout, wait_ms)
     if args.route_or_tool == "RunManialinkScript" and isinstance(input_data, dict):
         try:
             extra = float(input_data.get("waitMs", 0)) + float(input_data.get("collectMs", 0))

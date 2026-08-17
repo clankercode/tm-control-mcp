@@ -7,6 +7,12 @@ Versions follow `info.toml` `[meta] version`.
 
 ## [Unreleased]
 
+### Added
+
+- `EditNewMap` and `BackToMainMenu` now warn when leaving a dirty map pops the unsaved-changes dialog (`FrameAskYesNo`). `EditNewMap` waits `waitMs` (default 1500) like `OpenMapInEditor`; `BackToMainMenu` stops early instead of spinning 10s. Answer via `RespondDialog` or `SaveMapFlow`.
+- `EditNewMap` for custom environments (RedIsland / BlueBay / GreenCoast / WhiteShore) now passes the preloaded decoration nod IdName (`Day` / `Day64` / `Sunset64` / …, not `64x64Day`) to `EditNewMap2`. Non-Day moods use the chosen nod directly instead of SwapDecoHack.
+- Map-load waits: idle budget is **20s** (was 12–15s). Once a loading screen is up (`WaitMessage` / `LoadProgress`), `WaitUntil`, `EditNewMap`, and `CreateMapViaMenu` keep waiting until the map finishes (hard cap 30 min). `call.py` socket timeout follows.
+
 ### Changed
 
 - `GetToolList()` now caches the built tool array and rebuilds only when a pack is registered, unregistered, or swept. Callers (e.g. tm-agent's chat UI) were paying ~1–2 ms per call to re-parse ~90 schemas every frame.

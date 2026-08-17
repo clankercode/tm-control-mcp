@@ -306,7 +306,7 @@ Prefer `{"route":"tools"}` at runtime if this list drifts.
 | Tool | Summary |
 |------|---------|
 | `GetMode` | Current game mode (Menu / Editor / Race / …). |
-| `OpenMapInEditor` | Open a local map file in the editor (`path`). |
+| `OpenMapInEditor` | Open a local map file in the editor (`path`). Warns if a leave-map dialog pops. |
 | `GetMapInfo` | Current editor map name and counts (+ bounds). |
 | `GetMapEnvironment` | Collection, decoration, map type/style, mood, collection-unit metadata. |
 | `ControlMapObjectives` | Get/set race objectives: `nbClones`, `nbLaps`, `isLapRace` (E++). |
@@ -403,8 +403,8 @@ Menu stack is **landed**. Clicks use `CControlBase::OnAction` — **not**
 |------|---------|
 | `SetMenuPage` | MLHook `Router_Push` hierarchical `route`. |
 | `GetMenuPage` / `ListKnownMenuRoutes` | Mode + menu module; route catalogue. |
-| `EditNewMap` | Title-control new map (env + decoration + mapType). |
-| `BackToMainMenu` | Unwind Editor/Race → menu. |
+| `EditNewMap` | Title-control new map (env + decoration + mapType). Warns if leaving a dirty map pops AskYesNo. |
+| `BackToMainMenu` | Unwind Editor/Race → menu. Warns and stops early on the unsaved-changes dialog. |
 | `GetUILayers` / `GetActiveMenuPages` / `GetLayerTree` / `GetLayerXml` | Layer introspection. |
 | `ListMenuManialinkControls` / `FindMenuButtons` / `FindControlsByClass` / `FindControlsByLabel` | Discovery. |
 | `InspectMenuControl` / `FocusMenuControl` / `SetMenuControlVisible` | Probe / focus / show-hide. |

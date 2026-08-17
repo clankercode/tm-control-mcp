@@ -787,16 +787,12 @@ namespace TmMcp {
             uint stepStart = Time::Now;
 
             if (isFinal) {
-                // Poll GetMode for "Editor"
-                bool editorReached = false;
-                int pollBudget = timeoutMs > 0 ? timeoutMs : 10000;
-                int pollElapsed = 0;
-                while (pollElapsed < pollBudget) {
-                    sleep(100);
-                    pollElapsed += 100;
-                    auto app = cast<CTrackMania>(GetApp());
-                    if (app !is null && app.Editor !is null) { editorReached = true; break; }
-                }
+                // Poll GetMode for "Editor". Idle budget is timeoutMs (min 20s);
+                // once a loading screen is up, keep waiting through the load.
+                uint pollBudget = timeoutMs > 0 ? uint(timeoutMs) : 20000;
+                if (pollBudget < 20000) pollBudget = 20000;
+                uint pollElapsed = 0;
+                bool editorReached = _WaitForEditorAfterMapLoad(pollBudget, 1800000, pollElapsed);
                 Json::Value step = Json::Object();
                 step["name"] = btnId + " -> Editor";
                 step["observed"] = editorReached;

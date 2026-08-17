@@ -187,20 +187,25 @@ namespace TmMcp {
 
         _RegisterGuide("map-vistas",
             "Environment / decoration (vista) selection",
-            "TM map vistas are the combination of Environment (always 'Stadium' for TM2020)"
-            + " and Decoration. GetMapInfo/GetMapEnvironment report the current map's"
-            + " decorationName.\n"
+            "TM map vistas are Environment + Decoration. GetMapInfo / GetMapEnvironment"
+            + " report decorationName; ListMapDecorations lists every fid per env.\n"
             + "\n"
-            + "All 12 vistas (3 bases x 4 moods), loadable via EditNewMap {vista}:\n"
+            + "Stadium — 12 vistas via EditNewMap {vista}:\n"
             + "- bases: nostadium (NoStadium48x48*), stadiumold (48x48*), stadium155\n"
             + "  (48x48Screen155*, aliases: screen155, default)\n"
             + "- moods: day, night, sunset, sunrise\n"
             + "- e.g. vista='nostadium-day', 'stadiumold-night', 'stadium155-sunset'.\n"
             + "- decoration param accepts a raw fid basename (e.g. NoStadium48x48Night).\n"
+            + "- EditNewMap2 only accepts the standard '48x48Screen155Day' nod name;"
+            + "  other Stadium vistas preload + SwapDecoHack into that fid slot.\n"
             + "\n"
-            + "How it works: EditNewMap2 only accepts the standard '48x48Screen155Day' nod"
-            + " directly; other vistas preload the chosen decoration and swap it into the"
-            + " standard fid's Nod slot (tm-map-together's SwapDecoHack), restoring after.\n"
+            + "Custom environments (RedIsland, BlueBay, GreenCoast, WhiteShore):\n"
+            + "- 4 decorations each: Base64x64{Day,Night,Sunrise,Sunset}.\n"
+            + "- EditNewMap {environment, vista: mood} preloads the fid and passes the"
+            + "  live nod IdName (Day / Night / Day64 / Sunset64 / Sunrise64 — not"
+            + "  '64x64Day'). Leaving a dirty map pops AskYesNo; answer via SaveMapFlow.\n"
+            + "- Verified live 2026-08-18: RedIsland Day+Night, BlueBay Day+Sunset,"
+            + "  GreenCoast Day+Sunrise, WhiteShore Day+Night. All 64x64x64 / 4096 blocks.\n"
             + "\n"
             + "Custom map size: EditNewMap {vista, size:'64x64x64'} mutates the decoration's"
             + " DecoSize before creation (restored when the map closes). Also car=CarSport|"
@@ -245,9 +250,13 @@ namespace TmMcp {
             + "WaitUntil {condition, timeoutMs, pollMs, ...} polls in-plugin.\n"
             + "conditions: mode (+equals), dialogClear, editorReady, pageVisible (+page),"
             + " mapItems/mapBlocks (+op eq|gte|lte, count), readiness (+want).\n"
-            + "Timeout returns success with timedOut=true/ok=false (not a hard tool error).\n"
+            + "timeoutMs is the idle budget (default 20000). Once a loading screen"
+            + " (WaitMessage / LoadProgress) is up, the clock pauses and the wait"
+            + " continues until the map finishes — big maps can take many minutes"
+            + " (hard cap 30 min). Timeout returns success with timedOut=true/ok=false"
+            + " (not a hard tool error).\n"
             + "\n"
-            + "call.py: --wait-mode Editor --until-ready editor --wait-timeout 30");
+            + "call.py: --wait-mode Editor --until-ready editor --wait-timeout 20");
 
         _RegisterGuide("agent-cleanup",
             "Provenance tags for safe multi-step cleanup",

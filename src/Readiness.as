@@ -2,6 +2,7 @@ namespace TmMcp {
     string DetectGameModeName() {
         auto app = cast<CTrackMania>(GetApp());
         if (app is null) return "Unknown";
+        if (IsLoadingLike(app)) return "Loading";
         if (app.Editor !is null) return "Editor";
         if (app.CurrentPlayground !is null) return "Race";
         return "Menu";
@@ -211,10 +212,10 @@ namespace TmMcp {
             return MakeError("missing condition", "INVALID_INPUT", false, "", "condition: mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness");
         }
         string condition = string(input["condition"]);
-        int timeoutMs = input.HasKey("timeoutMs") ? int(input["timeoutMs"]) : 15000;
+        int timeoutMs = input.HasKey("timeoutMs") ? int(input["timeoutMs"]) : 20000;
         int pollMs = input.HasKey("pollMs") ? int(input["pollMs"]) : 100;
         if (timeoutMs < 0) timeoutMs = 0;
-        if (timeoutMs > 60000) timeoutMs = 60000;
+        if (timeoutMs > 1800000) timeoutMs = 1800000;
         if (pollMs < 50) pollMs = 50;
         if (pollMs > 2000) pollMs = 2000;
 
@@ -233,14 +234,30 @@ namespace TmMcp {
         }
 
         uint64 t0 = Time::Now;
+        uint64 lastTick = t0;
+        uint chargedMs = 0;
+        bool sawLoading = false;
         Json::Value@ last;
         bool ok = false;
         while (true) {
             ok = ConditionSatisfied(condition, input, last);
             if (ok) break;
-            uint elapsed = uint(Time::Now - t0);
-            if (elapsed >= uint(timeoutMs)) break;
-            uint slice = Math::Min(uint(pollMs), uint(timeoutMs) - elapsed);
+            uint64 now = Time::Now;
+            uint dt = uint(now - lastTick);
+            lastTick = now;
+            auto app = cast<CTrackMania>(GetApp());
+            bool loading = IsLoadingLike(app);
+            if (loading) {
+                sawLoading = true;
+                if (now - t0 >= 1800000) break;
+            } else {
+                chargedMs += dt;
+                if (timeoutMs == 0 || chargedMs >= uint(timeoutMs)) break;
+            }
+            uint slice = uint(pollMs);
+            if (!loading && timeoutMs > 0 && uint(timeoutMs) > chargedMs) {
+                slice = Math::Min(slice, uint(timeoutMs) - chargedMs);
+            }
             uint64 sliceStart = Time::Now;
             while (Time::Now - sliceStart < slice) {
                 yield();
@@ -252,6 +269,8 @@ namespace TmMcp {
         output["ok"] = ok;
         output["timedOut"] = !ok;
         output["elapsedMs"] = int(elapsedMs);
+        output["chargedMs"] = int(chargedMs);
+        output["loading"] = sawLoading;
         output["condition"] = condition;
         output["timeoutMs"] = timeoutMs;
         output["pollMs"] = pollMs;
@@ -259,7 +278,9 @@ namespace TmMcp {
         if (!ok) {
             output["code"] = "TIMEOUT";
             output["retryable"] = true;
-            output["hint"] = "Increase timeoutMs or check GetReadiness / GetMode / GetDialog";
+            output["hint"] = sawLoading
+                ? "Still loading or load finished without reaching the condition. Check GetMode / GetDialog."
+                : "Increase timeoutMs or check GetReadiness / GetMode / GetDialog";
             output["error"] = "WaitUntil timed out after " + elapsedMs + "ms waiting for " + condition;
         }
         // Always success envelope so agents can branch on timedOut/ok without

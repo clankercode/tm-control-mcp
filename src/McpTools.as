@@ -286,6 +286,31 @@ namespace TmMcp {
         return false;
     }
 
+    // Idle budget (default 20s) is only charged while we are NOT on a loading
+    // screen. Once Updating data... / LoadProgress is up, keep waiting — big
+    // maps can take many minutes. loadingCapMs is a safety valve (30 min).
+    bool _WaitForEditorAfterMapLoad(uint idleBudgetMs, uint loadingCapMs, uint &out waitedMs) {
+        uint waited = 0;
+        uint charged = 0;
+        while (charged < idleBudgetMs && waited < loadingCapMs) {
+            if (_LeaveDialogIsUp()) {
+                waitedMs = waited;
+                return false;
+            }
+            sleep(250);
+            waited += 250;
+            auto app = cast<CTrackMania>(GetApp());
+            bool loading = IsLoadingLike(app);
+            if (app !is null && app.Editor !is null && !loading) {
+                waitedMs = waited;
+                return true;
+            }
+            if (!loading) charged += 250;
+        }
+        waitedMs = waited;
+        return false;
+    }
+
     // The editor's own interface frames (separate from BasicDialogs) — this is
     // where e.g. the "map saved" notification lives.
     Json::Value EditorInterfaceFramesSummary() {
@@ -443,6 +468,45 @@ namespace TmMcp {
             output["waitShowAbortButton"] = bd.WaitMessage_ShowAbortButton;
         }
         return output;
+    }
+
+    // Unsaved-changes (FrameAskYesNo) and other leave-blocking dialogs. TM
+    // surfaces these on BasicDialogs and/or ActiveMenus; CurrentFrame on a
+    // normal menu page is not a dialog.
+    bool _IsLeaveBlockingFrameName(const string &in id) {
+        if (id.Length == 0) return false;
+        if (id == "FrameAskYesNo") return true;
+        if (id.StartsWith("FrameDialog")) return true;
+        return false;
+    }
+
+    bool _LeaveDialogIsUp() {
+        auto app = cast<CTrackMania>(GetApp());
+        if (app is null) return false;
+        auto bd = app.BasicDialogs;
+        if (bd !is null && bd.Dialogs !is null && bd.Dialogs.CurrentFrame !is null) {
+            if (_IsLeaveBlockingFrameName(bd.Dialogs.CurrentFrame.IdName)) return true;
+        }
+        for (uint i = 0; i < app.ActiveMenus.Length; i++) {
+            auto menu = app.ActiveMenus[i];
+            if (menu is null || menu.CurrentFrame is null) continue;
+            if (_IsLeaveBlockingFrameName(menu.CurrentFrame.IdName)) return true;
+        }
+        return false;
+    }
+
+    const string LEAVE_DIALOG_WARNING =
+        "A dialog is up; leaving the map is stalled until it is answered. Use RespondDialog (save flow: yes -> saveas-setname -> validate) or SaveMapFlow.";
+
+    void _AttachLeaveDialogWarning(Json::Value &inout output) {
+        auto app = cast<CTrackMania>(GetApp());
+        output["loading"] = IsLoadingLike(app);
+        auto dlg = BasicDialogSummary();
+        output["dialog"] = dlg;
+        output["activeMenus"] = ActiveMenusFramesSummary();
+        if (_LeaveDialogIsUp()) {
+            output["warning"] = LEAVE_DIALOG_WARNING;
+        }
     }
 
     string ScreenshotExtForFormat(const string &in format) {
@@ -893,6 +957,7 @@ namespace TmMcp {
             || name == "ListGuides"
             || name == "GetGuide"
             || name == "EditNewMap"
+            || name == "ListMapDecorations"
             || name == "ListMenuManialinkControls"
             || name == "FocusMenuControl"
             || name == "GetUILayers"
@@ -1046,6 +1111,7 @@ namespace TmMcp {
         if (name == "ListGuides") return ListGuides(input);
         if (name == "GetGuide") return GetGuide(input);
         if (name == "EditNewMap") return EditNewMapTool(input);
+        if (name == "ListMapDecorations") return ListMapDecorations(input);
         if (name == "ListMenuManialinkControls") return ListMenuManialinkControls(input);
         if (name == "FocusMenuControl") return FocusMenuControl(input);
         if (name == "GetUILayers") return GetUILayers(input);
@@ -1131,7 +1197,7 @@ namespace TmMcp {
     Json::Value@ BuildToolList() {
         Json::Value tools = Json::Array();
         tools.Add(MakeTool("GetMode", "Get current game mode: Menu, Editor, Race, or Loading (while the loading screen is displayed). Response always includes a loading bool.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("OpenMapInEditor", "Open a local map file in the editor. Waits waitMs (default 1500) and reports any blocking dialog (e.g. unsaved-changes prompt) with a warning — answer it via RespondDialog or SaveMapFlow.", '{"type":"object","properties":{"path":{"type":"string"},"waitMs":{"type":"integer"}},"required":["path"],"additionalProperties":false}'));
+        tools.Add(MakeTool("OpenMapInEditor", "Open a local map file in the editor. Waits waitMs (default 1500) and reports any blocking dialog (e.g. unsaved-changes AskYesNo when leaving a dirty map) with a warning — answer it via RespondDialog or SaveMapFlow.", '{"type":"object","properties":{"path":{"type":"string"},"waitMs":{"type":"integer"}},"required":["path"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapInfo", "Get current editor map name and counts.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapEnvironment", "Read map collection, decoration, map type/style, mood, and collection-unit metadata.", '{"type":"object","properties":{},"additionalProperties":false}'));
 
@@ -1179,7 +1245,8 @@ namespace TmMcp {
         tools.Add(MakeTool("ListKnownMenuRoutes", "Return a hardcoded catalogue of main-menu Router_Push routes known to work (sourced from tm-menu-page-manager).", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("ListGuides", "List available self-documentation guides. Each has a short title; call GetGuide {topic} to fetch the full body.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetGuide", "Fetch the full body of a named guide. Use ListGuides to see topics.", '{"type":"object","properties":{"topic":{"type":"string"}},"required":["topic"],"additionalProperties":false}'));
-        tools.Add(MakeTool("EditNewMap", "Create a new map in the editor. Supports all 12 vistas via the vista param: <base>-<mood> where base = nostadium | stadiumold (alias base) | stadium155 (alias screen155, default day), mood = day | night | sunset | sunrise. Non-standard vistas load via decoration fid swap (tm-map-together's SwapDecoHack). decoration = raw fid basename passthrough (e.g. NoStadium48x48Night). Optional: car (CarSport|CarSnow|CarRally|CarDesert), size 'WxHxD' (e.g. 64x64x64; mutates the decoration size for the new map), mapType (default empty). Call returns immediately; poll GetMode until mode becomes Editor.", '{"type":"object","properties":{"environment":{"type":"string"},"decoration":{"type":"string"},"mapType":{"type":"string"},"vista":{"type":"string"},"car":{"type":"string"},"size":{"type":"string"},"sizeX":{"type":"integer"},"sizeY":{"type":"integer"},"sizeZ":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("ListMapDecorations", "List all map decoration (vista) fids per environment (Stadium, RedIsland, GreenCoast, BlueBay, WhiteShore) found under GameData/<env>/GameCtnDecoration, with file/fid base names and loaded nod IdNames.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("EditNewMap", "Create a new map in the editor. Supports all 12 vistas via the vista param: <base>-<mood> where base = nostadium | stadiumold (alias base) | stadium155 (alias screen155, default day), mood = day | night | sunset | sunrise. Non-standard vistas load via decoration fid swap (tm-map-together's SwapDecoHack). decoration = raw fid basename passthrough (e.g. NoStadium48x48Night). Optional: car (CarSport|CarSnow|CarRally|CarDesert), size 'WxHxD' (e.g. 64x64x64; mutates the decoration size for the new map), mapType (default empty). Waits waitMs (default 1500) and warns if leaving a dirty map pops AskYesNo — answer via RespondDialog or SaveMapFlow. Otherwise poll GetMode until Editor.", '{"type":"object","properties":{"environment":{"type":"string"},"decoration":{"type":"string"},"mapType":{"type":"string"},"vista":{"type":"string"},"car":{"type":"string"},"size":{"type":"string"},"sizeX":{"type":"integer"},"sizeY":{"type":"integer"},"sizeZ":{"type":"integer"},"waitMs":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ListMenuManialinkControls", "Walk the main-menu UI layer tree and return controls with their ControlId, classes, visibility, and path. Used to discover button IDs before firing Manialink events. maxDepth default 8; onlyWithId default true (skip anonymous frames); includeHidden default false.", '{"type":"object","properties":{"maxDepth":{"type":"integer"},"onlyWithId":{"type":"boolean"},"includeHidden":{"type":"boolean"},"maxResults":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("FocusMenuControl", "Find a menu control by ControlId across all UI layers and call Focus() on it. Probe step before trying synthetic click events. Does not perform click.", '{"type":"object","properties":{"controlId":{"type":"string"}},"required":["controlId"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetUILayers", "Lightweight: list main-menu UI layers with index, type, visibility, attachId, pageUrl, and (default) the extracted <manialink name> attribute. Does NOT traverse the control tree. Use GetLayerTree for per-layer introspection. Use includeXmlSize=true to also return the XML length (avoids returning the full XML).", '{"type":"object","properties":{"includeName":{"type":"boolean"},"includeXmlSize":{"type":"boolean"},"onlyVisible":{"type":"boolean"}},"additionalProperties":false}'));
@@ -1189,7 +1256,7 @@ namespace TmMcp {
         tools.Add(MakeTool("FindControlsByClass", "Search across main-menu UI layers for controls whose class list matches classPattern. substring=true (default) does Contains match, substring=false requires exact equality. Returns same enriched entries as FindMenuButtons (includes child label text if present).", '{"type":"object","properties":{"classPattern":{"type":"string"},"substring":{"type":"boolean"},"onlyVisible":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxResults":{"type":"integer"}},"required":["classPattern"],"additionalProperties":false}'));
         tools.Add(MakeTool("FindControlsByLabel", "Search across main-menu UI layers for Label controls whose Value contains the given substring. Case-insensitive by default. Returns layerIndex, layerName, controlId, raw label, displayText (translation prefix stripped), classes, absPos, size.", '{"type":"object","properties":{"substring":{"type":"string"},"caseInsensitive":{"type":"boolean"},"onlyVisible":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxResults":{"type":"integer"}},"required":["substring"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetLayerXml", "Read a slice of a UI layer's Manialink XML, or substring-grep it. Either {layerIndex, find, context?=120, maxHits?=20, caseInsensitive?=false} to grep, or {layerIndex, offset?=0, length?=2048} to slice. Use instead of dumping the whole 10-50 KB XML for a layer.", '{"type":"object","properties":{"layerIndex":{"type":"integer"},"find":{"type":"string"},"context":{"type":"integer"},"maxHits":{"type":"integer"},"caseInsensitive":{"type":"boolean"},"offset":{"type":"integer"},"length":{"type":"integer"}},"required":["layerIndex"],"additionalProperties":false}'));
-        tools.Add(MakeTool("BackToMainMenu", "Unwind out of whatever module the game is currently in (Editor, Race) and return to the main menu. Works from a live race, self-hosted solo, or the editor. Async — poll GetMode until mode=='Menu'.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("BackToMainMenu", "Unwind out of whatever module the game is currently in (Editor, Race) and return to the main menu. Works from a live race, self-hosted solo, or the editor. Stops early and warns if leaving a dirty map pops AskYesNo — answer via RespondDialog or SaveMapFlow. Otherwise poll GetMode until mode=='Menu'.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("ClickMenuButton", "High-level click on a Nadeo main-menu nav-item. Resolve with {controlId} (e.g. 'button-map-editor') or {indexPath, layerIndex|layerName}. Descends to the component-navigation-item-zone leaf and invokes its CControlBase::OnAction — the same dispatch a real click uses. Works across button templates (expendable-button, Trackmania_Button). For non-nav controls without the nav-zone class, use TriggerControlOnAction directly. After firing, poll GetActiveMenuPages / GetMode / GetDialog to observe the route change.", '{"type":"object","properties":{"controlId":{"type":"string"},"indexPath":{"type":"string"},"layerIndex":{"type":"integer"},"layerName":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("InspectMenuControl", "Probe: resolve a ControlId on the active Page_* (or named layer) via LocalPage.GetFirstChild and MainFrame.GetFirstChild. Returns type, classes, visibility, position, plus two path encodings from MainFrame: 'path' is slash-joined child indexes (e.g. '3/0' = MainFrame.Controls[3].Controls[0]), 'idPath' is slash-joined ControlIds (e.g. 'frame-global/button-create'). By default includes up to 32 direct children. Pass recursive:true with maxDepth to return a 'descendants' array walked via the same logic as GetLayerTree. Read-only — safe to call from Angelscript.", '{"type":"object","properties":{"controlId":{"type":"string"},"layerName":{"type":"string"},"recursive":{"type":"boolean"},"maxDepth":{"type":"integer"},"onlyWithId":{"type":"boolean"},"includeHidden":{"type":"boolean"},"maxResults":{"type":"integer"}},"required":["controlId"],"additionalProperties":false}'));
         tools.Add(MakeTool("SetMenuControlVisible", "Call Show()/Hide() on a menu control. Resolve either by {controlId} (global search) or {indexPath, layerIndex|layerName} (direct walk from MainFrame). visible=true calls Show; false calls Hide. Menu may re-render and reset visibility on the next tick — re-observe after to confirm. Works from Angelscript (unlike TriggerPageAction).", '{"type":"object","properties":{"controlId":{"type":"string"},"indexPath":{"type":"string"},"layerIndex":{"type":"integer"},"layerName":{"type":"string"},"visible":{"type":"boolean"}},"required":["visible"],"additionalProperties":false}'));
@@ -1198,7 +1265,7 @@ namespace TmMcp {
         tools.Add(MakeTool("RunManialinkScript", "Inject ad-hoc ManiaScript via MLHook (menu/in-map/in-editor). script without outer <manialink>. Optional collectMs>0 registers a result hook: script should SendCustomEvent(\"MLHook_Event_McpAdHoc_Result\", [payload...]) (or resultEvent). Also pageUid/replace/persist/waitMs.", '{"type":"object","properties":{"script":{"type":"string"},"context":{"type":"string"},"pageUid":{"type":"string"},"replace":{"type":"boolean"},"persist":{"type":"boolean"},"waitMs":{"type":"integer"},"collectMs":{"type":"integer"},"resultEvent":{"type":"string"}},"required":["script"],"additionalProperties":false}'));
 
         tools.Add(MakeTool("GetReadiness", "Composite preflight: mode/dialog/editor-ready/inventory/map checks. want=editor|menu|any|race.", '{"type":"object","properties":{"want":{"type":"string"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("WaitUntil", "Poll until condition is true. condition=mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness. Returns ok/timedOut (not a hard error on timeout).", '{"type":"object","properties":{"condition":{"type":"string"},"equals":{"type":"string"},"page":{"type":"string"},"op":{"type":"string"},"count":{"type":"integer"},"want":{"type":"string"},"timeoutMs":{"type":"integer"},"pollMs":{"type":"integer"}},"required":["condition"],"additionalProperties":false}'));
+        tools.Add(MakeTool("WaitUntil", "Poll until condition is true. condition=mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness. timeoutMs is the idle budget (default 20000); once a loading screen is up the clock pauses and the wait continues until the map finishes (up to 30 min). Returns ok/timedOut (not a hard error on timeout).", '{"type":"object","properties":{"condition":{"type":"string"},"equals":{"type":"string"},"page":{"type":"string"},"op":{"type":"string"},"count":{"type":"integer"},"want":{"type":"string"},"timeoutMs":{"type":"integer"},"pollMs":{"type":"integer"}},"required":["condition"],"additionalProperties":false}'));
         tools.Add(MakeTool("AssertPlacement", "Verify recent placement: expectItemsDelta/expectBlocksDelta, near{x,y,z,radius}+itemPath/blockName, tag/tagMinCount.", '{"type":"object","properties":{"expectItemsDelta":{"type":"integer"},"expectBlocksDelta":{"type":"integer"},"near":{"type":"object"},"itemPath":{"type":"string"},"blockName":{"type":"string"},"mapPre":{"type":"object"},"tag":{"type":"string"},"tagMinCount":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ListPlugins", "List loaded Openplanet plugins (Meta::AllPlugins). Optional query, includeDisabled (default true), includeUnloaded, includeSourcePath (full paths; default basename only).", '{"type":"object","properties":{"query":{"type":"string"},"includeDisabled":{"type":"boolean"},"includeUnloaded":{"type":"boolean"},"includeSourcePath":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetPlugin", "Get one plugin by id or name. includeSettings=true embeds setting values. includeSourcePath=true adds full SourcePath (may be Wine absolute); default is sourcePathBase only.", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"name":{"type":"string"},"includeSettings":{"type":"boolean"},"includeSourcePath":{"type":"boolean"}},"additionalProperties":false}'));
@@ -1280,8 +1347,13 @@ namespace TmMcp {
         app.BackToMainMenu();
         uint menuWaitedMs = 0;
         bool reachedMenu = false;
+        bool blockedByDialog = false;
         uint64 t1 = Time::Now;
         while (menuWaitedMs < 10000) {
+            if (_LeaveDialogIsUp()) {
+                blockedByDialog = true;
+                break;
+            }
             if (app.Switcher.ModuleStack.Length > 0
                 && cast<CTrackManiaMenus>(app.Switcher.ModuleStack[app.Switcher.ModuleStack.Length - 1]) !is null) {
                 reachedMenu = true;
@@ -1295,11 +1367,15 @@ namespace TmMcp {
         output["readyWaitedMs"] = int(readyWaitedMs);
         output["menuWaitedMs"] = int(menuWaitedMs);
         output["reachedMenu"] = reachedMenu;
-        if (!reachedMenu) {
+        output["blockedByDialog"] = blockedByDialog;
+        if (blockedByDialog) {
+            output["note"] = "BackToMainMenu() stalled on a dialog (typically unsaved changes).";
+        } else if (!reachedMenu) {
             output["note"] = "BackToMainMenu() issued but menu module not on top after 10s; poll GetMode manually.";
         } else {
             output["note"] = "BackToMainMenu() complete; menu module on top of stack.";
         }
+        _AttachLeaveDialogWarning(output);
         return MakeSuccess(output);
     }
 
@@ -1405,22 +1481,45 @@ namespace TmMcp {
             return;
         }
 
+        // Per-environment decoration folder + standard decoration. Custom
+        // environments have a single 64x64 base with 4 mood variants.
+        // EditNewMap2 looks up by the decoration *nod IdName*, not the fid
+        // basename: Stadium Screen155 Day is "48x48Screen155Day"; RedIsland /
+        // BlueBay / GreenCoast / WhiteShore Day is just "Day".
+        string decoFolder = "GameData/Stadium/GameCtnDecoration/";
+        string stdFidBase = "Base48x48Screen155Day";
+        string stdNodName = STD_DECO_NOD;
+        if (environment != "Stadium") {
+            decoFolder = "GameData/" + environment + "/GameCtnDecoration/";
+            stdFidBase = "Base64x64Day";
+            stdNodName = "";
+        }
+
         // Resolve vista -> decoration fid basename. Raw decoration param wins.
         string fidBase = decoration.Length > 0 ? _VistaToDecoFidBase(decoration) : "";
         if (decoration.Length > 0 && fidBase.Length == 0) fidBase = decoration; // raw fid basename passthrough
+        if (fidBase.Length == 0 && environment != "Stadium") {
+            // For custom environments, vista = plain mood (day default).
+            string mood = vista.Length == 0 || vista.ToLower() == "default" ? "day" : vista.ToLower();
+            if (mood == "day" || mood == "night" || mood == "sunset" || mood == "sunrise") {
+                fidBase = "Base64x64" + mood.SubStr(0, 1).ToUpper() + mood.SubStr(1);
+            }
+        }
         if (fidBase.Length == 0) fidBase = _VistaToDecoFidBase(vista);
         if (fidBase.Length == 0) {
             warn("TM Control MCP EditNewMap: unknown vista '" + vista + "' (see map-vistas guide)");
             return;
         }
-        bool standard = fidBase == "Base48x48Screen155Day" && mapSize.x == 0;
+        bool standard = fidBase == stdFidBase && mapSize.x == 0;
 
         CGameCtnDecoration@ chosenDeco = null;
         CMwNod@ origStdNod = null;
         nat3 origSize;
         bool swapped = false;
-        if (!standard) {
-            auto chosenFid = Fids::GetGame("GameData/Stadium/GameCtnDecoration/" + fidBase + ".Decoration.Gbx");
+        {
+            // Always preload: EditNewMap2 resolves the decoration nod by name,
+            // and custom environments' standard decos are not otherwise loaded.
+            auto chosenFid = Fids::GetGame(decoFolder + fidBase + ".Decoration.Gbx");
             @chosenDeco = cast<CGameCtnDecoration>(Fids::Preload(chosenFid));
             if (chosenDeco is null) {
                 warn("TM Control MCP EditNewMap: failed to preload decoration " + fidBase);
@@ -1435,41 +1534,67 @@ namespace TmMcp {
                 chosenDeco.DecoSize.SizeY = mapSize.y;
                 chosenDeco.DecoSize.SizeZ = mapSize.z;
             }
-            // Swap the chosen deco into the standard fid's Nod slot so
-            // EditNewMap2(48x48Screen155Day) loads it (SwapDecoHack).
-            auto stdFid = Fids::GetGame(STD_DECO_FID);
-            Fids::Preload(stdFid);
-            if (stdFid.Nod !is null && stdFid.Nod.IdName != chosenDeco.IdName) {
-                @origStdNod = stdFid.Nod;
-                origStdNod.MwAddRef();
-                Dev::SetOffset(stdFid, _MemberOffset("CSystemFidFile", "Nod"), chosenDeco);
-                swapped = true;
+            // Custom-env nods are named Day / Night / Day64 / Sunset64 etc.
+            // EditNewMap2 looks up that IdName after preload — no swap needed.
+            // Stadium still only accepts the standard 48x48Screen155Day nod
+            // name, so non-standard Stadium vistas keep SwapDecoHack.
+            if (environment != "Stadium" || standard) {
+                stdNodName = chosenDeco.IdName;
+            } else {
+                auto stdFid = Fids::GetGame(decoFolder + stdFidBase + ".Decoration.Gbx");
+                auto stdNod = Fids::Preload(stdFid);
+                if (stdNod !is null) {
+                    stdNodName = stdNod.IdName;
+                    if (stdNod.IdName != chosenDeco.IdName) {
+                        @origStdNod = stdNod;
+                        origStdNod.MwAddRef();
+                        Dev::SetOffset(stdFid, _MemberOffset("CSystemFidFile", "Nod"), chosenDeco);
+                        swapped = true;
+                    }
+                }
             }
+            if (stdNodName.Length == 0) {
+                warn("TM Control MCP EditNewMap: no decoration nod IdName for " + fidBase);
+                chosenDeco.MwRelease();
+                @chosenDeco = null;
+                return;
+            }
+            trace("TM Control MCP EditNewMap: fid=" + fidBase + " nod=" + stdNodName + " swapped=" + swapped);
         }
 
         app.BackToMainMenu();
-        while (!app.ManiaTitleControlScriptAPI.IsReady) yield();
-        while (app.Switcher.ModuleStack.Length < 1 || cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0]) is null) yield();
-        yield();
-        app.ManiaTitleControlScriptAPI.EditNewMap2(environment, STD_DECO_NOD, "", car, mapType, false, "", "");
-        // Verify the editor actually opens; EditNewMap2 silently no-ops on a bad decoration string.
-        uint waited = 0;
-        bool opened = false;
-        while (waited < 15000) {
-            sleep(250);
-            waited += 250;
-            auto tmApp = cast<CTrackMania>(GetApp());
-            if (tmApp !is null && tmApp.Editor !is null) {
-                trace("TM Control MCP EditNewMap: editor opened after " + waited + "ms");
-                opened = true;
-                break;
-            }
+        uint64 tReady = Time::Now;
+        while (!app.ManiaTitleControlScriptAPI.IsReady && Time::Now - tReady < 10000) {
+            if (_LeaveDialogIsUp()) break;
+            yield();
         }
-        if (!opened) {
-            warn("TM Control MCP EditNewMap: editor did not open within 15s (vista '" + vista + "', deco '" + fidBase + "')");
+        uint64 tMenu = Time::Now;
+        while ((app.Switcher.ModuleStack.Length < 1 || cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0]) is null)
+            && Time::Now - tMenu < 10000) {
+            if (_LeaveDialogIsUp()) break;
+            yield();
+        }
+        if (_LeaveDialogIsUp()) {
+            warn("TM Control MCP EditNewMap: blocked by dialog after BackToMainMenu (unsaved changes?)");
+        } else {
+            yield();
+            app.ManiaTitleControlScriptAPI.EditNewMap2(environment, stdNodName, "", car, mapType, false, "", "");
+            yield();
+            trace("TM Control MCP EditNewMap: EditNewMap2('" + environment + "', '" + stdNodName + "') LatestResult=" + int(app.ManiaTitleControlScriptAPI.LatestResult));
+        }
+        // 20s idle to start a load / open the editor; once a loading screen
+        // is up, keep waiting (big maps can take many minutes).
+        uint waited = 0;
+        bool opened = _WaitForEditorAfterMapLoad(20000, 1800000, waited);
+        if (opened) {
+            trace("TM Control MCP EditNewMap: editor opened after " + waited + "ms");
+        } else if (_LeaveDialogIsUp()) {
+            warn("TM Control MCP EditNewMap: blocked by dialog after " + waited + "ms");
+        } else {
+            warn("TM Control MCP EditNewMap: editor did not open after " + waited + "ms (vista '" + vista + "', deco '" + fidBase + "')");
         }
         if (swapped) {
-            auto stdFid = Fids::GetGame(STD_DECO_FID);
+            auto stdFid = Fids::GetGame(decoFolder + stdFidBase + ".Decoration.Gbx");
             Dev::SetOffset(stdFid, _MemberOffset("CSystemFidFile", "Nod"), origStdNod);
             origStdNod.MwRelease();
             @origStdNod = null;
@@ -1489,6 +1614,39 @@ namespace TmMcp {
             chosenDeco.MwRelease();
             @chosenDeco = null;
         }
+    }
+
+    Json::Value@ ListMapDecorations(Json::Value &in input) {
+        string[] envs = { "Stadium", "RedIsland", "GreenCoast", "BlueBay", "WhiteShore" };
+        Json::Value output = Json::Object();
+        Json::Value envList = Json::Array();
+        for (uint e = 0; e < envs.Length; e++) {
+            string env = envs[e];
+            Json::Value entry = Json::Object();
+            entry["environment"] = env;
+            Json::Value decos = Json::Array();
+            auto folder = Fids::GetGameFolder("GameData/" + env + "/GameCtnDecoration");
+            if (folder is null) {
+                entry["error"] = "folder not found";
+            } else {
+                for (uint i = 0; i < folder.Leaves.Length; i++) {
+                    auto leaf = folder.Leaves[i];
+                    if (leaf is null) continue;
+                    string fn = leaf.FileName;
+                    if (!fn.ToLower().EndsWith(".decoration.gbx")) continue;
+                    Json::Value d = Json::Object();
+                    d["fileName"] = fn;
+                    d["fidBase"] = fn.SubStr(0, fn.Length - 15);
+                    if (leaf.Nod !is null) d["nodIdName"] = leaf.Nod.IdName;
+                    decos.Add(d);
+                }
+                entry["count"] = int(decos.Length);
+            }
+            entry["decorations"] = decos;
+            envList.Add(entry);
+        }
+        output["environments"] = envList;
+        return MakeSuccess(output);
     }
 
     Json::Value@ EditNewMapTool(Json::Value &in input) {
@@ -1524,6 +1682,14 @@ namespace TmMcp {
         if (car.Length > 0) output["car"] = car;
         if (mapSize.x > 0) output["size"] = sizeStr;
         output["note"] = "EditNewMap2 called asynchronously; poll GetMode until it returns Editor.";
+        int waitMs = input.HasKey("waitMs") ? int(input["waitMs"]) : 1500;
+        if (waitMs > 0) {
+            sleep(Math::Min(waitMs, 10000));
+            _AttachLeaveDialogWarning(output);
+            if (output.HasKey("warning")) {
+                output["note"] = "EditNewMap stalled on a dialog (typically unsaved changes). Answer it before the new map can open.";
+            }
+        }
         return MakeSuccess(output);
     }
 
@@ -1596,8 +1762,23 @@ namespace TmMcp {
         }
 
         app.BackToMainMenu();
-        while (!app.ManiaTitleControlScriptAPI.IsReady) yield();
-        while (app.Switcher.ModuleStack.Length < 1 || cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0]) is null) yield();
+        uint64 tReady = Time::Now;
+        while (!app.ManiaTitleControlScriptAPI.IsReady && Time::Now - tReady < 10000) {
+            if (_LeaveDialogIsUp()) {
+                warn("TM Control MCP OpenMapInEditor: blocked by dialog after BackToMainMenu (unsaved changes?)");
+                return;
+            }
+            yield();
+        }
+        uint64 tMenu = Time::Now;
+        while ((app.Switcher.ModuleStack.Length < 1 || cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0]) is null)
+            && Time::Now - tMenu < 10000) {
+            if (_LeaveDialogIsUp()) {
+                warn("TM Control MCP OpenMapInEditor: blocked by dialog after BackToMainMenu (unsaved changes?)");
+                return;
+            }
+            yield();
+        }
         yield();
         app.ManiaTitleControlScriptAPI.EditMap(path, "", "");
     }
@@ -1618,15 +1799,7 @@ namespace TmMcp {
         int waitMs = input.HasKey("waitMs") ? int(input["waitMs"]) : 1500;
         if (waitMs > 0) {
             sleep(Math::Min(waitMs, 10000));
-            auto app = cast<CTrackMania>(GetApp());
-            bool loading = IsLoadingLike(app);
-            output["loading"] = loading;
-            auto dlg = BasicDialogSummary();
-            output["dialog"] = dlg;
-            if (bool(dlg["available"]) &&
-                (int(dlg["dialog"]) != 0 || bool(dlg["hasFrame"]))) {
-                output["warning"] = "A dialog is up; the map switch is stalled until it is answered. Use RespondDialog (save flow: yes -> saveas-setname -> validate) or SaveMapFlow.";
-            }
+            _AttachLeaveDialogWarning(output);
         }
         return MakeSuccess(output);
     }

@@ -57,12 +57,13 @@ def test_wait_until_mode_request_shape():
         }
 
     with mock.patch.object(call_mod, "send_request", side_effect=fake_send):
-        resp = call_mod.wait_until_mode("127.0.0.1", 30006, 5.0, "Editor", 12.0)
+        resp = call_mod.wait_until_mode("127.0.0.1", 30006, 5.0, "Editor", 20.0)
     assert captured["request"]["tool"] == "WaitUntil"
     assert captured["request"]["input"]["condition"] == "mode"
     assert captured["request"]["input"]["equals"] == "Editor"
-    assert captured["request"]["input"]["timeoutMs"] == 12000
-    assert captured["timeout"] >= 14.0
+    assert captured["request"]["input"]["timeoutMs"] == 20000
+    # Socket must outlive the idle budget AND a long in-game load.
+    assert captured["timeout"] >= call_mod.LOADING_WAIT_SOCKET_SECONDS
     assert call_mod.tool_result_output(resp)["ok"] is True
 
 
@@ -98,8 +99,13 @@ def test_wait_timeout_zero_is_an_immediate_check():
 
 
 def test_wait_socket_timeout_respects_server_ceiling():
-    assert call_mod.wait_socket_timeout(5.0, 120_000) == 62.0
+    # Idle WaitUntil budget is 20s by default, but the socket must stay open
+    # through a loading screen (big maps can take many minutes).
+    assert call_mod.wait_socket_timeout(5.0, 20_000) >= call_mod.LOADING_WAIT_SOCKET_SECONDS
+    assert call_mod.wait_socket_timeout(5.0, 120_000) >= call_mod.LOADING_WAIT_SOCKET_SECONDS
     assert call_mod.wait_socket_timeout(5.0, -1) == 5.0
+    # Immediate check (timeoutMs=0) must not jump to the loading-grace socket.
+    assert call_mod.wait_socket_timeout(5.0, 0) == 5.0
 
 
 def test_standalone_wait_prints_wait_response(capsys):
@@ -113,11 +119,12 @@ def test_standalone_wait_prints_wait_response(capsys):
 
 
 def test_wait_timeout_out_of_range_is_rejected(capsys):
-    with mock.patch.object(sys, "argv", ["call.py", "--wait-timeout", "61", "GetMode"]):
+    too_long = str(int(call_mod.MAX_WAIT_TIMEOUT_SECONDS) + 1)
+    with mock.patch.object(sys, "argv", ["call.py", "--wait-timeout", too_long, "GetMode"]):
         with pytest.raises(SystemExit) as exc_info:
             call_mod.main()
     assert exc_info.value.code == 2
-    assert "must be between 0 and 60" in capsys.readouterr().err
+    assert "must be between 0 and" in capsys.readouterr().err
 
 
 def test_collect_host_plugin_logs_filters_compile_lines(tmp_path, monkeypatch):
