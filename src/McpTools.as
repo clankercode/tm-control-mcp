@@ -838,6 +838,7 @@ namespace TmMcp {
             || name == "GetMapInfo"
             || name == "GetMapEnvironment"
             || name == "SaveMapAs"
+            || name == "SaveMapFlow"
             || name == "GetDialog"
             || name == "RespondDialog"
             || name == "GetEditorInterfaceTree"
@@ -967,6 +968,7 @@ namespace TmMcp {
         if (name == "ControlMapObjectives") return ControlMapObjectives(input);
         if (name == "ControlItemEditor") return ControlItemEditor(input);
         if (name == "SaveMapAs") return SaveMapAs(input);
+        if (name == "SaveMapFlow") return SaveMapFlow(input);
         if (name == "UndoRedo") return UndoRedo(input);
         if (name == "GetDialog") return GetDialog(input);
         if (name == "RespondDialog") return RespondDialog(input);
@@ -1117,11 +1119,12 @@ namespace TmMcp {
     Json::Value@ BuildToolList() {
         Json::Value tools = Json::Array();
         tools.Add(MakeTool("GetMode", "Get current game mode: Menu, Editor, Race, or Loading (while the loading screen is displayed). Response always includes a loading bool.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("OpenMapInEditor", "Open a local map file in the editor.", '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}'));
+        tools.Add(MakeTool("OpenMapInEditor", "Open a local map file in the editor. Waits waitMs (default 1500) and reports any blocking dialog (e.g. unsaved-changes prompt) with a warning — answer it via RespondDialog or SaveMapFlow.", '{"type":"object","properties":{"path":{"type":"string"},"waitMs":{"type":"integer"}},"required":["path"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapInfo", "Get current editor map name and counts.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapEnvironment", "Read map collection, decoration, map type/style, mood, and collection-unit metadata.", '{"type":"object","properties":{},"additionalProperties":false}'));
 
         tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx. Response includes dialogPre and a warning when a dialog was up (the save may have been blocked; TM has several dialog systems, so check GetDialog first).", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("SaveMapFlow", "Drive the whole save-dialog chain in one call: answers 'save changes?' (yes, or no when save=false), fills + validates the SaveAs dialog (optional name), answers the overwrite confirm per overwrite (default false -> cancel), waits through WaitMessage, and dismisses the post-save challenge card (dismissCard default true). Returns a step log, final dialog state, and map name/file. Use after OpenMapInEditor warns about a save prompt, or standalone.", '{"type":"object","properties":{"name":{"type":"string"},"save":{"type":"boolean"},"overwrite":{"type":"boolean"},"dismissCard":{"type":"boolean"},"maxIters":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("UndoRedo", "Undo or redo editor actions (CGameEditorPluginMapMapType Undo/Redo). action: undo (default) | redo; count: repeat N times (default 1).", '{"type":"object","properties":{"action":{"type":"string"},"count":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetDialog", "Inspect Trackmania's current dialog state across the dialog systems: BasicDialogs (kind/frame), SaveAs frame filename, and editor interface frames (where e.g. the 'map saved' temp message lives).", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetMenuFrameTree", "Recursive dump of the CurrentFrame on app.ActiveMenus[menuIndex] (default 0) — where modal menu dialogs like the 'map saved' challenge card live. Params: menuIndex, maxDepth (default 8), maxNodes (default 4000).", '{"type":"object","properties":{"menuIndex":{"type":"integer"},"maxDepth":{"type":"integer"},"maxNodes":{"type":"integer"}},"additionalProperties":false}'));
@@ -1469,6 +1472,21 @@ namespace TmMcp {
         Json::Value output = Json::Object();
         output["queued"] = true;
         output["path"] = path;
+        // Give the game a moment to surface a blocking dialog (e.g. unsaved
+        // changes AskYesNo) so the caller learns the switch will stall.
+        int waitMs = input.HasKey("waitMs") ? int(input["waitMs"]) : 1500;
+        if (waitMs > 0) {
+            sleep(Math::Min(waitMs, 10000));
+            auto app = cast<CTrackMania>(GetApp());
+            bool loading = IsLoadingLike(app);
+            output["loading"] = loading;
+            auto dlg = BasicDialogSummary();
+            output["dialog"] = dlg;
+            if (bool(dlg["available"]) &&
+                (int(dlg["dialog"]) != 0 || bool(dlg["hasFrame"]))) {
+                output["warning"] = "A dialog is up; the map switch is stalled until it is answered. Use RespondDialog (save flow: yes -> saveas-setname -> validate) or SaveMapFlow.";
+            }
+        }
         return MakeSuccess(output);
     }
 
@@ -1522,6 +1540,85 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["overwrite"] = overwrite;
         output["mapPre"] = mapPre;
         output["mapPost"] = MapSummary(editor);
+        return MakeSuccess(output);
+    }
+
+    // Drive the whole save-dialog chain in one call: answers "save changes?"
+    // (yes, or no when save=false), fills the SaveAs dialog (name / default
+    // name + validate), answers the overwrite confirm per `overwrite`, waits
+    // through WaitMessage, and dismisses the post-save challenge card.
+    Json::Value@ SaveMapFlow(Json::Value &in input) {
+        bool save = input.HasKey("save") ? bool(input["save"]) : true;
+        bool overwrite = input.HasKey("overwrite") ? bool(input["overwrite"]) : false;
+        bool dismissCard = input.HasKey("dismissCard") ? bool(input["dismissCard"]) : true;
+        string name = input.HasKey("name") ? string(input["name"]) : "";
+        int maxIters = input.HasKey("maxIters") ? int(input["maxIters"]) : 12;
+        Json::Value steps = Json::Array();
+        bool validatedSaveAs = false;
+        bool aborted = false;
+
+        for (int iter = 0; iter < maxIters; iter++) {
+            auto app = cast<CTrackMania>(GetApp());
+            if (app is null || app.BasicDialogs is null) { steps.Add("no app/dialogs; stop"); break; }
+            auto bd = app.BasicDialogs;
+            auto frame = bd.Dialogs is null ? null : bd.Dialogs.CurrentFrame;
+            string frameId = frame is null ? "" : frame.IdName;
+            string menuFrame = "";
+            for (uint i = 0; i < app.ActiveMenus.Length; i++) {
+                auto m = app.ActiveMenus[i];
+                if (m !is null && m.CurrentFrame !is null) menuFrame = m.CurrentFrame.IdName;
+            }
+
+            if (frameId == "FrameAskYesNo") {
+                if (!validatedSaveAs) {
+                    // "save changes?" prompt
+                    if (save) { bd.AskYesNo_Yes(); steps.Add("save-changes? -> yes"); }
+                    else { bd.AskYesNo_No(); steps.Add("save-changes? -> no (discard)"); aborted = true; }
+                } else {
+                    // overwrite confirm after SaveAs validate
+                    if (overwrite) { bd.AskYesNo_Yes(); steps.Add("overwrite? -> yes"); }
+                    else { bd.AskYesNo_Cancel(); steps.Add("overwrite? -> cancel (not overwritten)"); aborted = true; }
+                }
+            } else if (frameId == "FrameDialogSaveAs") {
+                if (name.Length > 0) {
+                    if (_SetSaveAsEntryText(name)) steps.Add("saveas name=" + name);
+                    else steps.Add("saveas setname failed (no entry)");
+                }
+                bd.DialogSaveAs_OnValidate();
+                validatedSaveAs = true;
+                steps.Add("saveas validate");
+            } else if (menuFrame == "FrameDialogEditorChallengeCard") {
+                if (!dismissCard) { steps.Add("challenge card left open (dismissCard=false)"); break; }
+                bool fired = false;
+                for (uint i = 0; i < app.ActiveMenus.Length && !fired; i++) {
+                    auto m = app.ActiveMenus[i];
+                    if (m is null || m.CurrentFrame is null) continue;
+                    auto btn = _DlgFindChildRecursive(m.CurrentFrame, "ButtonSelection", 0);
+                    if (btn is null) @btn = _DlgFindChildRecursive(m.CurrentFrame, "ButtonOk", 0);
+                    if (btn !is null) { btn.OnAction(); fired = true; }
+                }
+                steps.Add(fired ? "challenge card dismissed" : "challenge card dismiss failed");
+            } else if (bd.Dialog == CGameDialogs::EDialog::WaitMessage) {
+                steps.Add("wait: " + string(bd.WaitMessage_LabelText).SubStr(0, 60));
+            } else {
+                steps.Add("idle (frame=" + (frameId.Length > 0 ? frameId : "none")
+                    + ", menu=" + (menuFrame.Length > 0 ? menuFrame : "none") + "); done");
+                break;
+            }
+            sleep(600);
+        }
+
+        Json::Value output = Json::Object();
+        output["steps"] = steps;
+        output["aborted"] = aborted;
+        output["dialog"] = BasicDialogSummary();
+        auto app = cast<CTrackMania>(GetApp());
+        if (app !is null && app.RootMap !is null) {
+            output["mapName"] = app.RootMap.MapName;
+            string fn = "";
+            if (app.RootMap.MapInfo !is null) fn = string(app.RootMap.MapInfo.FileName);
+            output["mapFileName"] = fn;
+        }
         return MakeSuccess(output);
     }
 
