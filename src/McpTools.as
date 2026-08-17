@@ -471,6 +471,15 @@ namespace TmMcp {
         return false;
     }
 
+    string WaypointTypeToStr(int t) {
+        if (t == 0) return "Start";
+        if (t == 1) return "Finish";
+        if (t == 2) return "Checkpoint";
+        if (t == 3) return "StartFinish";
+        if (t == 4) return "Multilap";
+        return "Other" + t;
+    }
+
     Json::Value ModelToJson(CGameCtnBlockInfo@ blockInfo, bool isTerrain) {
         Json::Value obj = Json::Object();
         obj["name"] = blockInfo.Name;
@@ -636,6 +645,7 @@ namespace TmMcp {
             || name == "GetBlockAt"
             || name == "GetItems"
             || name == "GetRecentItems"
+            || name == "GetWaypoints"
             || name == "GetInventorySummary"
             || name == "BrowseInventoryTree"
             || name == "FindBlockModels"
@@ -763,6 +773,7 @@ namespace TmMcp {
         if (name == "GetBlockAt") return GetBlockAt(input);
         if (name == "GetItems") return GetItems(input);
         if (name == "GetRecentItems") return GetRecentItems(input);
+        if (name == "GetWaypoints") return GetWaypoints(input);
         if (name == "GetInventorySummary") return GetInventorySummary(input);
         if (name == "FindInventory") return FindInventory(input);
         if (name == "RefreshInventory") return RefreshInventory(input);
@@ -911,6 +922,7 @@ namespace TmMcp {
         tools.Add(MakeTool("GetBlockAt", "Get block info at exact grid coordinate.", '{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"}},"required":["x","y","z"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetItems", "Get anchored items near a world position, or all items up to limit if no position is provided.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"radius":{"type":"number"},"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetRecentItems", "Get the last N anchored items in map item order.", '{"type":"object","properties":{"count":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetWaypoints", "List every waypoint (start/finish/checkpoint/multilap) in the map: blocks and items with their type, name, index, position (grid coord + dir for blocks, world pos + rot for items), linkOrder and tag (linked checkpoints). Lightweight enumeration only — no spawn/fall analysis (see tm-mcp-pack-epp.CheckCheckpoints for that).", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetInventorySummary", "Get E++ inventory cache counts and scan status.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("BrowseInventoryTree", "Read-only browse of the editor inventory root/directories. Supports root, rootIndex, path, depth, limit, query.", '{"type":"object","properties":{"root":{"type":"string"},"rootIndex":{"type":"integer"},"path":{"type":"string"},"depth":{"type":"integer"},"limit":{"type":"integer"},"query":{"type":"string"},"includeArticles":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("FindBlockModels", "Search loaded editor block models.", '{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"},"includeTerrain":{"type":"boolean"},"terrainOnly":{"type":"boolean"}},"additionalProperties":false}'));
@@ -2031,6 +2043,65 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["items"] = items;
         output["count"] = int(items.Length);
         output["total"] = total;
+        return MakeSuccess(output);
+    }
+
+    Json::Value@ GetWaypoints(Json::Value &in input) {
+        auto editor = GetEditor();
+        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
+        auto map = editor.Challenge;
+
+        Json::Value wps = Json::Array();
+        uint nBlocks = 0, nItems = 0;
+
+        // ---- waypoint blocks (start/finish/checkpoint/multilap) ----
+        for (uint i = 0; i < map.Blocks.Length; i++) {
+            auto blk = map.Blocks[i];
+            if (blk is null || blk.WaypointSpecialProperty is null) continue;
+            auto bi = blk.BlockInfo;
+            if (bi is null) continue;
+            int wt = int(bi.WayPointType);
+            if (wt < 0 || wt > 4) continue;
+            nBlocks++;
+            Json::Value row = Json::Object();
+            row["kind"] = "block";
+            row["wpType"] = WaypointTypeToStr(wt);
+            row["name"] = bi.Name;
+            row["idName"] = bi.IdName;
+            row["index"] = int(i);
+            row["coord"] = CoordToJson(blk.Coord);
+            row["dir"] = int(blk.BlockDir);
+            row["linkOrder"] = int(blk.WaypointSpecialProperty.Order);
+            row["tag"] = blk.WaypointSpecialProperty.Tag;
+            wps.Add(row);
+        }
+
+        // ---- waypoint items ----
+        for (uint i = 0; i < map.AnchoredObjects.Length; i++) {
+            auto it = map.AnchoredObjects[i];
+            if (it is null || it.WaypointSpecialProperty is null) continue;
+            auto im = it.ItemModel;
+            if (im is null) continue;
+            int wt = int(im.WaypointType);
+            nItems++;
+            Json::Value row = Json::Object();
+            row["kind"] = "item";
+            row["wpType"] = WaypointTypeToStr(wt);
+            row["name"] = im.Name;
+            row["idName"] = im.IdName;
+            row["index"] = int(i);
+            row["pos"] = Vec3ToJson(it.AbsolutePositionInMap);
+            row["rot"] = Vec3ToJson(vec3(it.Pitch, it.Yaw, it.Roll));
+            row["linkOrder"] = int(it.WaypointSpecialProperty.Order);
+            row["tag"] = it.WaypointSpecialProperty.Tag;
+            wps.Add(row);
+        }
+
+        Json::Value output = Json::Object();
+        output["total"] = int(wps.Length);
+        output["blockWaypoints"] = int(nBlocks);
+        output["itemWaypoints"] = int(nItems);
+        output["waypoints"] = wps;
         return MakeSuccess(output);
     }
 
