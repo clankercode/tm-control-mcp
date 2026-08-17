@@ -210,6 +210,20 @@ namespace TmMcp {
         return null;
     }
 
+    CControlBase@ _DlgFindChildRecursive(CControlBase@ c, const string &in name, int depth) {
+        if (c is null || depth > 12) return null;
+        MwId nameId = MwId();
+        nameId.SetName(name);
+        if (c.Id.Value == nameId.Value) return c;
+        auto cont = cast<CControlContainer>(c);
+        if (cont is null) return null;
+        for (uint i = 0; i < cont.Childs.Length; i++) {
+            auto found = _DlgFindChildRecursive(cont.Childs[i], name, depth + 1);
+            if (found !is null) return found;
+        }
+        return null;
+    }
+
     CControlBase@ _DlgFollowIdPath(CControlContainer@ control, string[]@ path) {
         for (uint i = 0; i < path.Length; i++) {
             auto child = _DlgFindChild(control, path[i]);
@@ -338,6 +352,30 @@ namespace TmMcp {
         auto d = cast<CGameDialogs>(label.Nod);
         if (d !is null) return string(d.String);
         return string(label.Label);
+    }
+
+    Json::Value@ GetMenuFrameTree(Json::Value &in input) {
+        auto app = cast<CTrackMania>(GetApp());
+        if (app is null) return MakeError("no app");
+        int menuIndex = input.HasKey("menuIndex") ? int(input["menuIndex"]) : 0;
+        if (menuIndex < 0 || menuIndex >= int(app.ActiveMenus.Length)) {
+            return MakeError("menuIndex out of range (ActiveMenus.Length=" + app.ActiveMenus.Length + ")");
+        }
+        auto menu = app.ActiveMenus[menuIndex];
+        if (menu is null || menu.CurrentFrame is null) return MakeError("no CurrentFrame on ActiveMenus[" + menuIndex + "]");
+        int maxDepth = input.HasKey("maxDepth") ? int(input["maxDepth"]) : 8;
+        int maxNodes = input.HasKey("maxNodes") ? int(input["maxNodes"]) : 4000;
+        auto count = _Counter();
+        Json::Value output = Json::Object();
+        output["frameIdName"] = menu.CurrentFrame.IdName;
+        output["menuFramesLen"] = int(menu.Frames.Length);
+        output["mainFrameId"] = menu.MainFrame is null ? "" : menu.MainFrame.IdName;
+        output["enableFrameStack"] = menu.EnableFrameStack;
+        output["menuOrder"] = int(menu.MenuOrder);
+        output["tree"] = _EditorControlTreeToJson(menu.CurrentFrame, 0, maxDepth, count, maxNodes);
+        output["nodeCount"] = count.n;
+        output["truncated"] = count.n >= maxNodes;
+        return MakeSuccess(output);
     }
 
     Json::Value@ GetEditorInterfaceTree(Json::Value &in input) {
@@ -803,6 +841,7 @@ namespace TmMcp {
             || name == "GetDialog"
             || name == "RespondDialog"
             || name == "GetEditorInterfaceTree"
+            || name == "GetMenuFrameTree"
             || name == "ControlValidation"
             || name == "ControlSelection"
             || name == "GetCursor"
@@ -932,6 +971,7 @@ namespace TmMcp {
         if (name == "GetDialog") return GetDialog(input);
         if (name == "RespondDialog") return RespondDialog(input);
         if (name == "GetEditorInterfaceTree") return GetEditorInterfaceTree(input);
+        if (name == "GetMenuFrameTree") return GetMenuFrameTree(input);
         if (name == "ControlValidation") return ControlValidation(input);
         if (name == "ControlSelection") return ControlSelection(input);
         if (name == "GetCursor") return GetCursor(input);
@@ -1084,8 +1124,9 @@ namespace TmMcp {
         tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx. Response includes dialogPre and a warning when a dialog was up (the save may have been blocked; TM has several dialog systems, so check GetDialog first).", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("UndoRedo", "Undo or redo editor actions (CGameEditorPluginMapMapType Undo/Redo). action: undo (default) | redo; count: repeat N times (default 1).", '{"type":"object","properties":{"action":{"type":"string"},"count":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetDialog", "Inspect Trackmania's current dialog state across the dialog systems: BasicDialogs (kind/frame), SaveAs frame filename, and editor interface frames (where e.g. the 'map saved' temp message lives).", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetMenuFrameTree", "Recursive dump of the CurrentFrame on app.ActiveMenus[menuIndex] (default 0) — where modal menu dialogs like the 'map saved' challenge card live. Params: menuIndex, maxDepth (default 8), maxNodes (default 4000).", '{"type":"object","properties":{"menuIndex":{"type":"integer"},"maxDepth":{"type":"integer"},"maxNodes":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetEditorInterfaceTree", "Recursive dump of the editor interface control tree (EditorInterface.InterfaceRoot) with per-node id, class, and children. Expensive; use maxDepth (default 6), maxNodes (default 4000), and optional rootId to dump a subtree (e.g. FrameTempMsg).", '{"type":"object","properties":{"maxDepth":{"type":"integer"},"maxNodes":{"type":"integer"},"rootId":{"type":"string"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("RespondDialog", "Respond to Trackmania dialogs (BasicDialogs + SaveAs frame). action: yes, no, cancel, ok, wait-ok, validate/saveas-validate, saveas-cancel, saveas-up, saveas-setname (with name), hide. By default yields one frame and includes an 'after' summary of the next dialog in the chain; set disable1FrameYieldAndWarning=true to return immediately.", '{"type":"object","properties":{"action":{"type":"string"},"name":{"type":"string"},"disable1FrameYieldAndWarning":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
+        tools.Add(MakeTool("RespondDialog", "Respond to Trackmania dialogs (BasicDialogs + SaveAs frame). action: yes, no, cancel, ok, wait-ok, validate/saveas-validate, saveas-cancel, saveas-up, saveas-setname (with name), hide, frame-ok (dismiss modal menu dialog like the map-saved challenge card via its ButtonOk). By default yields one frame and includes an 'after' summary of the next dialog in the chain; set disable1FrameYieldAndWarning=true to return immediately.", '{"type":"object","properties":{"action":{"type":"string"},"name":{"type":"string"},"disable1FrameYieldAndWarning":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
         tools.Add(MakeTool("ControlValidation", "Inspect or trigger map validation/test/playground controls. Actions: status, validate, requestEnterPlayground, requestLeavePlayground, testFromStart, testFromCoord.", '{"type":"object","properties":{"action":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlSelection", "Inspect or control editor copy-paste/custom selection. Actions: status, showCustom, hideCustom, resetSelection, selectAll, addSelection, copy, cut, remove, symmetrize.", '{"type":"object","properties":{"action":{"type":"string"},"x1":{"type":"integer"},"y1":{"type":"integer"},"z1":{"type":"integer"},"x2":{"type":"integer"},"y2":{"type":"integer"},"z2":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetCursor", "Get editor cursor coordinate and selected block.", '{"type":"object","properties":{},"additionalProperties":false}'));
@@ -1449,6 +1490,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         string gamePathHint = IO::FromUserGameFolder("Maps/" + fileName);
 
         Json::Value dialogPre = BasicDialogSummary();
+        dialogPre["activeMenus"] = ActiveMenusFramesSummary();
         Json::Value mapPre = MapSummary(editor);
         try {
             editor.PluginMapType.SaveMap(wstring(fileName));
@@ -1458,11 +1500,17 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
 
         Json::Value output = Json::Object();
         output["dialogPre"] = dialogPre;
-        if (bool(dialogPre["available"]) &&
-            (int(dialogPre["dialog"]) != 0 || bool(dialogPre["hasFrame"]))) {
+        string menuFrame = "";
+        auto am = dialogPre["activeMenus"];
+        for (uint i = 0; i < am.Length; i++) {
+            if (am[i].HasKey("frameIdName")) menuFrame = string(am[i]["frameIdName"]);
+        }
+        if ((bool(dialogPre["available"]) &&
+            (int(dialogPre["dialog"]) != 0 || bool(dialogPre["hasFrame"]))) || menuFrame.Length > 0) {
             output["warning"] = "A dialog was up when SaveMap was called (kind="
                 + string(dialogPre["dialogKind"])
                 + (dialogPre.HasKey("frameIdName") ? ", frame=" + string(dialogPre["frameIdName"]) : "")
+                + (menuFrame.Length > 0 ? ", menuFrame=" + menuFrame : "")
                 + "); the save may have been blocked or queued behind it. Call GetDialog/RespondDialog, then re-save and compare file timestamps.";
         }
         output["saved"] = true;
@@ -1499,10 +1547,32 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         return MakeSuccess(output);
     }
 
+    // Menu-system frames (app.ActiveMenus[i].CurrentFrame) — yet another dialog
+    // channel; e.g. the "map saved" prompt shows up here.
+    Json::Value ActiveMenusFramesSummary() {
+        Json::Value arr = Json::Array();
+        auto app = cast<CTrackMania>(GetApp());
+        if (app is null) return arr;
+        for (uint i = 0; i < app.ActiveMenus.Length; i++) {
+            auto menu = app.ActiveMenus[i];
+            if (menu is null) continue;
+            auto cf = menu.CurrentFrame;
+            Json::Value m = Json::Object();
+            m["index"] = int(i);
+            if (cf !is null) {
+                m["frameIdName"] = cf.IdName;
+                m["frameClass"] = Reflection::TypeOf(cf) is null ? "?" : string(Reflection::TypeOf(cf).Name);
+            }
+            arr.Add(m);
+        }
+        return arr;
+    }
+
     Json::Value@ GetDialog(Json::Value &in input) {
         auto summary = BasicDialogSummary();
         summary["editorFrames"] = EditorInterfaceFramesSummary();
         summary["tempMessage"] = _GetEditorTempMessage();
+        summary["activeMenus"] = ActiveMenusFramesSummary();
         return MakeSuccess(summary);
     }
 
@@ -1537,8 +1607,31 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
                 }
             } else if (action == "hide") {
                 app.BasicDialogs.HideDialogs();
+            } else if (action == "frame-ok" || action == "frame-cancel") {
+                // Dismiss a modal menu dialog (e.g. FrameDialogEditorChallengeCard,
+                // the 'map saved' card) via the menus dialog validate/cancel hooks.
+                bool fired = false;
+                for (uint i = 0; i < app.ActiveMenus.Length && !fired; i++) {
+                    auto menu = app.ActiveMenus[i];
+                    if (menu is null || menu.CurrentFrame is null) continue;
+                    if (action == "frame-cancel") {
+                        if (!menu.EnableFrameStack) menu.EnableFrameStack = true;
+                        menu.Back();
+                        fired = true;
+                        continue;
+                    }
+                    auto btn = _DlgFindChildRecursive(menu.CurrentFrame, "ButtonSelection", 0);
+                    if (btn is null) {
+                        @btn = _DlgFindChildRecursive(menu.CurrentFrame, "ButtonOk", 0);
+                    }
+                    if (btn !is null) {
+                        btn.OnAction();
+                        fired = true;
+                    }
+                }
+                if (!fired) return MakeError("no ButtonOk under any ActiveMenus CurrentFrame");
             } else {
-                return MakeError("action must be one of: yes, no, cancel, ok, wait-ok, validate, saveas-cancel, saveas-up, saveas-setname, hide");
+                return MakeError("action must be one of: yes, no, cancel, ok, wait-ok, validate, saveas-cancel, saveas-up, saveas-setname, hide, frame-ok, frame-cancel");
             }
         } catch {
             return MakeError("dialog action failed: " + getExceptionInfo());
