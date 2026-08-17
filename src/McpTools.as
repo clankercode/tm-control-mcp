@@ -860,7 +860,35 @@ namespace TmMcp {
         return MakeError("unknown tool: " + name, "unknown_tool", false, "", "");
     }
 
+    // Tool-list cache. GetToolList() rebuilt ~90 tool schemas (a Json::Parse
+    // each) on every call, and the tm-agent chat UI calls it twice per frame
+    // (~2.3–3.4ms/frame — most of the render budget). The built-in tools are
+    // static; only the appended pack tools vary with g_Packs. We cache the
+    // fully-built array and rebuild only when the pack registry mutates
+    // (g_ToolListVersion is bumped on register/unregister/sweep).
+    Json::Value@ g_ToolListCache = null;
+    uint g_ToolListBuiltVersion = 0;
+    uint g_ToolListVersion = 1;
+    // Diagnostics: confirm the cache is actually hit at runtime (vs. the
+    // version being bumped unexpectedly). Exposed via the MCP GetResult-free
+    // debug path / readable in the log.
+    uint g_ToolListHits = 0;
+    uint g_ToolListMisses = 0;
+    void InvalidateToolList() { g_ToolListVersion++; }
+
     Json::Value@ GetToolList() {
+        if (g_ToolListCache !is null && g_ToolListBuiltVersion == g_ToolListVersion) {
+            g_ToolListHits++;
+            return g_ToolListCache;
+        }
+        g_ToolListMisses++;
+        Json::Value tools = BuildToolList();
+        @g_ToolListCache = tools;
+        g_ToolListBuiltVersion = g_ToolListVersion;
+        return g_ToolListCache;
+    }
+
+    Json::Value@ BuildToolList() {
         Json::Value tools = Json::Array();
         tools.Add(MakeTool("GetMode", "Get current game mode.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("OpenMapInEditor", "Open a local map file in the editor.", '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}'));

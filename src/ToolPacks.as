@@ -42,6 +42,7 @@ namespace TmMcp {
         }
         trace("TM Control MCP pack dropped " + pack.packId);
         g_Packs.RemoveAt(i);
+        InvalidateToolList();
     }
 
     void SweepDeadPacks() {
@@ -139,6 +140,7 @@ namespace TmMcp {
         }
 
         g_Packs.InsertLast(pack);
+        InvalidateToolList();
         trace("TM Control MCP pack registered " + packId + " tools=" + pack.toolNames.Length);
         auto output = Json::Object();
         output["pack"] = packId;

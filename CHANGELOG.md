@@ -7,6 +7,10 @@ Versions follow `info.toml` `[meta] version`.
 
 ## [Unreleased]
 
+### Changed
+
+- `GetToolList()` now caches the built tool array and rebuilds only when a pack is registered, unregistered, or swept. Callers (e.g. tm-agent's chat UI) were paying ~1–2 ms per call to re-parse ~90 schemas every frame.
+
 ## [0.4.0] — 2026-08-16
 
 ### Changed
