@@ -400,4 +400,156 @@ return 0;
         return MakeSuccess(output);
     }
 
+    Json::Value NamedTypeOffset(const Reflection::MwClassInfo@ ty, const string &in memberName) {
+        Json::Value row = Json::Object();
+        row["name"] = memberName;
+        if (ty is null) {
+            row["found"] = false;
+            return row;
+        }
+        auto mem = ty.GetMember(memberName);
+        if (mem is null) {
+            row["found"] = false;
+            return row;
+        }
+        row["found"] = true;
+        row["offset"] = int(mem.Offset);
+        return row;
+    }
+
+    Json::Value FastArraySlot(CGameCtnChallenge@ map, uint16 off, int rel, uint scriptAoLen) {
+        Json::Value slot = Json::Object();
+        slot["rel"] = rel;
+        slot["offset"] = int(off);
+        if (rel == 0) slot["claimed"] = "AnchoredObjects";
+        else if (rel == 0x20) slot["claimed"] = "O_MAP_MACROBLOCK_INFOS";
+        uint64 ptr = Dev::GetOffsetUint64(map, off);
+        uint len = Dev::GetOffsetUint32(map, off + 0x8);
+        uint cap = Dev::GetOffsetUint32(map, off + 0xC);
+        slot["ptr"] = PtrToHex(ptr);
+        slot["len"] = int(len);
+        slot["cap"] = int(cap);
+        slot["ptrProbe"] = ProbePointer(ptr);
+        if (rel == 0) {
+            slot["scriptAnchoredLength"] = int(scriptAoLen);
+            slot["lenMatchesScript"] = len == scriptAoLen;
+        }
+        bool plausible = ptr != 0 && len > 0 && len < 10000 && cap >= len;
+        slot["plausibleFastArray"] = plausible;
+        if (plausible && bool(slot["ptrProbe"]["readable"])) {
+            Json::Value els = Json::Array();
+            uint take = Math::Min(len, 8);
+            for (uint i = 0; i < take; i++) {
+                Json::Value el = Json::Object();
+                try {
+                    el["instId"] = Dev::SafeReadInt32(ptr + i * 8);
+                    el["mwId"] = int(Dev::SafeReadUInt32(ptr + i * 8 + 4));
+                } catch {
+                    el["error"] = getExceptionInfo();
+                }
+                els.Add(el);
+            }
+            slot["firstEntries"] = els;
+        }
+        return slot;
+    }
+
+    Json::Value@ RunDevInspectChallengeOffsets(Json::Value &in input) {
+        auto editor = GetEditor();
+        if (editor is null || editor.Challenge is null) return MakeError("editor not available");
+        auto map = editor.Challenge;
+        auto ty = Reflection::GetType("CGameCtnChallenge");
+        if (ty is null) return MakeError("no CGameCtnChallenge reflection");
+
+        Json::Value named = Json::Object();
+        const string[] names = {
+            "Blocks", "BakedBlocks", "AnchoredObjects",
+            "ChallengeParameters", "Size", "ScriptMetadata", "ClipAmbiance"
+        };
+        uint16 ao = 0;
+        uint16 cp = 0;
+        for (uint i = 0; i < names.Length; i++) {
+            Json::Value row = NamedTypeOffset(ty, names[i]);
+            named[names[i]] = row;
+            if (bool(row["found"])) {
+                if (names[i] == "AnchoredObjects") ao = uint16(int(row["offset"]));
+                if (names[i] == "ChallengeParameters") cp = uint16(int(row["offset"]));
+            }
+        }
+
+        Json::Value between = Json::Array();
+        for (uint i = 0; i < ty.Members.Length; i++) {
+            auto mem = ty.Members[i];
+            if (ao == 0) break;
+            if (mem.Offset < ao) continue;
+            if (cp != 0 && mem.Offset > cp) continue;
+            Json::Value row = Json::Object();
+            row["name"] = mem.Name;
+            row["offset"] = int(mem.Offset);
+            between.Add(row);
+        }
+
+        uint scriptAoLen = map.AnchoredObjects.Length;
+        Json::Value slots = Json::Array();
+        Json::Value words = Json::Object();
+        if (ao != 0) {
+            int startRel = -0x20;
+            int endRel = 0x80;
+            for (int rel = startRel; rel <= endRel; rel += 8) {
+                uint16 off = uint16(int(ao) + rel);
+                slots.Add(FastArraySlot(map, off, rel, scriptAoLen));
+                words[Text::Format("0x%03x", int(off))] = Text::Format("0x%08x", Dev::GetOffsetUint32(map, off));
+            }
+        }
+
+        Json::Value output = Json::Object();
+        output["namedOffsets"] = named;
+        output["expectedMacroblockInfos"] = int(ao) + 0x20;
+        output["commentedHistorical"] = 0x2c8;
+        output["gapAoToParams"] = int(cp) - int(ao);
+        output["membersFromAoToParams"] = between;
+        output["fastArraysFromAo"] = slots;
+        output["u32FromAoWindow"] = words;
+        output["scriptAnchoredObjects"] = int(scriptAoLen);
+        output["scriptBlocks"] = int(map.Blocks.Length);
+        if (editor.PluginMapType !is null) {
+            output["pmtMacroblockInstances"] = int(editor.PluginMapType.MacroblockInstances.Length);
+        }
+
+        Json::Value found = Json::Array();
+        for (uint off = 0x200; off <= 0x500; off += 8) {
+            uint64 ptr = Dev::GetOffsetUint64(map, off);
+            uint len = Dev::GetOffsetUint32(map, off + 0x8);
+            uint cap = Dev::GetOffsetUint32(map, off + 0xC);
+            bool plausible = ptr != 0 && len > 0 && len < 10000 && cap >= len;
+            bool emptyAlloc = ptr != 0 && len == 0 && cap > 0 && cap < 10000;
+            if (!plausible && !emptyAlloc) continue;
+            Json::Value row = Json::Object();
+            row["offset"] = int(off);
+            row["ptr"] = PtrToHex(ptr);
+            row["len"] = int(len);
+            row["cap"] = int(cap);
+            row["kind"] = plausible ? "populated" : "emptyAlloc";
+            row["ptrReadable"] = bool(ProbePointer(ptr)["readable"]);
+            if (plausible && bool(row["ptrReadable"]) && len <= 32) {
+                Json::Value els = Json::Array();
+                uint take = Math::Min(len, 4);
+                for (uint i = 0; i < take; i++) {
+                    Json::Value el = Json::Object();
+                    try {
+                        el["i32_0"] = Dev::SafeReadInt32(ptr + i * 8);
+                        el["u32_4"] = int(Dev::SafeReadUInt32(ptr + i * 8 + 4));
+                    } catch {
+                        el["error"] = getExceptionInfo();
+                    }
+                    els.Add(el);
+                }
+                row["first8"] = els;
+            }
+            found.Add(row);
+        }
+        output["plausibleFastArrays_0x200_0x500"] = found;
+        return MakeSuccess(output);
+    }
+
 }

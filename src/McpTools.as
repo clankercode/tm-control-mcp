@@ -653,6 +653,7 @@ namespace TmMcp {
             || name == "RunComputeItemsDiagnostic"
             || name == "DevSafeRead"
             || name == "DevGetPointers"
+            || name == "DevInspectChallengeOffsets"
             || name == "DevComputeItemsPointers"
 #endif
             || name == "CanPlaceBlock"
@@ -756,6 +757,7 @@ namespace TmMcp {
         if (name == "ControlMapObjectives") return ControlMapObjectives(input);
         if (name == "ControlItemEditor") return ControlItemEditor(input);
         if (name == "SaveMapAs") return SaveMapAs(input);
+        if (name == "UndoRedo") return UndoRedo(input);
         if (name == "GetDialog") return GetDialog(input);
         if (name == "RespondDialog") return RespondDialog(input);
         if (name == "ControlValidation") return ControlValidation(input);
@@ -784,6 +786,7 @@ namespace TmMcp {
 #if DEV
         if (name == "DevSafeRead") return RunDevSafeRead(input);
         if (name == "DevGetPointers") return RunDevGetPointers(input);
+        if (name == "DevInspectChallengeOffsets") return RunDevInspectChallengeOffsets(input);
 #endif
         if (name == "CreateNamedMacroblock") return CreateNamedMacroblock(input);
         if (name == "GetNamedMacroblock") return GetNamedMacroblockTool(input);
@@ -907,6 +910,7 @@ namespace TmMcp {
         tools.Add(MakeTool("GetMapEnvironment", "Read map collection, decoration, map type/style, mood, and collection-unit metadata.", '{"type":"object","properties":{},"additionalProperties":false}'));
 
         tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx.", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("UndoRedo", "Undo or redo editor actions (CGameEditorPluginMapMapType Undo/Redo). action: undo (default) | redo; count: repeat N times (default 1).", '{"type":"object","properties":{"action":{"type":"string"},"count":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetDialog", "Inspect Trackmania's current BasicDialogs state and active dialog frame.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("RespondDialog", "Respond to Trackmania BasicDialogs. action: yes, no, cancel, ok, validate, hide.", '{"type":"object","properties":{"action":{"type":"string"}},"required":["action"],"additionalProperties":false}'));
         tools.Add(MakeTool("ControlValidation", "Inspect or trigger map validation/test/playground controls. Actions: status, validate, requestEnterPlayground, requestLeavePlayground, testFromStart, testFromCoord.", '{"type":"object","properties":{"action":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"}},"additionalProperties":false}'));
@@ -930,6 +934,7 @@ namespace TmMcp {
         tools.Add(MakeTool("RunComputeItemsDiagnostic", "DEV diagnostic: create a CGameEditorMapMacroBlockInstance at the given grid coord for a macroblock file, call ComputeItemsForMacroblockInstance, and report wrapper pointers + live AnchoredObject matches. Optional testSkin={itemIndex,bgSkin,fgSkin} tries SetItemSkin(s) on the wrapper and reports pre/post skin persistence.", '{"type":"object","properties":{"mbPath":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"force":{"type":"boolean"},"testSkin":{"type":"object","properties":{"itemIndex":{"type":"integer"},"bgSkin":{"type":"string"},"fgSkin":{"type":"string"}}}},"required":["mbPath","x","y","z"],"additionalProperties":false}'));
         tools.Add(MakeTool("DevSafeRead", "Read memory at an arbitrary address using Dev::SafeRead*. ptr accepts hex string \"0x...\" or integer. Optional offset/offsets (array of ints) are summed. kind: u8|u16|u32|u64|i8|i16|i32|i64|f32|vec2|vec3|vec4|cstr|bytes. For cstr/bytes, len caps bytes read (default 256/64, bytes max 4096). Reports probe result, value, and readError on faults.", '{"type":"object","properties":{"ptr":{"type":["string","integer"]},"offset":{"type":"integer"},"offsets":{"type":"array","items":{"type":"integer"}},"kind":{"type":"string"},"len":{"type":"integer"}},"required":["ptr"],"additionalProperties":false}'));
         tools.Add(MakeTool("DevGetPointers", "Return raw pointers for the current editor, PluginMapType, Challenge, Cursor, and App, with per-nod vtable/refcount peeks. Optional listAnchoredObjects, listBlocks, and listPmtItems include map items/blocks/pmt.Items pointers (capped by *Limit params, default 20). listPmtItems exposes healthy CGameCtnEditorScriptAnchoredObject wrappers for memory comparison against compute-path wrappers.", '{"type":"object","properties":{"listAnchoredObjects":{"type":"boolean"},"anchoredObjectsLimit":{"type":"integer"},"listBlocks":{"type":"boolean"},"blocksLimit":{"type":"integer"},"listPmtItems":{"type":"boolean"},"pmtItemsLimit":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("DevInspectChallengeOffsets", "DEV: live CGameCtnChallenge reflection offsets plus FastArray headers at AnchoredObjects+0x00..+0x40. Used to check whether O_MAP_MACROBLOCK_INFOS (AnchoredObjects+0x20) still points at the {InstId,MwId} instance buffer.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("DevComputeItemsPointers", "Like RunComputeItemsDiagnostic but NEVER accesses wrapper fields (Position/ItemModel). Returns raw pointers + vtable/refcount peeks for each MacroblockInstanceItemsResults entry so you can inspect layout via DevSafeRead without crashing.", '{"type":"object","properties":{"mbPath":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"force":{"type":"boolean"}},"required":["mbPath","x","y","z"],"additionalProperties":false}'));
 #endif
         tools.Add(MakeTool("CanPlaceBlock", "Check whether a normal grid/terrain block can be placed without mutating the map.", '{"type":"object","properties":{"blockName":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"allowDestruction":{"type":"boolean"}},"required":["blockName","x","y","z"],"additionalProperties":false}'));
@@ -1271,6 +1276,28 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["overwrite"] = overwrite;
         output["mapPre"] = mapPre;
         output["mapPost"] = MapSummary(editor);
+        return MakeSuccess(output);
+    }
+
+    Json::Value@ UndoRedo(Json::Value &in input) {
+        auto editor = GetEditor();
+        if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
+        string action = input.HasKey("action") ? string(input["action"]).ToLower() : "undo";
+        if (action != "undo" && action != "redo") return MakeError("action must be undo|redo");
+        int count = input.HasKey("count") ? int(input["count"]) : 1;
+        int done = 0;
+        try {
+            for (int i = 0; i < count; i++) {
+                if (action == "undo") editor.PluginMapType.Undo();
+                else editor.PluginMapType.Redo();
+                done++;
+            }
+        } catch {
+            return MakeError(action + " failed after " + done + " call(s): " + getExceptionInfo());
+        }
+        Json::Value output = Json::Object();
+        output["action"] = action;
+        output["count"] = done;
         return MakeSuccess(output);
     }
 
