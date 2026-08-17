@@ -195,6 +195,173 @@ namespace TmMcp {
     // pointing from the target back toward the current camera so the transition animates
     // naturally from the user's viewpoint.
 
+    // --- Dialog frame helpers (TM shows dialogs through several systems; the
+    // BasicDialogs CurrentFrame covers AskYesNo/WaitMessage/SaveAs frames) ---
+
+    CControlBase@ _DlgFindChild(CControlContainer@ control, const string &in name) {
+        if (control is null) return null;
+        MwId nameId = MwId();
+        nameId.SetName(name);
+        uint nameVal = nameId.Value;
+        if (control.Id.Value == nameVal) return control;
+        for (uint i = 0; i < control.Childs.Length; i++) {
+            if (control.Childs[i].Id.Value == nameVal) return control.Childs[i];
+        }
+        return null;
+    }
+
+    CControlBase@ _DlgFollowIdPath(CControlContainer@ control, string[]@ path) {
+        for (uint i = 0; i < path.Length; i++) {
+            auto child = _DlgFindChild(control, path[i]);
+            if (child is null) return null;
+            if (i == path.Length - 1) return child;
+            @control = cast<CControlContainer>(child);
+        }
+        return null;
+    }
+
+    CGameMenuFrame@ _GetDialogSaveAsFrame() {
+        auto app = cast<CTrackMania>(GetApp());
+        if (app is null || app.BasicDialogs is null || app.BasicDialogs.Dialogs is null) return null;
+        auto cf = app.BasicDialogs.Dialogs.CurrentFrame;
+        if (cf !is null && cf.IdName == "FrameDialogSaveAs") return cf;
+        return null;
+    }
+
+    string _GetSaveAsEntryText() {
+        auto frame = _GetDialogSaveAsFrame();
+        if (frame is null) return "";
+        auto entry = cast<CControlEntry>(_DlgFollowIdPath(frame, {"FrameContent", "FrameSave", "EntryFileName"}));
+        if (entry is null) return "";
+        auto d = cast<CGameDialogs>(entry.Nod);
+        return d is null ? "" : string(d.String);
+    }
+
+    bool _SetSaveAsEntryText(const string &in name) {
+        auto frame = _GetDialogSaveAsFrame();
+        if (frame is null) return false;
+        auto entry = cast<CControlEntry>(_DlgFollowIdPath(frame, {"FrameContent", "FrameSave", "EntryFileName"}));
+        if (entry is null) return false;
+        auto d = cast<CGameDialogs>(entry.Nod);
+        if (d is null) return false;
+        d.String = name;
+        return true;
+    }
+
+    // True while a load/transition is in progress. TM has several dialog systems;
+    // map loads surface either via LoadProgress (play loads) or a BasicDialogs
+    // WaitMessage ("Updating data..."), so check both.
+    bool IsLoadingLike(CTrackMania@ app) {
+        if (app is null) return false;
+        auto lp = app.LoadProgress;
+        if (lp !is null && lp.State != NGameLoadProgress::EState::Disabled) return true;
+        auto bd = app.BasicDialogs;
+        if (bd !is null && bd.Dialog == CGameDialogs::EDialog::WaitMessage) return true;
+        return false;
+    }
+
+    // The editor's own interface frames (separate from BasicDialogs) — this is
+    // where e.g. the "map saved" notification lives.
+    Json::Value EditorInterfaceFramesSummary() {
+        Json::Value frames = Json::Array();
+        auto app = cast<CTrackMania>(GetApp());
+        auto editor = app is null ? null : cast<CGameCtnEditorFree>(app.Editor);
+        if (editor is null) {
+            Json::Value d = Json::Object();
+            d["idName"] = "(no editor)";
+            frames.Add(d);
+            return frames;
+        }
+        if (editor.EditorInterface is null || editor.EditorInterface.InterfaceRoot is null) {
+            Json::Value d = Json::Object();
+            d["idName"] = "(no interface root)";
+            frames.Add(d);
+            return frames;
+        }
+        auto root = editor.EditorInterface.InterfaceRoot;
+        for (uint i = 0; i < root.Childs.Length; i++) {
+            auto c = root.Childs[i];
+            if (c is null) continue;
+            Json::Value f = Json::Object();
+            f["idName"] = c.Id.GetName();
+            frames.Add(f);
+        }
+        return frames;
+    }
+
+    // Recursive dump of the editor interface control tree (expensive; debug use).
+    Json::Value _EditorControlTreeToJson(CControlBase@ c, int depth, int maxDepth, _Counter@ count, int maxNodes) {
+        Json::Value o = Json::Object();
+        count.n++;
+        o["id"] = c.Id.GetName();
+        auto t = Reflection::TypeOf(c);
+        o["class"] = t is null ? "?" : string(t.Name);
+        auto label = cast<CControlLabel>(c);
+        if (label !is null) {
+            o["text"] = string(label.Label);
+            auto d = cast<CGameDialogs>(label.Nod);
+            if (d !is null) o["nodText"] = string(d.String);
+        }
+        auto entry = cast<CControlEntry>(c);
+        if (entry !is null) {
+            auto d2 = cast<CGameDialogs>(entry.Nod);
+            if (d2 !is null) o["nodText"] = string(d2.String);
+        }
+        auto cont = cast<CControlContainer>(c);
+        if (cont is null) return o;
+        o["nbChildren"] = int(cont.Childs.Length);
+        if (depth >= maxDepth || count.n >= maxNodes) {
+            o["truncated"] = true;
+            return o;
+        }
+        Json::Value kids = Json::Array();
+        for (uint i = 0; i < cont.Childs.Length && count.n < maxNodes; i++) {
+            auto child = cont.Childs[i];
+            if (child is null) continue;
+            kids.Add(_EditorControlTreeToJson(child, depth + 1, maxDepth, count, maxNodes));
+        }
+        o["children"] = kids;
+        return o;
+    }
+
+    // Text of the editor's transient message frame (e.g. "Map saved."), "" when idle.
+    string _GetEditorTempMessage() {
+        auto app = cast<CTrackMania>(GetApp());
+        auto editor = app is null ? null : cast<CGameCtnEditorFree>(app.Editor);
+        if (editor is null || editor.EditorInterface is null || editor.EditorInterface.InterfaceRoot is null) return "";
+        auto frame = _DlgFindChild(editor.EditorInterface.InterfaceRoot, "FrameTempMsg");
+        if (frame is null) return "";
+        auto label = cast<CControlLabel>(_DlgFindChild(cast<CControlContainer>(frame), "LabelTempMsg"));
+        if (label is null) return "";
+        // The live text sits on the label's nod (like the SaveAs entry), not the
+        // control's Label property, which keeps the "_Temp message" placeholder.
+        auto d = cast<CGameDialogs>(label.Nod);
+        if (d !is null) return string(d.String);
+        return string(label.Label);
+    }
+
+    Json::Value@ GetEditorInterfaceTree(Json::Value &in input) {
+        auto app = cast<CTrackMania>(GetApp());
+        auto editor = app is null ? null : cast<CGameCtnEditorFree>(app.Editor);
+        if (editor is null || editor.EditorInterface is null || editor.EditorInterface.InterfaceRoot is null) {
+            return MakeError("editor interface not available", "NOT_IN_EDITOR", true, "Editor");
+        }
+        int maxDepth = input.HasKey("maxDepth") ? int(input["maxDepth"]) : 6;
+        int maxNodes = input.HasKey("maxNodes") ? int(input["maxNodes"]) : 4000;
+        string rootId = input.HasKey("rootId") ? string(input["rootId"]) : "";
+        CControlBase@ root = editor.EditorInterface.InterfaceRoot;
+        if (rootId.Length > 0) {
+            @root = _DlgFindChild(cast<CControlContainer>(root), rootId);
+            if (root is null) return MakeError("rootId not found under InterfaceRoot: " + rootId);
+        }
+        auto count = _Counter();
+        Json::Value output = Json::Object();
+        output["tree"] = _EditorControlTreeToJson(root, 0, maxDepth, count, maxNodes);
+        output["nodeCount"] = count.n;
+        output["truncated"] = count.n >= maxNodes;
+        return MakeSuccess(output);
+    }
+
     Json::Value BasicDialogSummary() {
         auto app = cast<CTrackMania>(GetApp());
         Json::Value output = Json::Object();
@@ -212,6 +379,9 @@ namespace TmMcp {
         output["hasFrame"] = frame !is null;
         if (frame !is null) {
             output["frameIdName"] = frame.IdName;
+            if (frame.IdName == "FrameDialogSaveAs") {
+                output["saveAsFileName"] = _GetSaveAsEntryText();
+            }
         }
         if (bd.Dialog == CGameDialogs::EDialog::Message) {
             output["messageText"] = string(bd.Message_LabelText);
@@ -632,6 +802,7 @@ namespace TmMcp {
             || name == "SaveMapAs"
             || name == "GetDialog"
             || name == "RespondDialog"
+            || name == "GetEditorInterfaceTree"
             || name == "ControlValidation"
             || name == "ControlSelection"
             || name == "GetCursor"
@@ -760,6 +931,7 @@ namespace TmMcp {
         if (name == "UndoRedo") return UndoRedo(input);
         if (name == "GetDialog") return GetDialog(input);
         if (name == "RespondDialog") return RespondDialog(input);
+        if (name == "GetEditorInterfaceTree") return GetEditorInterfaceTree(input);
         if (name == "ControlValidation") return ControlValidation(input);
         if (name == "ControlSelection") return ControlSelection(input);
         if (name == "GetCursor") return GetCursor(input);
@@ -904,15 +1076,16 @@ namespace TmMcp {
 
     Json::Value@ BuildToolList() {
         Json::Value tools = Json::Array();
-        tools.Add(MakeTool("GetMode", "Get current game mode.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetMode", "Get current game mode: Menu, Editor, Race, or Loading (while the loading screen is displayed). Response always includes a loading bool.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("OpenMapInEditor", "Open a local map file in the editor.", '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapInfo", "Get current editor map name and counts.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapEnvironment", "Read map collection, decoration, map type/style, mood, and collection-unit metadata.", '{"type":"object","properties":{},"additionalProperties":false}'));
 
-        tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx.", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx. Response includes dialogPre and a warning when a dialog was up (the save may have been blocked; TM has several dialog systems, so check GetDialog first).", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("UndoRedo", "Undo or redo editor actions (CGameEditorPluginMapMapType Undo/Redo). action: undo (default) | redo; count: repeat N times (default 1).", '{"type":"object","properties":{"action":{"type":"string"},"count":{"type":"integer"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("GetDialog", "Inspect Trackmania's current BasicDialogs state and active dialog frame.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("RespondDialog", "Respond to Trackmania BasicDialogs. action: yes, no, cancel, ok, validate, hide.", '{"type":"object","properties":{"action":{"type":"string"}},"required":["action"],"additionalProperties":false}'));
+        tools.Add(MakeTool("GetDialog", "Inspect Trackmania's current dialog state across the dialog systems: BasicDialogs (kind/frame), SaveAs frame filename, and editor interface frames (where e.g. the 'map saved' temp message lives).", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetEditorInterfaceTree", "Recursive dump of the editor interface control tree (EditorInterface.InterfaceRoot) with per-node id, class, and children. Expensive; use maxDepth (default 6), maxNodes (default 4000), and optional rootId to dump a subtree (e.g. FrameTempMsg).", '{"type":"object","properties":{"maxDepth":{"type":"integer"},"maxNodes":{"type":"integer"},"rootId":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("RespondDialog", "Respond to Trackmania dialogs (BasicDialogs + SaveAs frame). action: yes, no, cancel, ok, wait-ok, validate/saveas-validate, saveas-cancel, saveas-up, saveas-setname (with name), hide. By default yields one frame and includes an 'after' summary of the next dialog in the chain; set disable1FrameYieldAndWarning=true to return immediately.", '{"type":"object","properties":{"action":{"type":"string"},"name":{"type":"string"},"disable1FrameYieldAndWarning":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
         tools.Add(MakeTool("ControlValidation", "Inspect or trigger map validation/test/playground controls. Actions: status, validate, requestEnterPlayground, requestLeavePlayground, testFromStart, testFromCoord.", '{"type":"object","properties":{"action":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlSelection", "Inspect or control editor copy-paste/custom selection. Actions: status, showCustom, hideCustom, resetSelection, selectAll, addSelection, copy, cut, remove, symmetrize.", '{"type":"object","properties":{"action":{"type":"string"},"x1":{"type":"integer"},"y1":{"type":"integer"},"z1":{"type":"integer"},"x2":{"type":"integer"},"y2":{"type":"integer"},"z2":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetCursor", "Get editor cursor coordinate and selected block.", '{"type":"object","properties":{},"additionalProperties":false}'));
@@ -1011,7 +1184,11 @@ namespace TmMcp {
             output["mode"] = "Unknown";
             return MakeSuccess(output);
         }
-        if (app.Editor !is null) {
+        bool loading = IsLoadingLike(app);
+        output["loading"] = loading;
+        if (loading) {
+            output["mode"] = "Loading";
+        } else if (app.Editor !is null) {
             output["mode"] = "Editor";
         } else if (app.CurrentPlayground !is null) {
             output["mode"] = "Race";
@@ -1271,6 +1448,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         bool overwrite = input.HasKey("overwrite") ? bool(input["overwrite"]) : false;
         string gamePathHint = IO::FromUserGameFolder("Maps/" + fileName);
 
+        Json::Value dialogPre = BasicDialogSummary();
         Json::Value mapPre = MapSummary(editor);
         try {
             editor.PluginMapType.SaveMap(wstring(fileName));
@@ -1279,6 +1457,14 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         }
 
         Json::Value output = Json::Object();
+        output["dialogPre"] = dialogPre;
+        if (bool(dialogPre["available"]) &&
+            (int(dialogPre["dialog"]) != 0 || bool(dialogPre["hasFrame"]))) {
+            output["warning"] = "A dialog was up when SaveMap was called (kind="
+                + string(dialogPre["dialogKind"])
+                + (dialogPre.HasKey("frameIdName") ? ", frame=" + string(dialogPre["frameIdName"]) : "")
+                + "); the save may have been blocked or queued behind it. Call GetDialog/RespondDialog, then re-save and compare file timestamps.";
+        }
         output["saved"] = true;
         output["fileName"] = fileName;
         output["mapsFileName"] = fileName;
@@ -1314,7 +1500,10 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
     }
 
     Json::Value@ GetDialog(Json::Value &in input) {
-        return MakeSuccess(BasicDialogSummary());
+        auto summary = BasicDialogSummary();
+        summary["editorFrames"] = EditorInterfaceFramesSummary();
+        summary["tempMessage"] = _GetEditorTempMessage();
+        return MakeSuccess(summary);
     }
 
     Json::Value@ RespondDialog(Json::Value &in input) {
@@ -1339,21 +1528,35 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
                 app.BasicDialogs.DialogSaveAs_OnValidate();
             } else if (action == "saveas-cancel") {
                 app.BasicDialogs.DialogSaveAs_OnCancel();
+            } else if (action == "saveas-up") {
+                app.BasicDialogs.DialogSaveAs_HierarchyUp();
+            } else if (action == "saveas-setname") {
+                if (!input.HasKey("name")) return MakeError("saveas-setname requires name");
+                if (!_SetSaveAsEntryText(string(input["name"]))) {
+                    return MakeError("no FrameDialogSaveAs / EntryFileName available");
+                }
             } else if (action == "hide") {
                 app.BasicDialogs.HideDialogs();
             } else {
-                return MakeError("action must be one of: yes, no, cancel, ok, wait-ok, validate, saveas-cancel, hide");
+                return MakeError("action must be one of: yes, no, cancel, ok, wait-ok, validate, saveas-cancel, saveas-up, saveas-setname, hide");
             }
         } catch {
             return MakeError("dialog action failed: " + getExceptionInfo());
         }
 
-        yield();
+        bool immediate = input.HasKey("disable1FrameYieldAndWarning") && bool(input["disable1FrameYieldAndWarning"]);
         Json::Value output = Json::Object();
         output["responded"] = true;
         output["action"] = action;
         output["before"] = before;
-        output["after"] = BasicDialogSummary();
+        if (!immediate) {
+            // Let the game advance a frame so `after` reflects the next dialog
+            // in the chain (e.g. yes -> FrameDialogSaveAs -> overwrite prompt).
+            yield();
+            output["after"] = BasicDialogSummary();
+        } else {
+            output["note"] = "returned immediately (disable1FrameYieldAndWarning); no after summary";
+        }
         return MakeSuccess(output);
     }
 
