@@ -111,6 +111,18 @@ namespace TmMcp {
         auto map = editor.Challenge;
         output["name"] = map.MapName;
         output["size"] = CoordToJson(map.Size);
+        output["decorationName"] = map.DecorationName;
+        auto deco = map.Decoration;
+        if (deco !is null) {
+            output["decorationIdName"] = deco.IdName;
+            if (deco.DecoSize !is null) {
+                Json::Value ds = Json::Object();
+                ds["x"] = deco.DecoSize.SizeX;
+                ds["y"] = deco.DecoSize.SizeY;
+                ds["z"] = deco.DecoSize.SizeZ;
+                output["decorationSize"] = ds;
+            }
+        }
         output["bounds"] = MapBoundsToJson(map.Size);
         output["nbBlocks"] = int(map.Blocks.Length);
         output["nbBakedBlocks"] = int(map.BakedBlocks.Length);
@@ -1167,7 +1179,7 @@ namespace TmMcp {
         tools.Add(MakeTool("ListKnownMenuRoutes", "Return a hardcoded catalogue of main-menu Router_Push routes known to work (sourced from tm-menu-page-manager).", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("ListGuides", "List available self-documentation guides. Each has a short title; call GetGuide {topic} to fetch the full body.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetGuide", "Fetch the full body of a named guide. Use ListGuides to see topics.", '{"type":"object","properties":{"topic":{"type":"string"}},"required":["topic"],"additionalProperties":false}'));
-        tools.Add(MakeTool("EditNewMap", "Create a new map in the editor with a specific Environment + Decoration (vista). Defaults: Stadium / 48x48Screen155Day / empty mapType (this combo is verified to open the editor; '48x48Day' silently no-ops). See the map-vistas guide for decoration strings. Call returns immediately; poll GetMode until mode becomes Editor.", '{"type":"object","properties":{"environment":{"type":"string"},"decoration":{"type":"string"},"mapType":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("EditNewMap", "Create a new map in the editor. Supports all 12 vistas via the vista param: <base>-<mood> where base = nostadium | stadiumold (alias base) | stadium155 (alias screen155, default day), mood = day | night | sunset | sunrise. Non-standard vistas load via decoration fid swap (tm-map-together's SwapDecoHack). decoration = raw fid basename passthrough (e.g. NoStadium48x48Night). Optional: car (CarSport|CarSnow|CarRally|CarDesert), size 'WxHxD' (e.g. 64x64x64; mutates the decoration size for the new map), mapType (default empty). Call returns immediately; poll GetMode until mode becomes Editor.", '{"type":"object","properties":{"environment":{"type":"string"},"decoration":{"type":"string"},"mapType":{"type":"string"},"vista":{"type":"string"},"car":{"type":"string"},"size":{"type":"string"},"sizeX":{"type":"integer"},"sizeY":{"type":"integer"},"sizeZ":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ListMenuManialinkControls", "Walk the main-menu UI layer tree and return controls with their ControlId, classes, visibility, and path. Used to discover button IDs before firing Manialink events. maxDepth default 8; onlyWithId default true (skip anonymous frames); includeHidden default false.", '{"type":"object","properties":{"maxDepth":{"type":"integer"},"onlyWithId":{"type":"boolean"},"includeHidden":{"type":"boolean"},"maxResults":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("FocusMenuControl", "Find a menu control by ControlId across all UI layers and call Focus() on it. Probe step before trying synthetic click events. Does not perform click.", '{"type":"object","properties":{"controlId":{"type":"string"}},"required":["controlId"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetUILayers", "Lightweight: list main-menu UI layers with index, type, visibility, attachId, pageUrl, and (default) the extracted <manialink name> attribute. Does NOT traverse the control tree. Use GetLayerTree for per-layer introspection. Use includeXmlSize=true to also return the XML length (avoids returning the full XML).", '{"type":"object","properties":{"includeName":{"type":"boolean"},"includeXmlSize":{"type":"boolean"},"onlyVisible":{"type":"boolean"}},"additionalProperties":false}'));
@@ -1341,7 +1353,48 @@ namespace TmMcp {
 #endif
     }
 
-    void _EditNewMapCoroutine(string environment, string decoration, string mapType) {
+    // All 12 TM2020 vistas: 3 bases x 4 moods. EditNewMap2 only accepts the
+    // standard Screen155 decoration nod directly; other vistas load by
+    // preloading the chosen decoration and swapping it into the standard fid's
+    // Nod slot (tm-map-together's SwapDecoHack).
+    const string STD_DECO_NOD = "48x48Screen155Day";
+    const string STD_DECO_FID = "GameData/Stadium/GameCtnDecoration/Base48x48Screen155Day.Decoration.Gbx";
+
+    // Maps a vista name/alias to the decoration fid basename, "" if unknown.
+    string _VistaToDecoFidBase(const string &in vista) {
+        string v = vista.Trim().ToLower().Replace(" ", "").Replace("_", "-");
+        if (v.Length == 0 || v == "default" || v == "day" || v == "stadium155-day" || v == "screen155-day" || v == "48x48screen155day" || v == "base48x48screen155day") return "Base48x48Screen155Day";
+        string[][]@ table = {
+            {"nostadium-day", "nostadium48x48day", "NoStadium48x48Day"},
+            {"nostadium-night", "nostadium48x48night", "NoStadium48x48Night"},
+            {"nostadium-sunset", "nostadium48x48sunset", "NoStadium48x48Sunset"},
+            {"nostadium-sunrise", "nostadium48x48sunrise", "NoStadium48x48Sunrise"},
+            {"stadiumold-day", "base-day", "base48x48day", "Base48x48Day"},
+            {"stadiumold-night", "base-night", "base48x48night", "Base48x48Night"},
+            {"stadiumold-sunset", "base-sunset", "base48x48sunset", "Base48x48Sunset"},
+            {"stadiumold-sunrise", "base-sunrise", "base48x48sunrise", "Base48x48Sunrise"},
+            {"stadium155-night", "screen155-night", "base48x48screen155night", "Base48x48Screen155Night"},
+            {"stadium155-sunset", "screen155-sunset", "base48x48screen155sunset", "Base48x48Screen155Sunset"},
+            {"stadium155-sunrise", "screen155-sunrise", "base48x48screen155sunrise", "Base48x48Screen155Sunrise"}
+        };
+        for (uint i = 0; i < table.Length; i++) {
+            for (uint j = 0; j < table[i].Length - 1; j++) {
+                if (v == table[i][j]) return table[i][table[i].Length - 1];
+            }
+        }
+        return "";
+    }
+
+    uint16 _MemberOffset(const string &in className, const string &in memberName) {
+        auto ty = Reflection::GetType(className);
+        if (ty is null) throw("unknown class: " + className);
+        auto memberTy = ty.GetMember(memberName);
+        if (memberTy is null) throw(className + " has no member " + memberName);
+        if (memberTy.Offset == 0xFFFF) throw("invalid offset for " + className + "." + memberName);
+        return memberTy.Offset;
+    }
+
+    void _EditNewMapCoroutine(string environment, string decoration, string mapType, string vista, string car, nat3 mapSize) {
         if (!Permissions::OpenAdvancedMapEditor()) {
             warn("TM Control MCP EditNewMap: missing advanced map editor permission");
             return;
@@ -1351,37 +1404,125 @@ namespace TmMcp {
             warn("TM Control MCP EditNewMap: title control API not available");
             return;
         }
+
+        // Resolve vista -> decoration fid basename. Raw decoration param wins.
+        string fidBase = decoration.Length > 0 ? _VistaToDecoFidBase(decoration) : "";
+        if (decoration.Length > 0 && fidBase.Length == 0) fidBase = decoration; // raw fid basename passthrough
+        if (fidBase.Length == 0) fidBase = _VistaToDecoFidBase(vista);
+        if (fidBase.Length == 0) {
+            warn("TM Control MCP EditNewMap: unknown vista '" + vista + "' (see map-vistas guide)");
+            return;
+        }
+        bool standard = fidBase == "Base48x48Screen155Day" && mapSize.x == 0;
+
+        CGameCtnDecoration@ chosenDeco = null;
+        CMwNod@ origStdNod = null;
+        nat3 origSize;
+        bool swapped = false;
+        if (!standard) {
+            auto chosenFid = Fids::GetGame("GameData/Stadium/GameCtnDecoration/" + fidBase + ".Decoration.Gbx");
+            @chosenDeco = cast<CGameCtnDecoration>(Fids::Preload(chosenFid));
+            if (chosenDeco is null) {
+                warn("TM Control MCP EditNewMap: failed to preload decoration " + fidBase);
+                return;
+            }
+            chosenDeco.MwAddRef();
+            origSize.x = chosenDeco.DecoSize.SizeX;
+            origSize.y = chosenDeco.DecoSize.SizeY;
+            origSize.z = chosenDeco.DecoSize.SizeZ;
+            if (mapSize.x > 0) {
+                chosenDeco.DecoSize.SizeX = mapSize.x;
+                chosenDeco.DecoSize.SizeY = mapSize.y;
+                chosenDeco.DecoSize.SizeZ = mapSize.z;
+            }
+            // Swap the chosen deco into the standard fid's Nod slot so
+            // EditNewMap2(48x48Screen155Day) loads it (SwapDecoHack).
+            auto stdFid = Fids::GetGame(STD_DECO_FID);
+            Fids::Preload(stdFid);
+            if (stdFid.Nod !is null && stdFid.Nod.IdName != chosenDeco.IdName) {
+                @origStdNod = stdFid.Nod;
+                origStdNod.MwAddRef();
+                Dev::SetOffset(stdFid, _MemberOffset("CSystemFidFile", "Nod"), chosenDeco);
+                swapped = true;
+            }
+        }
+
         app.BackToMainMenu();
         while (!app.ManiaTitleControlScriptAPI.IsReady) yield();
         while (app.Switcher.ModuleStack.Length < 1 || cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0]) is null) yield();
         yield();
-        app.ManiaTitleControlScriptAPI.EditNewMap2(environment, decoration, "", "", mapType, false, "", "");
+        app.ManiaTitleControlScriptAPI.EditNewMap2(environment, STD_DECO_NOD, "", car, mapType, false, "", "");
         // Verify the editor actually opens; EditNewMap2 silently no-ops on a bad decoration string.
         uint waited = 0;
+        bool opened = false;
         while (waited < 15000) {
             sleep(250);
             waited += 250;
             auto tmApp = cast<CTrackMania>(GetApp());
             if (tmApp !is null && tmApp.Editor !is null) {
                 trace("TM Control MCP EditNewMap: editor opened after " + waited + "ms");
-                return;
+                opened = true;
+                break;
             }
         }
-        warn("TM Control MCP EditNewMap: editor did not open within 15s (decoration '" + decoration + "' likely invalid; try '48x48Screen155Day')");
+        if (!opened) {
+            warn("TM Control MCP EditNewMap: editor did not open within 15s (vista '" + vista + "', deco '" + fidBase + "')");
+        }
+        if (swapped) {
+            auto stdFid = Fids::GetGame(STD_DECO_FID);
+            Dev::SetOffset(stdFid, _MemberOffset("CSystemFidFile", "Nod"), origStdNod);
+            origStdNod.MwRelease();
+            @origStdNod = null;
+        }
+        if (chosenDeco !is null) {
+            if (mapSize.x > 0 && opened) {
+                // Restore the shared deco size only after the map is closed.
+                while (true) {
+                    sleep(500);
+                    auto tmApp = cast<CTrackMania>(GetApp());
+                    if (tmApp is null || tmApp.Editor is null) break;
+                }
+                chosenDeco.DecoSize.SizeX = origSize.x;
+                chosenDeco.DecoSize.SizeY = origSize.y;
+                chosenDeco.DecoSize.SizeZ = origSize.z;
+            }
+            chosenDeco.MwRelease();
+            @chosenDeco = null;
+        }
     }
 
     Json::Value@ EditNewMapTool(Json::Value &in input) {
         string environment = input.HasKey("environment") ? string(input["environment"]) : "Stadium";
-        string decoration = input.HasKey("decoration") ? string(input["decoration"]) : "48x48Screen155Day";
+        string decoration = input.HasKey("decoration") ? string(input["decoration"]) : "";
         string mapType = input.HasKey("mapType") ? string(input["mapType"]) : "";
+        string vista = input.HasKey("vista") ? string(input["vista"]) : (decoration.Length > 0 ? "" : "default");
+        string car = input.HasKey("car") ? string(input["car"]) : "";
+        nat3 mapSize;
+        if (input.HasKey("size")) {
+            auto parts = string(input["size"]).Split("x");
+            if (parts.Length == 3) {
+                mapSize.x = Text::ParseUInt(parts[0]);
+                mapSize.y = Text::ParseUInt(parts[1]);
+                mapSize.z = Text::ParseUInt(parts[2]);
+            }
+        }
+        if (input.HasKey("sizeX")) mapSize.x = uint(int(input["sizeX"]));
+        if (input.HasKey("sizeY")) mapSize.y = uint(int(input["sizeY"]));
+        if (input.HasKey("sizeZ")) mapSize.z = uint(int(input["sizeZ"]));
+        string sizeStr = mapSize.x + "x" + mapSize.y + "x" + mapSize.z;
         startnew(function(ref@ ctx) {
             auto args = cast<array<string>>(ctx);
-            _EditNewMapCoroutine(args[0], args[1], args[2]);
-        }, array<string> = { environment, decoration, mapType });
+            auto p = args[5].Split("x");
+            nat3 sz(Text::ParseUInt(p[0]), Text::ParseUInt(p[1]), Text::ParseUInt(p[2]));
+            _EditNewMapCoroutine(args[0], args[1], args[2], args[3], args[4], sz);
+        }, array<string> = { environment, decoration, mapType, vista, car, sizeStr });
         Json::Value output = Json::Object();
         output["environment"] = environment;
         output["decoration"] = decoration;
         output["mapType"] = mapType;
+        output["vista"] = vista;
+        if (car.Length > 0) output["car"] = car;
+        if (mapSize.x > 0) output["size"] = sizeStr;
         output["note"] = "EditNewMap2 called asynchronously; poll GetMode until it returns Editor.";
         return MakeSuccess(output);
     }

@@ -188,18 +188,23 @@ namespace TmMcp {
         _RegisterGuide("map-vistas",
             "Environment / decoration (vista) selection",
             "TM map vistas are the combination of Environment (always 'Stadium' for TM2020)"
-            + " and Decoration. GetMapEnvironment reports the current map's collection and"
-            + " decoration. For new maps, the Decoration string picks the vista.\n"
+            + " and Decoration. GetMapInfo/GetMapEnvironment report the current map's"
+            + " decorationName.\n"
             + "\n"
-            + "Common Stadium decorations:\n"
-            + "- '48x48Screen155Day' — default day vista with 48-unit base\n"
-            + "- '48x48ScreenDay' / 'ScreenNight' / 'ScreenSunset'\n"
-            + "- '64x64' variants, '256x256' variants\n"
-            + "- 'Day', 'Night', 'Sunset', 'Sunrise' as mood suffixes\n"
+            + "All 12 vistas (3 bases x 4 moods), loadable via EditNewMap {vista}:\n"
+            + "- bases: nostadium (NoStadium48x48*), stadiumold (48x48*), stadium155\n"
+            + "  (48x48Screen155*, aliases: screen155, default)\n"
+            + "- moods: day, night, sunset, sunrise\n"
+            + "- e.g. vista='nostadium-day', 'stadiumold-night', 'stadium155-sunset'.\n"
+            + "- decoration param accepts a raw fid basename (e.g. NoStadium48x48Night).\n"
             + "\n"
-            + "To create a map with a specific vista programmatically:"
-            + " app.ManiaTitleControlScriptAPI.EditNewMap2('Stadium', '<decoration>', '', '',"
-            + " 'TrackMania\\\\TM_Race', false, '', '').");
+            + "How it works: EditNewMap2 only accepts the standard '48x48Screen155Day' nod"
+            + " directly; other vistas preload the chosen decoration and swap it into the"
+            + " standard fid's Nod slot (tm-map-together's SwapDecoHack), restoring after.\n"
+            + "\n"
+            + "Custom map size: EditNewMap {vista, size:'64x64x64'} mutates the decoration's"
+            + " DecoSize before creation (restored when the map closes). Also car=CarSport|"
+            + "CarSnow|CarRally|CarDesert.");
 
         _RegisterGuide("crash-debugging",
             "Where to look when TM crashes",
