@@ -14,9 +14,13 @@ module = "MyPack"
 
 ## Register
 
-`packId` is always the Openplanet plugin id (custom ids later). Tool names must not contain `.`. Public MCP names are `packId.FuncName`.
+`packId` is the public MCP prefix (`packId.FuncName`). Default is the Openplanet plugin id. Override with `ToolPackBuilder("mypack")` or `SetPackId`. Tool names must not contain `.`.
+
+`packId` must match `[A-Za-z][A-Za-z0-9_-]{0,63}`. Reserved: `core`, `tm-control-mcp`, `TmMcp`.
 
 ```angelscript
+string g_PackId = "";
+
 Json::Value@ MyDispatch(const string &in name, Json::Value &in input) {
     if (name == "Ping") {
         auto o = Json::Object();
@@ -33,23 +37,25 @@ Json::Value@ MyDispatch(const string &in name, Json::Value &in input) {
 }
 
 void Main() {
-    auto b = TmMcp::ToolPackBuilder();
+    auto b = TmMcp::ToolPackBuilder("mypack"); // or ToolPackBuilder() + SetPackId; default is this plugin's id
     b.AddTool("Ping", "Ping.", '{"type":"object","properties":{},"additionalProperties":false}');
     b.SetDispatch(MyDispatch);
     auto r = TmMcp::RegisterToolPack(b);
+    if (r !is null && bool(r["success"])) g_PackId = string(r["output"]["pack"]);
 }
 
 void OnDestroyed() {
-    auto p = Meta::ExecutingPlugin();
-    if (p !is null) TmMcp::UnregisterToolPack(p.ID);
+    if (g_PackId.Length > 0) TmMcp::UnregisterToolPack(g_PackId);
 }
 ```
 
 Dispatch receives the **unprefixed** name (`Ping`). Return `{success, output}` / `{success:false, error}` like builtin tools.
 
-`RegisterToolPack` fails if that pack id is already registered — call `UnregisterToolPack` first (do this in `OnDisabled` / `OnDestroyed`).
+`RegisterToolPack` fails if that pack id is already registered — call `UnregisterToolPack` first (do this in `OnDisabled` / `OnDestroyed`). `UnregisterToolPack` accepts the custom prefix **or** the plugin id (drops every pack that plugin registered). Read `output.pack` from the register result.
 
-Reserved pack ids: `core`, `tm-control-mcp`, `TmMcp`.
+Custom pack ids (constructor or `SetPackId`) must match the charset above. The default plugin id is not charset-checked (except it cannot contain `.`).
+
+Adding the pack-id field / constructor is a shared-type change: reload TmMcp, then reload packs.
 
 ## Call back into TmMcp
 

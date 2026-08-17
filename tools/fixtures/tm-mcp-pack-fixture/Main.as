@@ -36,13 +36,13 @@ Json::Value@ FixtureDispatch(const string &in name, Json::Value &in input) {
 }
 
 void RegisterFixturePack() {
+    if (g_PackId.Length > 0) return;
     auto plugin = Meta::ExecutingPlugin();
     if (plugin is null) {
         warn("tm-mcp-pack-fixture: no executing plugin");
         return;
     }
-    g_PackId = plugin.ID;
-    auto b = TmMcp::ToolPackBuilder();
+    auto b = TmMcp::ToolPackBuilder("fixture");
     b.AddTool("Ping", "Fixture ping. Returns {pong:true}.", '{"type":"object","properties":{},"additionalProperties":false}');
     b.AddTool("Echo", "Fixture echo. input: {text}.", '{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}');
     b.AddTool("GetMode", "Wraps TmMcp::CallTool(\"GetMode\").", '{"type":"object","properties":{},"additionalProperties":false}');
@@ -52,6 +52,11 @@ void RegisterFixturePack() {
         string err = (r !is null && r.HasKey("error")) ? string(r["error"]) : "null result";
         warn("tm-mcp-pack-fixture register failed: " + err);
         return;
+    }
+    if (r.HasKey("output") && r["output"].HasKey("pack")) {
+        g_PackId = string(r["output"]["pack"]);
+    } else {
+        g_PackId = "fixture";
     }
     print("tm-mcp-pack-fixture registered pack=" + g_PackId);
 }

@@ -13,10 +13,18 @@ namespace TmMcp {
     }
 
     shared class ToolPackBuilder {
+        string packId;
         array<ToolPackTool@> tools;
         ToolPackDispatch@ dispatch;
 
         ToolPackBuilder() {}
+        ToolPackBuilder(const string &in id) { packId = id; }
+
+        // Public MCP prefix (packId.FuncName). Empty = Openplanet plugin id.
+        ToolPackBuilder@ SetPackId(const string &in id) {
+            packId = id;
+            return this;
+        }
 
         ToolPackBuilder@ AddTool(const string &in name, const string &in description, const string &in schemaJson) {
             auto t = ToolPackTool();

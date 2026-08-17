@@ -19,6 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tools" / "fixtures" / "tm-mcp-pack-fixture"
 PLUGIN_ID = "tm-mcp-pack-fixture"
+PACK_ID = "fixture"
 OP_PLUGINS = Path.home() / "OpenplanetNext" / "Plugins"
 
 
@@ -74,16 +75,23 @@ def main() -> int:
     time.sleep(1.5)
 
     _, packs = call("ListToolPacks")
-    ids = [p.get("id") for p in (output(packs).get("packs") or [])]
-    ok("ListToolPacks has fixture", PLUGIN_ID in ids, json.dumps(output(packs))[:240])
+    listed = output(packs).get("packs") or []
+    ids = [p.get("id") for p in listed]
+    fixture_row = next((p for p in listed if p.get("id") == PACK_ID), None)
+    ok("ListToolPacks has custom pack id", PACK_ID in ids, json.dumps(output(packs))[:240])
+    ok(
+        "ListToolPacks plugin stays folder id",
+        fixture_row is not None and fixture_row.get("plugin") == PLUGIN_ID,
+        json.dumps(fixture_row)[:240],
+    )
 
-    _, ping = call(f"{PLUGIN_ID}.Ping")
+    _, ping = call(f"{PACK_ID}.Ping")
     ok("fixture.Ping", output(ping).get("pong") is True, json.dumps(result(ping))[:200])
 
-    _, echo = call(f"{PLUGIN_ID}.Echo", {"text": "hi"})
+    _, echo = call(f"{PACK_ID}.Echo", {"text": "hi"})
     ok("fixture.Echo", output(echo).get("text") == "hi", json.dumps(result(echo))[:200])
 
-    _, mode = call(f"{PLUGIN_ID}.GetMode")
+    _, mode = call(f"{PACK_ID}.GetMode")
     ok("fixture.GetMode wraps GetMode", isinstance(output(mode).get("mode"), str))
 
     _, raw = call("GetMode")
@@ -91,6 +99,10 @@ def main() -> int:
 
     if not args.keep:
         rb(args.rb_host, "unload", PLUGIN_ID)
+        time.sleep(0.5)
+        _, after = call("ListToolPacks")
+        after_ids = [p.get("id") for p in (output(after).get("packs") or [])]
+        ok("fixture gone after unload", PACK_ID not in after_ids, json.dumps(output(after))[:240])
         if dest.exists():
             shutil.rmtree(dest)
 

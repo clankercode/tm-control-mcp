@@ -9,6 +9,7 @@ Versions follow `info.toml` `[meta] version`.
 
 ### Added
 
+- Tool packs can set their public prefix with `ToolPackBuilder("id")` or `SetPackId`. Empty/omitted still uses the Openplanet plugin id. Custom ids: `[A-Za-z][A-Za-z0-9_-]{0,63}`; reserved `core` / `tm-control-mcp` / `TmMcp`. `UnregisterToolPack(plugin.ID)` drops every pack that plugin registered. Fixture pack now registers as `fixture.*`.
 - `EditNewMap` and `BackToMainMenu` now warn when leaving a dirty map pops the unsaved-changes dialog (`FrameAskYesNo`). `EditNewMap` waits `waitMs` (default 1500) like `OpenMapInEditor`; `BackToMainMenu` stops early instead of spinning 10s. Answer via `RespondDialog` or `SaveMapFlow`.
 - `EditNewMap` for custom environments (RedIsland / BlueBay / GreenCoast / WhiteShore) now passes the preloaded decoration nod IdName (`Day` / `Day64` / `Sunset64` / …, not `64x64Day`) to `EditNewMap2`. Non-Day moods use the chosen nod directly instead of SwapDecoHack.
 - Map-load waits: idle budget is **20s** (was 12–15s). Once a loading screen is up (`WaitMessage` / `LoadProgress`), `WaitUntil`, `EditNewMap`, and `CreateMapViaMenu` keep waiting until the map finishes (hard cap 30 min). `call.py` socket timeout follows.

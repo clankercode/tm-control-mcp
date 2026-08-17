@@ -33,7 +33,7 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
 - **Menu automation (OnAction):** `ClickMenuButton`, `CreateMapViaMenu`. Never `TriggerPageAction`.
 - **AssertPlacement:** verify deltas / near{x,y,z} / tags after place.
 - `ListPlugins`, `ControlPlugin`, `ListPluginSettings`, `SetPluginSetting`, `ListToolPacks`.
-- **Tool packs:** other plugins register via `TmMcp::ToolPackBuilder` + `RegisterToolPack`. Names are `packId.FuncName`. See `docs/tool-packs.md`.
+- **Tool packs:** other plugins register via `TmMcp::ToolPackBuilder` + `RegisterToolPack`. Names are `packId.FuncName`. Optional `ToolPackBuilder("id")` / `SetPackId` sets the prefix (default = plugin id). See `docs/tool-packs.md`.
 - **Guides:** `ListGuides` / `GetGuide`.
 
 ### RunManialinkScript

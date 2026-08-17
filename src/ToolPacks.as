@@ -19,6 +19,17 @@ namespace TmMcp {
         return id == "core" || id == "tm-control-mcp" || id == "TmMcp";
     }
 
+    bool IsValidPackIdCharset(const string &in id) {
+        if (id.Length == 0 || id.Length > 64) return false;
+        string letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        string restOk = letters + "0123456789_-";
+        if (letters.IndexOf(id.SubStr(0, 1)) < 0) return false;
+        for (uint i = 1; i < id.Length; i++) {
+            if (restOk.IndexOf(id.SubStr(i, 1)) < 0) return false;
+        }
+        return true;
+    }
+
     int FindPackIndex(const string &in packId) {
         for (uint i = 0; i < g_Packs.Length; i++) {
             if (g_Packs[i].packId == packId) return int(i);
@@ -74,15 +85,23 @@ namespace TmMcp {
         if (plugin is null) {
             return MakeError("RegisterToolPack: no executing plugin", "pack_no_plugin", false);
         }
-        string packId = plugin.ID;
+        if (builder is null) {
+            return MakeError("RegisterToolPack: builder is null", "pack_null_builder", false);
+        }
+        string customId = builder.packId.Trim();
+        string packId = customId.Length > 0 ? customId : plugin.ID;
+        if (customId.Length > 0 && !IsValidPackIdCharset(packId)) {
+            return MakeError("packId '" + packId + "' must match [A-Za-z][A-Za-z0-9_-]{0,63}", "pack_bad_id", false);
+        }
+        if (packId.Length == 0 || packId.IndexOf(".") >= 0) {
+            return MakeError("packId '" + packId + "' is empty or contains '.'", "pack_bad_id", false);
+        }
         if (IsReservedPackId(packId)) {
             return MakeError("packId '" + packId + "' is reserved", "pack_reserved_id", false);
         }
         if (FindPackIndex(packId) >= 0) {
-            return MakeError("pack '" + packId + "' is already registered; UnregisterToolPack first", "pack_already_registered", false);
-        }
-        if (builder is null) {
-            return MakeError("RegisterToolPack: builder is null", "pack_null_builder", false);
+            auto existing = g_Packs[uint(FindPackIndex(packId))];
+            return MakeError("pack '" + packId + "' is already registered by plugin '" + existing.pluginId + "'; UnregisterToolPack first", "pack_already_registered", false);
         }
         if (builder.dispatch is null) {
             return MakeError("RegisterToolPack: dispatch is null", "pack_null_dispatch", false);
@@ -149,15 +168,37 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
+    Json::Value@ UnregisterOwnedPacks(const string &in pluginId) {
+        auto dropped = Json::Array();
+        for (int i = int(g_Packs.Length) - 1; i >= 0; i--) {
+            if (g_Packs[uint(i)].pluginId != pluginId) continue;
+            dropped.Add(g_Packs[uint(i)].packId);
+            DropPackAt(uint(i));
+        }
+        if (dropped.Length == 0) {
+            return MakeError("pack not registered: " + pluginId, "pack_not_found", false);
+        }
+        auto output = Json::Object();
+        output["pack"] = pluginId;
+        output["packs"] = dropped;
+        output["unregistered"] = true;
+        return MakeSuccess(output);
+    }
+
     Json::Value@ UnregisterToolPack(const string &in packId) {
         SweepDeadPacks();
-        int idx = FindPackIndex(packId);
-        if (idx < 0) {
-            return MakeError("pack not registered: " + packId, "pack_not_found", false);
-        }
         auto caller = Meta::ExecutingPlugin();
         auto self = SelfPlugin();
         bool host = self !is null && caller !is null && caller.ID == self.ID;
+        int idx = FindPackIndex(packId);
+        if (idx < 0) {
+            // UnregisterToolPack(plugin.ID) drops every pack this plugin registered
+            // (covers SetPackId prefixes without forcing authors to store the custom id).
+            if (caller !is null && packId == caller.ID) {
+                return UnregisterOwnedPacks(caller.ID);
+            }
+            return MakeError("pack not registered: " + packId, "pack_not_found", false);
+        }
         bool owner = caller !is null && caller.ID == g_Packs[uint(idx)].pluginId;
         if (!host && !owner) {
             return MakeError("only the owning plugin can unregister pack " + packId, "pack_not_owner", false);
