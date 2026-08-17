@@ -950,7 +950,7 @@ namespace TmMcp {
         tools.Add(MakeTool("ListKnownMenuRoutes", "Return a hardcoded catalogue of main-menu Router_Push routes known to work (sourced from tm-menu-page-manager).", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("ListGuides", "List available self-documentation guides. Each has a short title; call GetGuide {topic} to fetch the full body.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetGuide", "Fetch the full body of a named guide. Use ListGuides to see topics.", '{"type":"object","properties":{"topic":{"type":"string"}},"required":["topic"],"additionalProperties":false}'));
-        tools.Add(MakeTool("EditNewMap", "Create a new map in the editor with a specific Environment + Decoration (vista). Defaults: Stadium / 48x48Day / TrackMania TM_Race. See the map-vistas guide for decoration strings. Call returns immediately; poll GetMode until mode becomes Editor.", '{"type":"object","properties":{"environment":{"type":"string"},"decoration":{"type":"string"},"mapType":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("EditNewMap", "Create a new map in the editor with a specific Environment + Decoration (vista). Defaults: Stadium / 48x48Screen155Day / empty mapType (this combo is verified to open the editor; '48x48Day' silently no-ops). See the map-vistas guide for decoration strings. Call returns immediately; poll GetMode until mode becomes Editor.", '{"type":"object","properties":{"environment":{"type":"string"},"decoration":{"type":"string"},"mapType":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ListMenuManialinkControls", "Walk the main-menu UI layer tree and return controls with their ControlId, classes, visibility, and path. Used to discover button IDs before firing Manialink events. maxDepth default 8; onlyWithId default true (skip anonymous frames); includeHidden default false.", '{"type":"object","properties":{"maxDepth":{"type":"integer"},"onlyWithId":{"type":"boolean"},"includeHidden":{"type":"boolean"},"maxResults":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("FocusMenuControl", "Find a menu control by ControlId across all UI layers and call Focus() on it. Probe step before trying synthetic click events. Does not perform click.", '{"type":"object","properties":{"controlId":{"type":"string"}},"required":["controlId"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetUILayers", "Lightweight: list main-menu UI layers with index, type, visibility, attachId, pageUrl, and (default) the extracted <manialink name> attribute. Does NOT traverse the control tree. Use GetLayerTree for per-layer introspection. Use includeXmlSize=true to also return the XML length (avoids returning the full XML).", '{"type":"object","properties":{"includeName":{"type":"boolean"},"includeXmlSize":{"type":"boolean"},"onlyVisible":{"type":"boolean"}},"additionalProperties":false}'));
@@ -1135,12 +1135,24 @@ namespace TmMcp {
         while (app.Switcher.ModuleStack.Length < 1 || cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0]) is null) yield();
         yield();
         app.ManiaTitleControlScriptAPI.EditNewMap2(environment, decoration, "", "", mapType, false, "", "");
+        // Verify the editor actually opens; EditNewMap2 silently no-ops on a bad decoration string.
+        uint waited = 0;
+        while (waited < 15000) {
+            sleep(250);
+            waited += 250;
+            auto tmApp = cast<CTrackMania>(GetApp());
+            if (tmApp !is null && tmApp.Editor !is null) {
+                trace("TM Control MCP EditNewMap: editor opened after " + waited + "ms");
+                return;
+            }
+        }
+        warn("TM Control MCP EditNewMap: editor did not open within 15s (decoration '" + decoration + "' likely invalid; try '48x48Screen155Day')");
     }
 
     Json::Value@ EditNewMapTool(Json::Value &in input) {
         string environment = input.HasKey("environment") ? string(input["environment"]) : "Stadium";
-        string decoration = input.HasKey("decoration") ? string(input["decoration"]) : "48x48Day";
-        string mapType = input.HasKey("mapType") ? string(input["mapType"]) : "TrackMania\\TM_Race";
+        string decoration = input.HasKey("decoration") ? string(input["decoration"]) : "48x48Screen155Day";
+        string mapType = input.HasKey("mapType") ? string(input["mapType"]) : "";
         startnew(function(ref@ ctx) {
             auto args = cast<array<string>>(ctx);
             _EditNewMapCoroutine(args[0], args[1], args[2]);
