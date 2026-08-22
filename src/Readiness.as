@@ -1,9 +1,36 @@
 namespace TmMcp {
+    // Specific editor kinds for GetMode. Unknown editor classes fall back to "Editor".
+    // WaitUntil equals=Editor and GetReadiness want=editor match any of these.
+    string DetectEditorKindName(CMwNod@ editor) {
+        if (editor is null) return "";
+        if (cast<CGameCtnEditorFree>(editor) !is null) return "MapEditor";
+        if (cast<CGameEditorItem>(editor) !is null) return "ItemEditor";
+        if (cast<CGameEditorMediaTracker>(editor) !is null) return "MediatrackerEditor";
+        if (cast<CGameEditorMesh>(editor) !is null) return "MeshEditor";
+        if (cast<CGameEditorSkin>(editor) !is null) return "SkinEditor";
+        if (cast<CGameEditorModule>(editor) !is null) return "ModuleEditor";
+        return "Editor";
+    }
+
+    bool IsEditorModeName(const string &in mode) {
+        string lower = mode.ToLower();
+        return lower == "editor" || lower.EndsWith("editor");
+    }
+
+    bool ModeMatches(const string &in actual, const string &in wanted) {
+        if (wanted.Length == 0) return true;
+        string a = actual.ToLower();
+        string w = wanted.ToLower();
+        if (a == w) return true;
+        if (w == "editor" && IsEditorModeName(actual)) return true;
+        return false;
+    }
+
     string DetectGameModeName() {
         auto app = cast<CTrackMania>(GetApp());
         if (app is null) return "Unknown";
         if (IsLoadingLike(app)) return "Loading";
-        if (app.Editor !is null) return "Editor";
+        if (app.Editor !is null) return DetectEditorKindName(app.Editor);
         if (app.CurrentPlayground !is null) return "Race";
         return "Menu";
     }
@@ -79,7 +106,7 @@ namespace TmMcp {
         }
 
         bool modeOk = true;
-        if (want == "editor") modeOk = mode == "Editor";
+        if (want == "editor") modeOk = IsEditorModeName(mode);
         else if (want == "menu") modeOk = mode == "Menu";
         else if (want == "race") modeOk = mode == "Race";
 
@@ -143,7 +170,7 @@ namespace TmMcp {
             string mode = DetectGameModeName();
             last["mode"] = mode;
             last["equals"] = equals;
-            return equals.Length == 0 || mode.ToLower() == equals.ToLower();
+            return ModeMatches(mode, equals);
         }
 
         if (cond == "dialogclear" || cond == "dialog_clear" || cond == "dialog-clear") {

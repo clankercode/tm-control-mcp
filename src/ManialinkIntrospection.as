@@ -707,7 +707,7 @@ namespace TmMcp {
 
         // Define the step sequence:
         // Each step: click buttonId, then poll for expectedFrameId to become visible.
-        // Last step polls GetMode == "Editor" instead.
+        // Last step polls until an editor mode (typically MapEditor).
         //
         // buttonIds[]:
         string[] buttonIds = {
@@ -787,8 +787,9 @@ namespace TmMcp {
             uint stepStart = Time::Now;
 
             if (isFinal) {
-                // Poll GetMode for "Editor". Idle budget is timeoutMs (min 20s);
-                // once a loading screen is up, keep waiting through the load.
+                // Poll until app.Editor is up (MapEditor after a new map).
+                // Idle budget is timeoutMs (min 20s); once a loading screen is
+                // up, keep waiting through the load.
                 uint pollBudget = timeoutMs > 0 ? uint(timeoutMs) : 20000;
                 if (pollBudget < 20000) pollBudget = 20000;
                 uint pollElapsed = 0;
@@ -803,8 +804,8 @@ namespace TmMcp {
                     Json::Value rv = Json::Object();
                     rv["ok"] = false;
                     rv["failedAt"] = btnId;
-                    rv["expectedFrame"] = "GetMode==Editor";
-                    rv["lastObserved"] = "timeout waiting for Editor mode";
+                    rv["expectedFrame"] = "GetMode editor";
+                    rv["lastObserved"] = "timeout waiting for editor mode";
                     rv["elapsedMs"] = int(Time::Now - startMs);
                     rv["steps"] = steps;
                     return MakeSuccess(rv);
@@ -813,7 +814,7 @@ namespace TmMcp {
                 // Success
                 Json::Value rv = Json::Object();
                 rv["ok"] = true;
-                rv["finalMode"] = "Editor";
+                rv["finalMode"] = DetectGameModeName();
                 rv["elapsedMs"] = int(Time::Now - startMs);
                 rv["steps"] = steps;
                 return MakeSuccess(rv);

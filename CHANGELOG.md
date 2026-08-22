@@ -16,6 +16,7 @@ Versions follow `info.toml` `[meta] version`.
 
 ### Changed
 
+- `GetMode` (and `GetMenuPage` / `GetReadiness` / `WaitUntil` mode) now reports specific editor kinds: `MapEditor`, `ItemEditor`, `MediatrackerEditor`, `MeshEditor`, `SkinEditor`, `ModuleEditor`. Unknown editor classes still return `Editor`. `WaitUntil equals=Editor` and `GetReadiness want=editor` match any editor kind.
 - `GetToolList()` now caches the built tool array and rebuilds only when a pack is registered, unregistered, or swept. Callers (e.g. tm-agent's chat UI) were paying ~1–2 ms per call to re-parse ~90 schemas every frame.
 
 ## [0.4.0] — 2026-08-16

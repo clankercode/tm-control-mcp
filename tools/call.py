@@ -520,7 +520,7 @@ def main() -> int:
     parser.add_argument("--skip-process-check", action="store_true", help="Do not check for Trackmania.exe before connecting")
     parser.add_argument("--strict", action="store_true", help="Validate input against fetched tool schemas before sending")
     parser.add_argument("--refresh-schemas", action="store_true", help="Force refetch of tool schemas (implies --strict)")
-    parser.add_argument("--wait-mode", default="", help="Before the call, WaitUntil mode equals this (Editor|Menu|Race)")
+    parser.add_argument("--wait-mode", default="", help="Before the call, WaitUntil mode equals this (Editor|MapEditor|ItemEditor|Menu|Race). Editor matches any editor kind.")
     parser.add_argument("--until-ready", default="", help="Before the call, WaitUntil readiness want=editor|menu|any|race")
     parser.add_argument("--wait-timeout", type=float, default=DEFAULT_WAIT_TIMEOUT_SECONDS, help="Idle budget seconds for --wait-mode / --until-ready (default 20). Loading screens keep waiting up to 30 min.")
     args = parser.parse_args()

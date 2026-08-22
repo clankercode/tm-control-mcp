@@ -20,6 +20,10 @@ sys.path.insert(0, str(ROOT / "tools"))
 import call as call_mod  # noqa: E402
 
 
+def _is_editor_mode(mode) -> bool:
+    return isinstance(mode, str) and (mode == "Editor" or mode.endswith("Editor"))
+
+
 def dig(d, *ks, default=None):
     cur = d
     for k in ks:
@@ -92,8 +96,8 @@ def main() -> int:
     if not ready and isinstance(rout, dict):
         nested = rout.get("readiness")
         if isinstance(nested, dict):
-            ready = nested.get("ready") is True or nested.get("mode") == "Editor"
-        elif rout.get("mode") == "Editor":
+            ready = nested.get("ready") is True or _is_editor_mode(nested.get("mode"))
+        elif _is_editor_mode(rout.get("mode")):
             ready = True
     step("wait_until_ready editor", ready, json.dumps(rout)[:140])
 

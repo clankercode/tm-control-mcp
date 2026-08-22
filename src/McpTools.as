@@ -1196,7 +1196,7 @@ namespace TmMcp {
 
     Json::Value@ BuildToolList() {
         Json::Value tools = Json::Array();
-        tools.Add(MakeTool("GetMode", "Get current game mode: Menu, Editor, Race, or Loading (while the loading screen is displayed). Response always includes a loading bool.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetMode", "Get current game mode: Menu, Race, Loading, or a specific editor (MapEditor, ItemEditor, MediatrackerEditor, MeshEditor, SkinEditor, ModuleEditor). Unknown editor classes return Editor. Response always includes a loading bool. WaitUntil equals=Editor matches any editor.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("OpenMapInEditor", "Open a local map file in the editor. Waits waitMs (default 1500) and reports any blocking dialog (e.g. unsaved-changes AskYesNo when leaving a dirty map) with a warning — answer it via RespondDialog or SaveMapFlow.", '{"type":"object","properties":{"path":{"type":"string"},"waitMs":{"type":"integer"}},"required":["path"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapInfo", "Get current editor map name and counts.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapEnvironment", "Read map collection, decoration, map type/style, mood, and collection-unit metadata.", '{"type":"object","properties":{},"additionalProperties":false}'));
@@ -1246,7 +1246,7 @@ namespace TmMcp {
         tools.Add(MakeTool("ListGuides", "List available self-documentation guides. Each has a short title; call GetGuide {topic} to fetch the full body.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetGuide", "Fetch the full body of a named guide. Use ListGuides to see topics.", '{"type":"object","properties":{"topic":{"type":"string"}},"required":["topic"],"additionalProperties":false}'));
         tools.Add(MakeTool("ListMapDecorations", "List all map decoration (vista) fids per environment (Stadium, RedIsland, GreenCoast, BlueBay, WhiteShore) found under GameData/<env>/GameCtnDecoration, with file/fid base names and loaded nod IdNames.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("EditNewMap", "Create a new map in the editor. Supports all 12 vistas via the vista param: <base>-<mood> where base = nostadium | stadiumold (alias base) | stadium155 (alias screen155, default day), mood = day | night | sunset | sunrise. Non-standard vistas load via decoration fid swap (tm-map-together's SwapDecoHack). decoration = raw fid basename passthrough (e.g. NoStadium48x48Night). Optional: car (CarSport|CarSnow|CarRally|CarDesert), size 'WxHxD' (e.g. 64x64x64; mutates the decoration size for the new map), mapType (default empty). Waits waitMs (default 1500) and warns if leaving a dirty map pops AskYesNo — answer via RespondDialog or SaveMapFlow. Otherwise poll GetMode until Editor.", '{"type":"object","properties":{"environment":{"type":"string"},"decoration":{"type":"string"},"mapType":{"type":"string"},"vista":{"type":"string"},"car":{"type":"string"},"size":{"type":"string"},"sizeX":{"type":"integer"},"sizeY":{"type":"integer"},"sizeZ":{"type":"integer"},"waitMs":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("EditNewMap", "Create a new map in the editor. Supports all 12 vistas via the vista param: <base>-<mood> where base = nostadium | stadiumold (alias base) | stadium155 (alias screen155, default day), mood = day | night | sunset | sunrise. Non-standard vistas load via decoration fid swap (tm-map-together's SwapDecoHack). decoration = raw fid basename passthrough (e.g. NoStadium48x48Night). Optional: car (CarSport|CarSnow|CarRally|CarDesert), size 'WxHxD' (e.g. 64x64x64; mutates the decoration size for the new map), mapType (default empty). Waits waitMs (default 1500) and warns if leaving a dirty map pops AskYesNo — answer via RespondDialog or SaveMapFlow. Otherwise poll GetMode until MapEditor.", '{"type":"object","properties":{"environment":{"type":"string"},"decoration":{"type":"string"},"mapType":{"type":"string"},"vista":{"type":"string"},"car":{"type":"string"},"size":{"type":"string"},"sizeX":{"type":"integer"},"sizeY":{"type":"integer"},"sizeZ":{"type":"integer"},"waitMs":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ListMenuManialinkControls", "Walk the main-menu UI layer tree and return controls with their ControlId, classes, visibility, and path. Used to discover button IDs before firing Manialink events. maxDepth default 8; onlyWithId default true (skip anonymous frames); includeHidden default false.", '{"type":"object","properties":{"maxDepth":{"type":"integer"},"onlyWithId":{"type":"boolean"},"includeHidden":{"type":"boolean"},"maxResults":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("FocusMenuControl", "Find a menu control by ControlId across all UI layers and call Focus() on it. Probe step before trying synthetic click events. Does not perform click.", '{"type":"object","properties":{"controlId":{"type":"string"}},"required":["controlId"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetUILayers", "Lightweight: list main-menu UI layers with index, type, visibility, attachId, pageUrl, and (default) the extracted <manialink name> attribute. Does NOT traverse the control tree. Use GetLayerTree for per-layer introspection. Use includeXmlSize=true to also return the XML length (avoids returning the full XML).", '{"type":"object","properties":{"includeName":{"type":"boolean"},"includeXmlSize":{"type":"boolean"},"onlyVisible":{"type":"boolean"}},"additionalProperties":false}'));
@@ -1303,21 +1303,14 @@ namespace TmMcp {
     Json::Value@ GetMode(Json::Value &in input) {
         auto app = cast<CTrackMania>(GetApp());
         Json::Value output = Json::Object();
+        string mode = DetectGameModeName();
+        output["mode"] = mode;
         if (app is null) {
-            output["mode"] = "Unknown";
             return MakeSuccess(output);
         }
-        bool loading = IsLoadingLike(app);
-        output["loading"] = loading;
-        if (loading) {
-            output["mode"] = "Loading";
-        } else if (app.Editor !is null) {
-            output["mode"] = "Editor";
-        } else if (app.CurrentPlayground !is null) {
-            output["mode"] = "Race";
+        output["loading"] = IsLoadingLike(app);
+        if (mode == "Race") {
             output["selfHosted"] = app.PlaygroundScript !is null;
-        } else {
-            output["mode"] = "Menu";
         }
         if (app.RootMap !is null) {
             output["mapName"] = app.RootMap.MapName;
@@ -1681,7 +1674,7 @@ namespace TmMcp {
         output["vista"] = vista;
         if (car.Length > 0) output["car"] = car;
         if (mapSize.x > 0) output["size"] = sizeStr;
-        output["note"] = "EditNewMap2 called asynchronously; poll GetMode until it returns Editor.";
+        output["note"] = "EditNewMap2 called asynchronously; poll GetMode until it returns MapEditor.";
         int waitMs = input.HasKey("waitMs") ? int(input["waitMs"]) : 1500;
         if (waitMs > 0) {
             sleep(Math::Min(waitMs, 10000));
@@ -1743,9 +1736,7 @@ namespace TmMcp {
             ? cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0])
             : null;
         output["inMenus"] = menus !is null;
-        if (app.Editor !is null) output["mode"] = "Editor";
-        else if (app.CurrentPlayground !is null) output["mode"] = "Race";
-        else output["mode"] = "Menu";
+        output["mode"] = DetectGameModeName();
         return MakeSuccess(output);
     }
 

@@ -14,7 +14,7 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
 - Live smoke when game up: `python3 tools/smoke_tag_cleanup.py`
 - Socket lifecycle (exports + enable/disable): `python3 tools/verify_socket_lifecycle.py`
 - `tools/call.py` returns compact JSON by default and checks for a real `Trackmania.exe` process before socket calls (`--skip-process-check` only for raw socket debug).
-- Wait helpers: `--wait-mode Editor|Menu|Race`, `--until-ready editor|menu|any`, `--wait-timeout 30`.
+- Wait helpers: `--wait-mode Editor|MapEditor|Menu|Race`, `--until-ready editor|menu|any`, `--wait-timeout 30`. `--wait-mode Editor` matches any editor kind (`MapEditor`, `ItemEditor`, `MediatrackerEditor`, …).
 
 ### Placement / macroblocks
 

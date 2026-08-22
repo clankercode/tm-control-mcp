@@ -224,7 +224,7 @@ Tool names also work as routes:
 Typical success shape:
 
 ```json
-{"ok":true,"route":"call","data":{"tool":"GetMode","result":{"success":true,"output":{"mode":"Editor"}}}}
+{"ok":true,"route":"call","data":{"tool":"GetMode","result":{"success":true,"output":{"mode":"MapEditor"}}}}
 ```
 
 Errors may include structured fields:
@@ -305,7 +305,7 @@ Prefer `{"route":"tools"}` at runtime if this list drifts.
 
 | Tool | Summary |
 |------|---------|
-| `GetMode` | Current game mode (Menu / Editor / Race / …). |
+| `GetMode` | Current game mode (Menu / Race / Loading / MapEditor / ItemEditor / MediatrackerEditor / …). `Editor` is only the unknown-editor fallback; `WaitUntil equals=Editor` still matches any editor. |
 | `OpenMapInEditor` | Open a local map file in the editor (`path`). Warns if a leave-map dialog pops. |
 | `GetMapInfo` | Current editor map name and counts (+ bounds). |
 | `GetMapEnvironment` | Collection, decoration, map type/style, mood, collection-unit metadata. |
