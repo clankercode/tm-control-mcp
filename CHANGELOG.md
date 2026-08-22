@@ -9,6 +9,7 @@ Versions follow `info.toml` `[meta] version`.
 
 ### Added
 
+- `ControlPlayCamera`: in-play (Race) camera control — `get` reads camera type/flags/free-cam pose/spectator state (`raw=true` adds resolved offsets), `set_mode` switches free / cam 1-3 / backwards / alt / drivable, `set_position` places and aims the free camera. `x,y,z` + `target` solves the orbital form so the camera lands exactly and looks exactly at the target. `src/PlayCamera.as`; see README "In-play camera" for what does and does not take effect.
 - `PlayMap` — load a local map (or URL) into play via `ManiaTitleControlScriptAPI.PlayMap`. Same `path` style as `OpenMapInEditor`. Optional `mode` / `settingsXml`. Unwinds editor/race to the menu first; `waitMs` reports a blocking leave dialog.
 - Tool packs can set their public prefix with `ToolPackBuilder("id")` or `SetPackId`. Empty/omitted still uses the Openplanet plugin id. Custom ids: `[A-Za-z][A-Za-z0-9_-]{0,63}`; reserved `core` / `tm-control-mcp` / `TmMcp`. `UnregisterToolPack(plugin.ID)` drops every pack that plugin registered. Fixture pack now registers as `fixture.*`.
 - `EditNewMap` and `BackToMainMenu` now warn when leaving a dirty map pops the unsaved-changes dialog (`FrameAskYesNo`). `EditNewMap` waits `waitMs` (default 1500) like `OpenMapInEditor`; `BackToMainMenu` stops early instead of spinning 10s. Answer via `RespondDialog` or `SaveMapFlow`.

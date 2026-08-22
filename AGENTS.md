@@ -27,6 +27,10 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
 
 - **Readiness:** `GetReadiness` + `WaitUntil` (mode/dialog/editorReady/pageVisible/map counts/readiness). Prefer before mutate.
 - **Editor preflight / control:** `CanPlaceBlock`, `ControlCursor`, `ControlValidation`, `ControlCamera`, `ControlSelection`, `GetEditorSelectionState`, **`ControlEditMode`**.
+- **In-play camera:** **`ControlPlayCamera`** — `get` / `set_mode` (free, cam1-3, backwards, alt, drivable) /
+  `set_position`. Pass `x,y,z` **and** `target{x,y,z}` for an exact camera point + look-at; angles alone do
+  not rotate the view. `set_mode` can be silently dropped — check `switched`, not `success`. Editor camera is
+  still `SetEditorCamera` / `ControlCamera`.
 - **Cursor:** `GetCursor` / `ControlCursor` relative/cardinal — absolute optional.
 - **Item delete:** `RemoveRecentItems` / `RemoveItemsByIndex` → E++ `DeleteItems`. Prefer **`SetAgentTag` + `RemoveByTag`** for agent smoke cleanup.
 - **Inventory:** browse tools + **`ControlInventory`**. Path-place still preferred for headless placement.

@@ -8,3 +8,4 @@ op-next-formatted.json
 *.log
 .DS_Store
 .hermes/
+.worktrees/
