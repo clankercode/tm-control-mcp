@@ -8,6 +8,23 @@ namespace TmMcp {
         return cast<CGameCtnEditorFree>(app.Editor);
     }
 
+    // Live map nod. Same object in MapEditor and Race/play.
+    CGameCtnChallenge@ GetChallenge() {
+        auto app = cast<CTrackMania>(GetApp());
+        if (app is null) return null;
+        return app.RootMap;
+    }
+
+    Json::Value@ NeedMap() {
+        return MakeError(
+            "map not available",
+            "NO_MAP",
+            true,
+            "",
+            "Need app.RootMap (a loaded map in MapEditor or Race/play)."
+        );
+    }
+
     Json::Value@ MakeSuccess(Json::Value &in output) {
         Json::Value result = Json::Object();
         result["success"] = true;
@@ -105,10 +122,9 @@ namespace TmMcp {
         return Vec2ToJson(vec2(Math::ToDeg(anglesRad.x), Math::ToDeg(anglesRad.y)));
     }
 
-    Json::Value MapSummary(CGameCtnEditorFree@ editor) {
+    Json::Value MapSummary(CGameCtnChallenge@ map) {
         Json::Value output = Json::Object();
-        if (editor is null || editor.Challenge is null) return output;
-        auto map = editor.Challenge;
+        if (map is null) return output;
         output["name"] = map.MapName;
         output["size"] = CoordToJson(map.Size);
         output["decorationName"] = map.DecorationName;
@@ -127,9 +143,6 @@ namespace TmMcp {
         output["nbBlocks"] = int(map.Blocks.Length);
         output["nbBakedBlocks"] = int(map.BakedBlocks.Length);
         output["nbItems"] = int(map.AnchoredObjects.Length);
-        if (editor.PluginMapType !is null) {
-            output["nbScriptItems"] = int(editor.PluginMapType.Items.Length);
-        }
         output["vertexCount"] = int(map.VertexCount);
         if (map.MapInfo !is null) {
             output["fileName"] = map.MapInfo.FileName;
@@ -137,6 +150,15 @@ namespace TmMcp {
         auto fid = GetFidFromNod(map);
         if (fid !is null) {
             output["fullFileName"] = fid.FullFileName;
+        }
+        return output;
+    }
+
+    Json::Value MapSummary(CGameCtnEditorFree@ editor) {
+        if (editor is null || editor.Challenge is null) return Json::Object();
+        auto output = MapSummary(editor.Challenge);
+        if (editor.PluginMapType !is null) {
+            output["nbScriptItems"] = int(editor.PluginMapType.Items.Length);
         }
         return output;
     }
@@ -911,6 +933,7 @@ namespace TmMcp {
     bool IsToolName(const string &in name) {
         return name == "GetMode"
             || name == "OpenMapInEditor"
+            || name == "PlayMap"
             || name == "GetMapInfo"
             || name == "GetMapEnvironment"
             || name == "SaveMapAs"
@@ -1040,6 +1063,7 @@ namespace TmMcp {
         }
         if (name == "GetMode") return GetMode(input);
         if (name == "OpenMapInEditor") return OpenMapInEditor(input);
+        if (name == "PlayMap") return PlayMap(input);
         if (name == "GetMapInfo") return GetMapInfo(input);
         if (name == "GetMapEnvironment") return GetMapEnvironment(input);
         if (name == "ControlMapObjectives") return ControlMapObjectives(input);
@@ -1196,9 +1220,10 @@ namespace TmMcp {
 
     Json::Value@ BuildToolList() {
         Json::Value tools = Json::Array();
-        tools.Add(MakeTool("GetMode", "Get current game mode: Menu, Race, Loading, or a specific editor (MapEditor, ItemEditor, MediatrackerEditor, MeshEditor, SkinEditor, ModuleEditor). Unknown editor classes return Editor. Response always includes a loading bool. WaitUntil equals=Editor matches any editor.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetMode", "Get current game mode: Menu, Race, Loading, or a specific editor (MapEditor, MapEditor_Test, MapEditor_Validate, MapEditor_Playground, ItemEditor, MediatrackerEditor, MeshEditor, SkinEditor, ModuleEditor). In-editor test/validate/playground stay MapEditor_* (not Race). Unknown editor classes return Editor. WaitUntil equals=Editor matches any editor; equals=MapEditor matches MapEditor and MapEditor_*. Also returns curGameModeStr from ServerInfo (TM_PlayMap_Local, hotseat, matchmaking, …) when ServerInfo is present.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("OpenMapInEditor", "Open a local map file in the editor. Waits waitMs (default 1500) and reports any blocking dialog (e.g. unsaved-changes AskYesNo when leaving a dirty map) with a warning — answer it via RespondDialog or SaveMapFlow.", '{"type":"object","properties":{"path":{"type":"string"},"waitMs":{"type":"integer"}},"required":["path"],"additionalProperties":false}'));
-        tools.Add(MakeTool("GetMapInfo", "Get current editor map name and counts.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("PlayMap", "Play a local map (or URL) via ManiaTitleControlScriptAPI.PlayMap. Same path style as OpenMapInEditor (e.g. SkinUrlDemo3.Map.Gbx). Optional mode (empty = vanilla local play) and settingsXml. Unwinds editor/race to the menu first. waitMs (default 1500) reports a blocking leave dialog.", '{"type":"object","properties":{"path":{"type":"string"},"mode":{"type":"string"},"settingsXml":{"type":"string"},"waitMs":{"type":"integer"}},"required":["path"],"additionalProperties":false}'));
+        tools.Add(MakeTool("GetMapInfo", "Get current map name and counts via app.RootMap. Works in MapEditor and Race/play.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapEnvironment", "Read map collection, decoration, map type/style, mood, and collection-unit metadata.", '{"type":"object","properties":{},"additionalProperties":false}'));
 
         tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx. Response includes dialogPre and a warning when a dialog was up (the save may have been blocked; TM has several dialog systems, so check GetDialog first).", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":false}'));
@@ -1216,12 +1241,12 @@ namespace TmMcp {
         tools.Add(MakeTool("SetEditorCamera", "Set editor camera target, angles, and target distance. Angles default to degrees; use hAngleRad/vAngleRad for radians. vAngle beyond +/-90 degrees flips the camera upside-down (world appears rotated 180); the response carries a warning with the equivalent upright vAngle/hAngle when that happens.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"hAngle":{"type":"number"},"vAngle":{"type":"number"},"hAngleRad":{"type":"number"},"vAngleRad":{"type":"number"},"distance":{"type":"number"},"animate":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlCamera", "Use the editor camera API: status, centerOnCursor, moveToMapCenter, watchWholeMap, watchStart, watchClosestFinishLine, watchClosestCheckpoint, zoom, zoomIn, zoomOut, look, followCursor, ignoreCollisions, releaseLock, setVStep.", '{"type":"object","properties":{"action":{"type":"string"},"smooth":{"type":"boolean"},"loop":{"type":"boolean"},"clockwise":{"type":"boolean"},"halfSteps":{"type":"boolean"},"level":{"type":"string"},"direction":{"type":"string"},"directionKind":{"type":"string"},"follow":{"type":"boolean"},"ignore":{"type":"boolean"},"step":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("TakeScreenshot", "Native viewport screenshot. Waits for the file and returns its game-side path (fullName) + size. Options: format jpg|webp|tga|dds (default jpg), waitMs (default 5000, 0 or noWait skips waiting), hideOverlay (omit HUD/overlays for one frame), forceRes+width+height (render at a forced resolution, restored after). focus:{x,y,z} aims the editor camera at a world position for the shot (e.g. a placed checkpoint from GetBlockLocation pos) with distance (meters, default 80 — smaller = tighter zoom), optional vAngle/hAngle (degrees), then restores the camera afterwards unless restore:false. preset (with focus): fixed named camera angles for consistent shots — top (near-overhead), iso (default 3/4 view), high (steep 3/4), front, side, back. currentView:true captures the view exactly as-is (no camera change; cannot combine with focus/preset). Capture is asynchronous; on timeout output includes timedOut=true — see the 'screenshots' guide.", '{"type":"object","properties":{"format":{"type":"string"},"waitMs":{"type":"integer"},"noWait":{"type":"boolean"},"hideOverlay":{"type":"boolean"},"forceRes":{"type":"boolean"},"width":{"type":"integer"},"height":{"type":"integer"},"focus":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}}},"distance":{"type":"number"},"vAngle":{"type":"number"},"hAngle":{"type":"number"},"preset":{"type":"string","enum":["top","iso","high","front","side","back"]},"currentView":{"type":"boolean"},"restore":{"type":"boolean"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("GetBlocks", "Get blocks by optional grid/world radius, model query, and freeblock filter.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"radius":{"type":"number"},"world":{"type":"boolean"},"query":{"type":"string"},"isFree":{"type":"boolean"},"limit":{"type":"integer"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("GetRecentBlocks", "Get the last N blocks in map block order, useful for freeblock placement readback.", '{"type":"object","properties":{"count":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetBlocks", "Get blocks by optional grid/world radius, model query, and freeblock filter. Works in MapEditor and Race/play (RootMap).", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"radius":{"type":"number"},"world":{"type":"boolean"},"query":{"type":"string"},"isFree":{"type":"boolean"},"limit":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetRecentBlocks", "Get the last N blocks in map block order, useful for freeblock placement readback. Works in MapEditor and Race/play (RootMap).", '{"type":"object","properties":{"count":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetBlockAt", "Get block info at exact grid coordinate.", '{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"}},"required":["x","y","z"],"additionalProperties":false}'));
-        tools.Add(MakeTool("GetItems", "Get anchored items near a world position, or all items up to limit if no position is provided.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"radius":{"type":"number"},"limit":{"type":"integer"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("GetRecentItems", "Get the last N anchored items in map item order.", '{"type":"object","properties":{"count":{"type":"integer"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("GetWaypoints", "List every waypoint (start/finish/checkpoint/multilap) in the map: blocks and items with their type, name, index, position (grid coord + dir for blocks, world pos + rot for items), linkOrder and tag (linked checkpoints). Lightweight enumeration only — no spawn/fall analysis (see tm-mcp-pack-epp.CheckCheckpoints for that).", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetItems", "Get anchored items near a world position, or all items up to limit if no position is provided. Works in MapEditor and Race/play (RootMap).", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"radius":{"type":"number"},"limit":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetRecentItems", "Get the last N anchored items in map item order. Works in MapEditor and Race/play (RootMap).", '{"type":"object","properties":{"count":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetWaypoints", "List every waypoint (start/finish/checkpoint/multilap) in the map: blocks and items with their type, name, index, position (grid coord + dir for blocks, world pos + rot for items), linkOrder and tag (linked checkpoints). Lightweight enumeration only — no spawn/fall analysis (see tm-mcp-pack-epp.CheckCheckpoints for that). Works in MapEditor and Race/play (RootMap).", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetInventorySummary", "Get E++ inventory cache counts and scan status.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("BrowseInventoryTree", "Read-only browse of the editor inventory root/directories. Supports root, rootIndex, path, depth, limit, query.", '{"type":"object","properties":{"root":{"type":"string"},"rootIndex":{"type":"integer"},"path":{"type":"string"},"depth":{"type":"integer"},"limit":{"type":"integer"},"query":{"type":"string"},"includeArticles":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("FindBlockModels", "Search loaded editor block models.", '{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"},"includeTerrain":{"type":"boolean"},"terrainOnly":{"type":"boolean"}},"additionalProperties":false}'));
@@ -1277,7 +1302,7 @@ namespace TmMcp {
         tools.Add(MakeTool("SavePluginSettings", "Persist all Openplanet plugin settings to disk (Meta::SaveSettings).", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetRaceData", "Get live race data via MLFeed::GetRaceData_V4. Requires an active playground (Race mode). Returns map name, CP count, lap count, and sorted players.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetPlayers", "Get live player data via MLFeed::GetRaceData_V4. Richer than GetRaceData: includes login, currentLap, teamNum, isMVP, respawnRank. Requires Race mode.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("GetServerInfo", "Get current server connection info from CTrackManiaNetwork. Returns serverName, connected, playerCount, maxPlayers.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetServerInfo", "Get current server connection info from CTrackManiaNetwork. Returns serverName, connected, playerCount, maxPlayers, curGameModeStr.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetVehicleState", "VehicleState:: viewing dump: GetViewingPlayer + ViewingPlayerState plus RPM/sideSpeed/turbo/reactor/cruise/vehicleType/wheel dirt+falling. Needs Race/replay vis.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("ListVehicleVis", "VehicleState::GetAllVis — all vehicle vis in GameScene. limit default 32.", '{"type":"object","properties":{"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetVehicleVis", "VehicleState::GetSingularVis, GetVisFromId (entityId), or GetVis(player) via name/login.", '{"type":"object","properties":{"entityId":{"type":"integer"},"name":{"type":"string"},"login":{"type":"string"}},"additionalProperties":false}'));
@@ -1305,6 +1330,7 @@ namespace TmMcp {
         Json::Value output = Json::Object();
         string mode = DetectGameModeName();
         output["mode"] = mode;
+        output["curGameModeStr"] = "";
         if (app is null) {
             return MakeSuccess(output);
         }
@@ -1316,6 +1342,7 @@ namespace TmMcp {
             output["mapName"] = app.RootMap.MapName;
             output["mapUid"] = app.RootMap.MapInfo !is null ? app.RootMap.MapInfo.MapUid : "";
         }
+        output["curGameModeStr"] = GetCurGameModeStr();
         return MakeSuccess(output);
     }
 
@@ -1795,11 +1822,90 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
+    void PlayMapCoroutine(const string &in packed) {
+        Json::Value@ spec = Json::Parse(packed);
+        if (spec is null) {
+            warn("TM Control MCP PlayMap: bad coroutine payload");
+            return;
+        }
+        string path = string(spec["path"]);
+        string mode = spec.HasKey("mode") ? string(spec["mode"]) : "";
+        string settingsXml = spec.HasKey("settingsXml") ? string(spec["settingsXml"]) : "";
+
+        if (!Permissions::PlayLocalMap()) {
+            warn("TM Control MCP PlayMap: missing PlayLocalMap permission");
+            return;
+        }
+
+        auto app = cast<CGameManiaPlanet>(GetApp());
+        if (app is null || app.ManiaTitleControlScriptAPI is null) {
+            warn("TM Control MCP PlayMap: title control API not available");
+            return;
+        }
+
+        if (app.Network !is null
+            && app.Network.PlaygroundClientScriptAPI !is null
+            && app.Network.PlaygroundClientScriptAPI.IsInGameMenuDisplayed
+            && app.Network.PlaygroundInterfaceScriptHandler !is null) {
+            app.Network.PlaygroundInterfaceScriptHandler.CloseInGameMenu(
+                CGameScriptHandlerPlaygroundInterface::EInGameMenuResult::Quit);
+        }
+        app.BackToMainMenu();
+        uint64 tReady = Time::Now;
+        while (!app.ManiaTitleControlScriptAPI.IsReady && Time::Now - tReady < 10000) {
+            if (_LeaveDialogIsUp()) {
+                warn("TM Control MCP PlayMap: blocked by dialog after BackToMainMenu (unsaved changes?)");
+                return;
+            }
+            yield();
+        }
+        uint64 tMenu = Time::Now;
+        while ((app.Switcher.ModuleStack.Length < 1 || cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0]) is null)
+            && Time::Now - tMenu < 10000) {
+            if (_LeaveDialogIsUp()) {
+                warn("TM Control MCP PlayMap: blocked by dialog after BackToMainMenu (unsaved changes?)");
+                return;
+            }
+            yield();
+        }
+        yield();
+        app.ManiaTitleControlScriptAPI.PlayMap(path, mode, settingsXml);
+    }
+
+    Json::Value@ PlayMap(Json::Value &in input) {
+        if (!input.HasKey("path")) return MakeError("missing path");
+        string path = string(input["path"]);
+        if (path.Length == 0) return MakeError("path is empty");
+        if (!Permissions::PlayLocalMap()) return MakeError("PlayLocalMap permission unavailable");
+
+        Json::Value spec = Json::Object();
+        spec["path"] = path;
+        if (input.HasKey("mode")) spec["mode"] = string(input["mode"]);
+        if (input.HasKey("settingsXml")) spec["settingsXml"] = string(input["settingsXml"]);
+        startnew(CoroutineFuncUserdataString(PlayMapCoroutine), Json::Write(spec));
+
+        Json::Value output = Json::Object();
+        output["queued"] = true;
+        output["path"] = path;
+        if (input.HasKey("mode")) output["mode"] = string(input["mode"]);
+        int waitMs = input.HasKey("waitMs") ? int(input["waitMs"]) : 1500;
+        if (waitMs > 0) {
+            sleep(Math::Min(waitMs, 10000));
+            _AttachLeaveDialogWarning(output);
+        }
+        return MakeSuccess(output);
+    }
+
 
 Json::Value@ GetMapInfo(Json::Value &in input) {
+        auto map = GetChallenge();
+        if (map is null) return NeedMap();
+        auto output = MapSummary(map);
         auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
-        return MakeSuccess(MapSummary(editor));
+        if (editor !is null && editor.PluginMapType !is null) {
+            output["nbScriptItems"] = int(editor.PluginMapType.Items.Length);
+        }
+        return MakeSuccess(output);
     }
 
     Json::Value@ SaveMapAs(Json::Value &in input) {
@@ -2634,8 +2740,8 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
     }
 
     Json::Value@ GetBlocks(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
+        auto map = GetChallenge();
+        if (map is null) return NeedMap();
         bool hasCenter = input.HasKey("x") && input.HasKey("y") && input.HasKey("z");
         bool world = input.HasKey("world") ? bool(input["world"]) : false;
         float radius = input.HasKey("radius") ? float(input["radius"]) : (world ? 50.0 : 10.0);
@@ -2649,8 +2755,8 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         vec3 worldCenter = hasCenter ? PositionInput(input) : vec3();
 
         Json::Value blocks = Json::Array();
-        for (uint i = 0; i < editor.Challenge.Blocks.Length; i++) {
-            auto block = editor.Challenge.Blocks[i];
+        for (uint i = 0; i < map.Blocks.Length; i++) {
+            auto block = map.Blocks[i];
             if (block is null) continue;
             if (query.Length > 0 && !ModelMatchesQuery(block.BlockInfo, query)) continue;
 
@@ -2673,7 +2779,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         Json::Value output = Json::Object();
         output["blocks"] = blocks;
         output["count"] = int(blocks.Length);
-        output["total"] = int(editor.Challenge.Blocks.Length);
+        output["total"] = int(map.Blocks.Length);
         output["filtered"] = query.Length > 0 || filterFree || hasCenter;
         output["world"] = world;
         if (hasCenter) {
@@ -2690,17 +2796,17 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
     }
 
     Json::Value@ GetRecentBlocks(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
+        auto map = GetChallenge();
+        if (map is null) return NeedMap();
         int count = input.HasKey("count") ? int(input["count"]) : 10;
         if (count < 1) count = 1;
         if (count > 100) count = 100;
 
         Json::Value blocks = Json::Array();
-        int total = int(editor.Challenge.Blocks.Length);
+        int total = int(map.Blocks.Length);
         int start = Math::Max(0, total - count);
         for (int i = start; i < total; i++) {
-            auto block = editor.Challenge.Blocks[i];
+            auto block = map.Blocks[i];
             auto obj = BlockToJson(block);
             obj["index"] = i;
             blocks.Add(obj);
@@ -2726,8 +2832,8 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
     }
 
     Json::Value@ GetItems(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
+        auto map = GetChallenge();
+        if (map is null) return NeedMap();
         bool hasCenter = input.HasKey("x") && input.HasKey("y") && input.HasKey("z");
         vec3 center = hasCenter ? PositionInput(input) : vec3();
         float radius = input.HasKey("radius") ? float(input["radius"]) : 50.0;
@@ -2737,8 +2843,8 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         float radiusSq = radius * radius;
 
         Json::Value items = Json::Array();
-        for (uint i = 0; i < editor.Challenge.AnchoredObjects.Length && items.Length < uint(limit); i++) {
-            auto item = editor.Challenge.AnchoredObjects[i];
+        for (uint i = 0; i < map.AnchoredObjects.Length && items.Length < uint(limit); i++) {
+            auto item = map.AnchoredObjects[i];
             if (item is null) continue;
             if (hasCenter && (item.AbsolutePositionInMap - center).LengthSquared() > radiusSq) continue;
             auto obj = ItemToJson(item);
@@ -2749,7 +2855,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         Json::Value output = Json::Object();
         output["items"] = items;
         output["count"] = int(items.Length);
-        output["total"] = int(editor.Challenge.AnchoredObjects.Length);
+        output["total"] = int(map.AnchoredObjects.Length);
         output["hasCenter"] = hasCenter;
         if (hasCenter) {
             output["center"] = Vec3ToJson(center);
@@ -2760,17 +2866,17 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
     }
 
     Json::Value@ GetRecentItems(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
+        auto map = GetChallenge();
+        if (map is null) return NeedMap();
         int count = input.HasKey("count") ? int(input["count"]) : 10;
         if (count < 1) count = 1;
         if (count > 100) count = 100;
 
         Json::Value items = Json::Array();
-        int total = int(editor.Challenge.AnchoredObjects.Length);
+        int total = int(map.AnchoredObjects.Length);
         int start = Math::Max(0, total - count);
         for (int i = start; i < total; i++) {
-            auto item = editor.Challenge.AnchoredObjects[i];
+            auto item = map.AnchoredObjects[i];
             auto obj = ItemToJson(item);
             obj["index"] = i;
             items.Add(obj);
@@ -2784,9 +2890,8 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
     }
 
     Json::Value@ GetWaypoints(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
-        auto map = editor.Challenge;
+        auto map = GetChallenge();
+        if (map is null) return NeedMap();
 
         Json::Value wps = Json::Array();
         uint nBlocks = 0, nItems = 0;

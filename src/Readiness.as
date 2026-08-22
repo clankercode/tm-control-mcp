@@ -1,9 +1,19 @@
 namespace TmMcp {
     // Specific editor kinds for GetMode. Unknown editor classes fall back to "Editor".
     // WaitUntil equals=Editor and GetReadiness want=editor match any of these.
+    string DetectMapEditorModeName(CGameCtnEditorFree@ editor) {
+        if (editor is null || editor.PluginMapType is null) return "MapEditor";
+        auto pmt = editor.PluginMapType;
+        if (pmt.IsValidating) return "MapEditor_Validate";
+        if (pmt.IsTesting) return "MapEditor_Test";
+        if (pmt.IsSwitchedToPlayground) return "MapEditor_Playground";
+        return "MapEditor";
+    }
+
     string DetectEditorKindName(CMwNod@ editor) {
         if (editor is null) return "";
-        if (cast<CGameCtnEditorFree>(editor) !is null) return "MapEditor";
+        auto mapEd = cast<CGameCtnEditorFree>(editor);
+        if (mapEd !is null) return DetectMapEditorModeName(mapEd);
         if (cast<CGameEditorItem>(editor) !is null) return "ItemEditor";
         if (cast<CGameEditorMediaTracker>(editor) !is null) return "MediatrackerEditor";
         if (cast<CGameEditorMesh>(editor) !is null) return "MeshEditor";
@@ -14,7 +24,10 @@ namespace TmMcp {
 
     bool IsEditorModeName(const string &in mode) {
         string lower = mode.ToLower();
-        return lower == "editor" || lower.EndsWith("editor");
+        if (lower == "editor") return true;
+        if (lower.EndsWith("editor")) return true;
+        if (lower.StartsWith("mapeditor")) return true;
+        return false;
     }
 
     bool ModeMatches(const string &in actual, const string &in wanted) {
@@ -23,6 +36,7 @@ namespace TmMcp {
         string w = wanted.ToLower();
         if (a == w) return true;
         if (w == "editor" && IsEditorModeName(actual)) return true;
+        if (w == "mapeditor" && a.StartsWith("mapeditor")) return true;
         return false;
     }
 
@@ -33,6 +47,16 @@ namespace TmMcp {
         if (app.Editor !is null) return DetectEditorKindName(app.Editor);
         if (app.CurrentPlayground !is null) return "Race";
         return "Menu";
+    }
+
+    // Script mode name (TM_PlayMap_Local, TM_TimeAttackHotSeat_Online, TM_TMWTMatchmaking_Online, …).
+    // Network is almost always present; ServerInfo can be null outside a map.
+    string GetCurGameModeStr() {
+        auto app = cast<CTrackMania>(GetApp());
+        if (app is null || app.Network is null || app.Network.ServerInfo is null) return "";
+        auto si = cast<CTrackManiaNetworkServerInfo>(app.Network.ServerInfo);
+        if (si is null) return "";
+        return string(si.CurGameModeStr);
     }
 
     bool DialogIsBlocking(Json::Value@ dialog) {

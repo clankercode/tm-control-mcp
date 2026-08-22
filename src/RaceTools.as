@@ -93,6 +93,7 @@ namespace TmMcp {
         }
         output["playerCount"] = playerCount;
         output["maxPlayers"] = serverInfo is null ? 0 : int(serverInfo.MaxPlayerCount);
+        output["curGameModeStr"] = GetCurGameModeStr();
 
         return MakeSuccess(output);
     }

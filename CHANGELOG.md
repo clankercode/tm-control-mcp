@@ -9,6 +9,7 @@ Versions follow `info.toml` `[meta] version`.
 
 ### Added
 
+- `PlayMap` — load a local map (or URL) into play via `ManiaTitleControlScriptAPI.PlayMap`. Same `path` style as `OpenMapInEditor`. Optional `mode` / `settingsXml`. Unwinds editor/race to the menu first; `waitMs` reports a blocking leave dialog.
 - Tool packs can set their public prefix with `ToolPackBuilder("id")` or `SetPackId`. Empty/omitted still uses the Openplanet plugin id. Custom ids: `[A-Za-z][A-Za-z0-9_-]{0,63}`; reserved `core` / `tm-control-mcp` / `TmMcp`. `UnregisterToolPack(plugin.ID)` drops every pack that plugin registered. Fixture pack now registers as `fixture.*`.
 - `EditNewMap` and `BackToMainMenu` now warn when leaving a dirty map pops the unsaved-changes dialog (`FrameAskYesNo`). `EditNewMap` waits `waitMs` (default 1500) like `OpenMapInEditor`; `BackToMainMenu` stops early instead of spinning 10s. Answer via `RespondDialog` or `SaveMapFlow`.
 - `EditNewMap` for custom environments (RedIsland / BlueBay / GreenCoast / WhiteShore) now passes the preloaded decoration nod IdName (`Day` / `Day64` / `Sunset64` / …, not `64x64Day`) to `EditNewMap2`. Non-Day moods use the chosen nod directly instead of SwapDecoHack.
@@ -16,7 +17,9 @@ Versions follow `info.toml` `[meta] version`.
 
 ### Changed
 
-- `GetMode` (and `GetMenuPage` / `GetReadiness` / `WaitUntil` mode) now reports specific editor kinds: `MapEditor`, `ItemEditor`, `MediatrackerEditor`, `MeshEditor`, `SkinEditor`, `ModuleEditor`. Unknown editor classes still return `Editor`. `WaitUntil equals=Editor` and `GetReadiness want=editor` match any editor kind.
+- `GetMode` and `GetServerInfo` now include `curGameModeStr` from `app.Network.ServerInfo` (`TM_PlayMap_Local`, hotseat, matchmaking, …). Empty when ServerInfo is null (typical outside a map).
+- Map-summary reads (`GetMapInfo`, `GetItems`, `GetRecentItems`, `GetBlocks`, `GetRecentBlocks`, `GetWaypoints`, `GetMapEnvironment`) use `app.RootMap` (the same map nod in MapEditor and Race/play). Missing-map errors are `NO_MAP`. Mutators still require the editor (`NOT_IN_EDITOR`); `editor.Challenge` is an editor-presence check, not a different map.
+- `GetMode` (and `GetMenuPage` / `GetReadiness` / `WaitUntil` mode) now reports specific editor kinds: `MapEditor`, `ItemEditor`, `MediatrackerEditor`, `MeshEditor`, `SkinEditor`, `ModuleEditor`. In-editor drive states are `MapEditor_Validate`, `MapEditor_Test`, `MapEditor_Playground` (not `Race`). `WaitUntil equals=Editor` matches any editor; `equals=MapEditor` matches `MapEditor` and `MapEditor_*`. Unknown editor classes still return `Editor`.
 - `GetToolList()` now caches the built tool array and rebuilds only when a pack is registered, unregistered, or swept. Callers (e.g. tm-agent's chat UI) were paying ~1–2 ms per call to re-parse ~90 schemas every frame.
 
 ## [0.4.0] — 2026-08-16

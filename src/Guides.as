@@ -256,7 +256,7 @@ namespace TmMcp {
             + " (hard cap 30 min). Timeout returns success with timedOut=true/ok=false"
             + " (not a hard tool error).\n"
             + "\n"
-            + "GetMode reports MapEditor/ItemEditor/MediatrackerEditor/…; equals=Editor matches any.\n"
+            + "GetMode reports MapEditor/MapEditor_Test/MapEditor_Validate/MapEditor_Playground/ItemEditor/…; equals=Editor matches any; equals=MapEditor matches MapEditor_*.\n"
             + "call.py: --wait-mode Editor --until-ready editor --wait-timeout 20");
 
         _RegisterGuide("agent-cleanup",

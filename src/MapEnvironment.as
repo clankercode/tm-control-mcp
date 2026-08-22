@@ -98,17 +98,20 @@ namespace TmMcp {
     }
 
     Json::Value@ GetMapEnvironment(Json::Value &in input) {
-        auto editor = GetEditor();
-        if (editor is null || editor.Challenge is null) return MakeError("editor not available");
+        auto map = GetChallenge();
+        if (map is null) return NeedMap();
 
         Json::Value output = Json::Object();
-        output["map"] = MapSummary(editor);
-        output["challenge"] = ChallengeEnvironmentToJson(editor.Challenge);
-        output["mapInfo"] = MapInfoEnvironmentToJson(editor.Challenge.MapInfo);
-        output["challengeParameters"] = ChallengeParametersEnvironmentToJson(editor.Challenge.ChallengeParameters);
-        output["mood"] = EditorMoodToJson(editor);
-        output["pluginMapType"] = PluginMapTypeEnvironmentToJson(editor.PluginMapType);
-        output["validation"] = ValidationToJson(editor.PluginMapType);
+        output["map"] = MapSummary(map);
+        output["challenge"] = ChallengeEnvironmentToJson(map);
+        output["mapInfo"] = MapInfoEnvironmentToJson(map.MapInfo);
+        output["challengeParameters"] = ChallengeParametersEnvironmentToJson(map.ChallengeParameters);
+        auto editor = GetEditor();
+        if (editor !is null) {
+            output["mood"] = EditorMoodToJson(editor);
+            output["pluginMapType"] = PluginMapTypeEnvironmentToJson(editor.PluginMapType);
+            output["validation"] = ValidationToJson(editor.PluginMapType);
+        }
         output["readOnly"] = true;
         return MakeSuccess(output);
     }
