@@ -296,7 +296,7 @@ python3 tools/call.py EditNewMap '{"environment":"Stadium","decoration":"48x48Da
 
 ---
 
-## Current tools (100 release / 107 DEV)
+## Current tools (101 release / 108 DEV)
 
 Ground truth: every `MakeTool("…")` registration in `src/McpTools.as`.
 Prefer `{"route":"tools"}` at runtime if this list drifts.
@@ -339,6 +339,7 @@ Prefer `{"route":"tools"}` at runtime if this list drifts.
 | `GetEditorCamera` / `SetEditorCamera` | Numeric camera target/angles/distance. |
 | `ControlCamera` | centerOnCursor, watchWholeMap/start/CP/finish, zoom, look, … |
 | `FocusCamera` | Focus on world `(x,y,z)` via E++ animation. |
+| `ControlPlayCamera` | **In-play** camera: read state, switch mode (free / cam 1-3 / backwards / alt), place and aim the free camera. |
 | `TakeScreenshot` | Native viewport screenshot with file detection (`fullName`), `hideOverlay`, `forceRes`. |
 
 ### Blocks / items (read)
@@ -465,6 +466,59 @@ Path-based place remains the reliable headless path; `ControlInventory` is for p
 ### Named macroblocks + skins
 
 Block/item specs support `variant`, `bgSkin`, `fgSkin`. Skins apply after successful `PlaceNamedMacroblock` and are verified when possible. Durable JSON is v2-capable (item skins) with v1 load compatibility. In-memory handles alone do not survive reload — use `SaveNamedMacroblock`.
+
+### In-play camera (`ControlPlayCamera`)
+
+Openplanet exposes no typed handle to the playground camera, so this tool walks
+raw offsets anchored on reflected members where possible. Offsets and the
+values they take are lifted from shipped plugins, not guessed — see the header
+comment in `src/PlayCamera.as` for the provenance of each one.
+
+**Placing and aiming the free camera is exact.** Pass `x,y,z` *and*
+`target{x,y,z}` and the camera lands on `x,y,z` to the millimetre with the
+target on the exact screen centre — verified against `ProjectWorldToScreen`
+(960, 540 of 1920x1080) at several angles including straight down. That is the
+mode to use for measurement work: known camera point, known look-at, known
+distance.
+
+Under the hood that is the *orbital* form. The free camera has two mutually
+exclusive parameterisations:
+
+| | driven by | orientation |
+|---|---|---|
+| free | `m_FreeVal_Loc_Translation` | whatever the engine last built |
+| orbital (`m_TargetIsEnabled`) | `m_TargetPos` + `m_Radius` + `m_Yaw`/`m_Pitch` | always looks at the target |
+
+`pos = target - radius * (cos v * sin h, -sin v, cos v * cos h)`, `h = yaw`,
+`v = pitch`, positive pitch above the target — the same convention as the
+editor orbital camera in `CameraMaths.md`, so `LookDirToOrbitalAngles` is
+reused to solve it.
+
+Consequences worth knowing before you trust a number:
+
+- **`pitch`/`yaw`/`roll` without a target do nothing to the view.** They are
+  written and read back faithfully, but the free camera only rebuilds its
+  orientation matrix while the player is moving the mouse, so scripted angles
+  sit unused. Aim with a target instead.
+- **A live target overrides a position write**, so `x,y,z` on its own releases
+  the target first and says so in `steps`.
+- **Cams 1/2/3 cannot be moved.** They are rigidly attached to the car.
+- **`set_mode` is only consumed on a live playground tick.** When the tick does
+  not read the request the camera simply stays put, so the response carries
+  `switched: true|false` and a `warning`; judge the result on that and on the
+  `after` readback, never on `success`. Observed reliable with the game
+  in the foreground and no overlay up, and observed silently dropped — every
+  mechanism, every mode — while the **Openplanet overlay and plugin windows
+  were open over the view**, with `uiSequence: Playing`, the window focused,
+  the player spawned, not spectating and not force-cammed. Close the overlay
+  before switching. Free cam itself, and placing it, kept working throughout,
+  because the position is read by the render path rather than the tick.
+- `spectator.forceCameraType` is a **4-bit** field: `15` is the all-bits-set
+  "not forced" sentinel that ManiaScript writes as `-1`. Seeing 15 does *not*
+  mean something is forcing the camera; `spectator.forced` says that.
+- Needs an active playground — solo/local Race, editor test runs, spectating.
+  `NO_PLAYGROUND` in menus. In the map editor use `SetEditorCamera` /
+  `ControlCamera` instead. MediaTracker clips override this camera.
 
 ### Screenshots
 
