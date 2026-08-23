@@ -307,6 +307,31 @@ namespace TmMcp {
             + "If the game crashes after a capture, check LogCrash_<HASH>.txt (see the"
             + " crash-debugging guide) — repeated crashes overwrite the same file.");
 
+        _RegisterGuide("reflection",
+            "Querying Openplanet Reflection type info",
+            "GetTypeInfo {className:'CGameCtnChallenge'} is the default call: class"
+            + " metadata (name, id/idHex, size, description, userName, fileExtension,"
+            + " base, bases[]) plus members[] for this class and every ancestor.\n"
+            + "\n"
+            + "Each member has name, optional nameDescriptive, id, offset/offsetHex,"
+            + " isField, declaredOn. isField=false when offset is 0xFFFF — typically a"
+            + " method, not a data field.\n"
+            + "\n"
+            + "Limits of the live API (Openplanet 1.29 Reflection):\n"
+            + "- MwMemberInfo has no member type name. You get offsets, not 'nat3' /"
+            + "  'CGameCtnBlock@'. Static dumps (OpenplanetNext.json) have types; live"
+            + "  Reflection does not.\n"
+            + "- There is no 'list every class' call. Lookup is GetType(name),"
+            + "  GetType(id), or TypeOf(nod).\n"
+            + "\n"
+            + "Other inputs:\n"
+            + "- classId: integer or 0x hex (same IDs as idHex in the response).\n"
+            + "- from: app | editor | challenge | cursor | pluginMap — TypeOf a live nod.\n"
+            + "- member: one name (walks bases unless ownOnly).\n"
+            + "- ownOnly:true — only members declared on this class.\n"
+            + "- query: case-insensitive substring on name / nameDescriptive.\n"
+            + "- limit: cap members[] (memberCount is the untruncated match count).");
+
         _RegisterGuide("epp-tools-moved",
             "E++ tools moved to tm-mcp-pack-epp",
             "All Editor++ (E++) tools now live in the tm-mcp-pack-epp tool pack:\n"

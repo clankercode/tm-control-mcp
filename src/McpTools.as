@@ -1024,6 +1024,7 @@ namespace TmMcp {
             || name == "SetEditorOrbitalTarget"
             || name == "GetResult"
             || name == "ListToolPacks"
+            || name == "GetTypeInfo"
             || IsPackToolName(name)
             || IsMovedEppTool(name);
     }
@@ -1189,6 +1190,7 @@ namespace TmMcp {
         if (name == "SetEditorOrbitalTarget") return SetEditorOrbitalTarget(input);
         if (name == "GetResult") return GetResult(input);
         if (name == "ListToolPacks") return ListToolPacks(input);
+        if (name == "GetTypeInfo") return GetTypeInfo(input);
         Json::Value@ packResult = DispatchPackTool(name, input);
         if (packResult !is null) return packResult;
         return MakeError("unknown tool: " + name, "unknown_tool", false, "", "");
@@ -1317,6 +1319,7 @@ namespace TmMcp {
         tools.Add(MakeTool("SetEditorOrbitalTarget", "Camera::SetEditorOrbitalTarget — focus editor orbital camera on world (x,y,z).", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}},"required":["x","y","z"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetResult", "Poll for async tool result. input: {requestId}. Returns {request_id, status:'pending'|'done'|'error', result?/error?}. Used after DispatchAsync (in-process only).", '{"type":"object","properties":{"requestId":{"type":"string"},"request_id":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ListToolPacks", "List registered MCP tool packs (id, plugin, toolCount, enabled).", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetTypeInfo", "Openplanet Reflection dump for a class and all its members (default). Pass className (e.g. CGameCtnChallenge); optional classId (int or 0x hex) or from=app|editor|challenge|cursor|pluginMap (TypeOf a live nod). Default includes inherited members (declaredOn); ownOnly:true keeps only this class. Optional member (one name), query (case-insensitive substring), limit. Each member has name, offset/offsetHex, isField (false when offset is 0xFFFF, typically a method), declaredOn. MwMemberInfo has no member type name.", '{"type":"object","properties":{"className":{"type":"string"},"classId":{"type":["string","integer"]},"from":{"type":"string"},"member":{"type":"string"},"ownOnly":{"type":"boolean"},"query":{"type":"string"},"limit":{"type":"integer"}},"additionalProperties":false}'));
         AppendPackTools(tools);
         return tools;
     }

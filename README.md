@@ -81,7 +81,7 @@ Pointer peeks, safe memory reads, gizmo/fuzz helpers, macroblock header dumps �
 `.op` packages omit these tools from the registry.
 
 **Ground truth tool list:** `{"route":"tools"}` at runtime, or every
-`MakeTool("…")` in `src/McpTools.as` (**100 tools** (release; +7 DEV-only) at last count).
+`MakeTool("…")` in `src/McpTools.as` (**102 tools** (release; +7 DEV-only) at last count).
 
 ---
 
@@ -296,7 +296,7 @@ python3 tools/call.py EditNewMap '{"environment":"Stadium","decoration":"48x48Da
 
 ---
 
-## Current tools (101 release / 108 DEV)
+## Current tools (102 release / 109 DEV)
 
 Ground truth: every `MakeTool("…")` registration in `src/McpTools.as`.
 Prefer `{"route":"tools"}` at runtime if this list drifts.
@@ -436,6 +436,7 @@ Only registered when the plugin is built with `defines = ["DEV"]`
 
 | Tool | Summary |
 |------|---------|
+| `GetTypeInfo` | Live Openplanet Reflection: class + all members. Default `{className}`. |
 | `ListPlugins` | Loaded plugins (`query`, `includeDisabled`, `includeUnloaded`). |
 | `GetPlugin` | One plugin by id/name; `includeSettings` optional. |
 | `ControlPlugin` | enable/disable/reload/unload/load/openSettings/getLogs (no self-disable/unload/rebuild). |
