@@ -226,17 +226,18 @@ namespace TmMcp {
         if (pack.dispatch is null) {
             return MakeError("pack '" + packId + "' has no dispatch", "pack_null_dispatch", false);
         }
-        uint started = Time::Now;
-        trace("TM Control MCP pack start " + name);
+        // Disabled: these fire on every pack tool call and flood the Openplanet log.
+        // uint started = Time::Now;
+        // trace("TM Control MCP pack start " + name);
         Json::Value@ result = null;
         try {
             @result = pack.dispatch(local, input);
         } catch {
             @result = MakeError("pack tool threw: " + getExceptionInfo(), "pack_exception", true);
         }
-        string status = "err";
-        if (result !is null && result.HasKey("success") && bool(result["success"])) status = "ok";
-        trace("TM Control MCP pack done " + name + " " + status + " " + (Time::Now - started) + "ms");
+        // string status = "err";
+        // if (result !is null && result.HasKey("success") && bool(result["success"])) status = "ok";
+        // trace("TM Control MCP pack done " + name + " " + status + " " + (Time::Now - started) + "ms");
         if (result is null) {
             return MakeError("pack '" + packId + "' returned null for " + local, "pack_null_result", true);
         }
