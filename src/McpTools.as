@@ -459,6 +459,37 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
+    // Fire CControlButton.OnAction on an editor-interface control (the editor UI
+    // lives under editor.EditorInterface.InterfaceRoot, not in maniascript layers).
+    Json::Value@ TriggerEditorControl(Json::Value &in input) {
+        auto app = cast<CTrackMania>(GetApp());
+        auto editor = app is null ? null : cast<CGameCtnEditorFree>(app.Editor);
+        if (editor is null || editor.EditorInterface is null || editor.EditorInterface.InterfaceRoot is null) {
+            return MakeError("editor interface not available", "NOT_IN_EDITOR", true, "Editor");
+        }
+        if (!input.HasKey("path")) return MakeError("missing path", "INVALID_INPUT");
+        auto pathJson = input["path"];
+        if (pathJson.GetType() != Json::Type::Array || pathJson.Length == 0) {
+            return MakeError("path must be a non-empty array of control id names", "INVALID_INPUT");
+        }
+        string[]@ path = string[]();
+        for (uint i = 0; i < pathJson.Length; i++) path.InsertLast(string(pathJson[i]));
+        auto target = _DlgFollowIdPath(cast<CControlContainer>(editor.EditorInterface.InterfaceRoot), path);
+        if (target is null) return MakeError("control path not found: " + path[path.Length - 1], "NOT_FOUND");
+        auto btn = cast<CControlButton>(target);
+        if (btn is null) return MakeError("target is not a CControlButton: " + path[path.Length - 1], "INVALID_INPUT");
+        bool requireVisible = input.HasKey("requireVisible") ? bool(input["requireVisible"]) : false;
+        bool visible = btn.IsVisible && (btn.Parent !is null ? btn.Parent.IsVisible : true);
+        if (requireVisible && !visible) {
+            return MakeError("target not visible: " + path[path.Length - 1], "NOT_VISIBLE");
+        }
+        btn.OnAction();
+        Json::Value output = Json::Object();
+        output["clicked"] = path[path.Length - 1];
+        output["visible"] = visible;
+        return MakeSuccess(output);
+    }
+
     Json::Value BasicDialogSummary() {
         auto app = cast<CTrackMania>(GetApp());
         Json::Value output = Json::Object();
@@ -967,6 +998,10 @@ namespace TmMcp {
             || name == "DevGetPointers"
             || name == "DevInspectChallengeOffsets"
             || name == "DevComputeItemsPointers"
+            || name == "DevSceneComponents"
+            || name == "CopyPasteSelection"
+            || name == "TriggerEditorControl"
+            || name == "DevInputBindings"
 #endif
             || name == "CanPlaceBlock"
             || name == "PlaceBlock"
@@ -1112,6 +1147,10 @@ namespace TmMcp {
         if (name == "DevSafeRead") return RunDevSafeRead(input);
         if (name == "DevGetPointers") return RunDevGetPointers(input);
         if (name == "DevInspectChallengeOffsets") return RunDevInspectChallengeOffsets(input);
+        if (name == "DevSceneComponents") return RunDevSceneComponents(input);
+        if (name == "CopyPasteSelection") return RunCopyPasteSelection(input);
+        if (name == "TriggerEditorControl") return TriggerEditorControl(input);
+        if (name == "DevInputBindings") return RunDevInputBindings(input);
 #endif
         if (name == "CreateNamedMacroblock") return CreateNamedMacroblock(input);
         if (name == "GetNamedMacroblock") return GetNamedMacroblockTool(input);
@@ -1274,6 +1313,10 @@ namespace TmMcp {
         tools.Add(MakeTool("DevGetPointers", "Return raw pointers for the current editor, PluginMapType, Challenge, Cursor, and App, with per-nod vtable/refcount peeks. Optional listAnchoredObjects, listBlocks, and listPmtItems include map items/blocks/pmt.Items pointers (capped by *Limit params, default 20). listPmtItems exposes healthy CGameCtnEditorScriptAnchoredObject wrappers for memory comparison against compute-path wrappers.", '{"type":"object","properties":{"listAnchoredObjects":{"type":"boolean"},"anchoredObjectsLimit":{"type":"integer"},"listBlocks":{"type":"boolean"},"blocksLimit":{"type":"integer"},"listPmtItems":{"type":"boolean"},"pmtItemsLimit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("DevInspectChallengeOffsets", "DEV: live CGameCtnChallenge reflection offsets plus FastArray headers at AnchoredObjects+0x00..+0x40. Used to check whether O_MAP_MACROBLOCK_INFOS (AnchoredObjects+0x20) still points at the {InstId,MwId} instance buffer.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("DevComputeItemsPointers", "Like RunComputeItemsDiagnostic but NEVER accesses wrapper fields (Position/ItemModel). Returns raw pointers + vtable/refcount peeks for each MacroblockInstanceItemsResults entry so you can inspect layout via DevSafeRead without crashing.", '{"type":"object","properties":{"mbPath":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"force":{"type":"boolean"}},"required":["mbPath","x","y","z"],"additionalProperties":false}'));
+        tools.Add(MakeTool("DevSceneComponents", "DEV diagnostic that works in ANY mode (no editor needed): walks GetApp().GameScene scene-manager list and dumps every component (typeId/name/ptr/probe). NSceneDestructiblePhy components get a full slot/body/queue dump (slot Dyna* table, per-slot HMS, bodies, dynamize/break queue, DynaPeek of each slot's Dyna: Mesh/DynaShape/GmSurf/LocAnimIsPhysical + Mesh visuals array); NSceneDestructibleVis gets render-inst counts; NSceneItem/NGameItem SMgrs get record iso+flags dumps. Use to audit destructible/dyna items in the play scene.", '{"type":"object","properties":{"maxSlots":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("CopyPasteSelection", "DEV (editor): drive the engine copy-paste primitives directly — CopyPaste_ResetSelection, CopyPaste_AddOrSubSelection(lo,hi) in block units, CopyPaste_Copy into editor.CopyPasteMacroBlockInfo. Pass {lo:[x,y,z],hi:[x,y,z]} to region-select; {reset:false} to keep the current selection; {doCopy:false} to select without copying.", '{"type":"object","properties":{"lo":{"type":"array","items":{"type":"integer"}},"hi":{"type":"array","items":{"type":"integer"}},"reset":{"type":"boolean"},"doCopy":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("TriggerEditorControl", "DEV (editor): fire CControlButton.OnAction on a control inside the editor interface (editor.EditorInterface.InterfaceRoot), e.g. {path:[\"FrameMain\",\"FrameCopyPasteTools\",\"FrameMacroblock\",\"ButtonSelectionBoxSaveNew\"]}. Path elements are IdName substrings resolved depth-first via the same finder GetEditorInterfaceTree uses. Set requireVisible=true to refuse invisible targets. Use GetEditorInterfaceTree to discover paths.", '{"type":"object","properties":{"path":{"type":"array","items":{"type":"string"}},"requireVisible":{"type":"boolean"}},"required":["path"],"additionalProperties":false}'));
+        tools.Add(MakeTool("DevInputBindings", "DEV: dump the player profile input-bindings chain via typed access — GetApp().PlayerProfiles and CurrentProfile -> CGamePlayerProfile.InputBindingsConfigs -> chunk.Config (CInputBindingsConfig), with a raw u64 dump of each 144-byte config; also the ManiaPlanetScriptAPI InputBindings_* string lists and a raw dump of the opaque new-profile object. Read-only; maxEntries caps list output; full=true dumps the full 776-byte profile blob.", '{"type":"object","properties":{"maxEntries":{"type":"integer"},"full":{"type":"boolean"}},"additionalProperties":false}'));
 #endif
         tools.Add(MakeTool("CanPlaceBlock", "Check whether a normal grid/terrain block can be placed without mutating the map.", '{"type":"object","properties":{"blockName":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"allowDestruction":{"type":"boolean"}},"required":["blockName","x","y","z"],"additionalProperties":false}'));
         tools.Add(MakeTool("PlaceBlock", "Place a block in the editor and return mapPre/mapPost metadata.", '{"type":"object","properties":{"blockName":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"allowDestruction":{"type":"boolean"}},"required":["blockName","x","y","z"],"additionalProperties":false}'));
