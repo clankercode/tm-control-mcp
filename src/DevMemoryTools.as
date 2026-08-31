@@ -6,8 +6,7 @@ namespace TmMcp {
     }
 
     uint64 NodPointerOrZero(CMwNod@ nod) {
-        if (nod is null) return 0;
-return 0;
+        return FidsPointerOfNod(nod);
     }
 
     // Accept either a JSON string ("0x...", "1234") or an integer (uint64 range).

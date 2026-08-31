@@ -1,5 +1,9 @@
 # Domain glossary
 
+## FID
+
+A `CSystemFidFile` / `CSystemFidsFolder` handle into one of Trackmania's five file drives (`game`, `user`, `fake`, `resource`, `programData`). Openplanet exposes them via `Fids::Get{Drive}`, `Preload`, `UpdateTree`, `Extract`, `GetFullPath`. Not a raw OS path — browse with `ControlFids`.
+
 ## Tool pack
 
 A separate Openplanet plugin that registers named MCP tools into `tm-control-mcp` (`TmMcp`) at runtime. TmMcp never imports the pack plugin.

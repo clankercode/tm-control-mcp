@@ -437,6 +437,7 @@ Only registered when the plugin is built with `defines = ["DEV"]`
 | Tool | Summary |
 |------|---------|
 | `GetTypeInfo` | Live Openplanet Reflection: class + all members. Default `{className}`. |
+| `ControlFids` | `Fids::` drives/get/list/preload/updateTree/extract/getFullPath/fromNod. |
 | `ListPlugins` | Loaded plugins (`query`, `includeDisabled`, `includeUnloaded`). |
 | `GetPlugin` | One plugin by id/name; `includeSettings` optional. |
 | `ControlPlugin` | enable/disable/reload/unload/load/openSettings/getLogs (no self-disable/unload/rebuild). |

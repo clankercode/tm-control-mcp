@@ -1025,6 +1025,7 @@ namespace TmMcp {
             || name == "GetResult"
             || name == "ListToolPacks"
             || name == "GetTypeInfo"
+            || name == "ControlFids"
             || IsPackToolName(name)
             || IsMovedEppTool(name);
     }
@@ -1191,6 +1192,7 @@ namespace TmMcp {
         if (name == "GetResult") return GetResult(input);
         if (name == "ListToolPacks") return ListToolPacks(input);
         if (name == "GetTypeInfo") return GetTypeInfo(input);
+        if (name == "ControlFids") return ControlFids(input);
         Json::Value@ packResult = DispatchPackTool(name, input);
         if (packResult !is null) return packResult;
         return MakeError("unknown tool: " + name, "unknown_tool", false, "", "");
@@ -1320,6 +1322,7 @@ namespace TmMcp {
         tools.Add(MakeTool("GetResult", "Poll for async tool result. input: {requestId}. Returns {request_id, status:'pending'|'done'|'error', result?/error?}. Used after DispatchAsync (in-process only).", '{"type":"object","properties":{"requestId":{"type":"string"},"request_id":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ListToolPacks", "List registered MCP tool packs (id, plugin, toolCount, enabled).", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetTypeInfo", "Openplanet Reflection dump for a class and all its members (default). Pass className (e.g. CGameCtnChallenge); optional classId (int or 0x hex) or from=app|editor|challenge|cursor|pluginMap (TypeOf a live nod). Default includes inherited members (declaredOn); ownOnly:true keeps only this class. Optional member (one name), query (case-insensitive substring), limit. Each member has name, offset/offsetHex, isField (false when offset is 0xFFFF, typically a method), declaredOn. MwMemberInfo has no member type name.", '{"type":"object","properties":{"className":{"type":"string"},"classId":{"type":["string","integer"]},"from":{"type":"string"},"member":{"type":"string"},"ownOnly":{"type":"boolean"},"query":{"type":"string"},"limit":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("ControlFids", "Openplanet Fids:: — browse and operate on the five file drives (game|user|fake|resource|programData). action: drives (list roots), get (file or folder metadata; kind=file|folder|auto), list (one-level children; query/limit/offset/kind), preload (Fids::Preload — loads the nod; check nod.className / nod.ptr), updateTree (rescan disk; refuses empty game path unless force:true), extract (Fids::Extract to disk, or dest=relative name via CopyToFileRelative; writes files), getFullPath, fromNod (GetFidFromNod of from_ptr — hex or int nod pointer from preload/get includeNod or another tool; not from=app|editor). Paths are drive-relative (e.g. GameData/Stadium/GameCtnDecoration). list default limit 80 max 400. Guide: GetGuide {topic:fids}.", '{"type":"object","properties":{"action":{"type":"string"},"drive":{"type":"string"},"path":{"type":"string"},"kind":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer"},"offset":{"type":"integer"},"includeNod":{"type":"boolean"},"withFiles":{"type":"boolean"},"force":{"type":"boolean"},"hookMethod":{"type":"boolean"},"dest":{"type":"string"},"failIfExists":{"type":"boolean"},"from_ptr":{"type":["string","integer"]},"fromPtr":{"type":["string","integer"]},"updateTree":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
         AppendPackTools(tools);
         return tools;
     }

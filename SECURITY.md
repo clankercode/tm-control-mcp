@@ -10,7 +10,7 @@ powerful editor/menu operations on behalf of any client that can connect.
 |------|--------|
 | Bind | **Localhost only by default** — do **not** bind to `0.0.0.0` or a LAN IP |
 | Auth | **None** — any process on the machine can call tools while the plugin is loaded |
-| Impact | Mutate/clear maps, drive menus, inject ManiaScript, enable/disable plugins, read/write plugin settings, DEV memory tools |
+| Impact | Mutate/clear maps, drive menus, inject ManiaScript, enable/disable plugins, read/write plugin settings, extract game files to disk, DEV memory tools |
 | Trust model | Same as “a debugger attached to your game client” |
 
 If that is unacceptable for your environment, **do not load the plugin**.
@@ -25,6 +25,7 @@ If that is unacceptable for your environment, **do not load the plugin**.
 - Agents that call destructive tools without readiness checks (`ClearMapContent`, menu play launches, `ControlPlugin unload`, …)
 - ManiaScript injection (`RunManialinkScript`) causing game instability or recovery restarts
 - DEV tools exposing process memory layout (`DevSafeRead`, pointer dumps)
+- `ControlFids extract` writing packed game files to disk (`Fids::Extract` / `CopyToFileRelative`)
 - Settings changes that move the socket (host/port) or enable request tracing (logs may contain payloads)
 
 ### Out of scope (not defended)
