@@ -936,6 +936,8 @@ namespace TmMcp {
             || name == "PlayMap"
             || name == "GetMapInfo"
             || name == "GetMapEnvironment"
+            || name == "SetMoodTimeOfDay"
+            || name == "ComputeShadows"
             || name == "SaveMapAs"
             || name == "SaveMapFlow"
             || name == "GetDialog"
@@ -998,7 +1000,9 @@ namespace TmMcp {
             || name == "CreateMapViaMenu"
             || name == "RunManialinkScript"
             || name == "GetReadiness"
+            || name == "GetLightmapComputeState"
             || name == "WaitUntil"
+            || name == "MeasureFrameTime"
             || name == "SetAgentTag"
             || name == "ListTagged"
             || name == "ClearTagIndex"
@@ -1070,6 +1074,8 @@ namespace TmMcp {
         if (name == "PlayMap") return PlayMap(input);
         if (name == "GetMapInfo") return GetMapInfo(input);
         if (name == "GetMapEnvironment") return GetMapEnvironment(input);
+        if (name == "SetMoodTimeOfDay") return SetMoodTimeOfDay(input);
+        if (name == "ComputeShadows") return ComputeShadows(input);
         if (name == "ControlMapObjectives") return ControlMapObjectives(input);
         if (name == "ControlItemEditor") return ControlItemEditor(input);
         if (name == "SaveMapAs") return SaveMapAs(input);
@@ -1157,7 +1163,9 @@ namespace TmMcp {
         if (name == "CreateMapViaMenu") return CreateMapViaMenu(input);
         if (name == "RunManialinkScript") return RunManialinkScript(input);
         if (name == "GetReadiness") return GetReadiness(input);
+        if (name == "GetLightmapComputeState") return GetLightmapComputeState(input);
         if (name == "WaitUntil") return WaitUntil(input);
+        if (name == "MeasureFrameTime") return MeasureFrameTime(input);
         if (name == "SetAgentTag") return SetAgentTag(input);
         if (name == "ListTagged") return ListTagged(input);
         if (name == "RemoveByTag") return RemoveByTag(input);
@@ -1233,6 +1241,8 @@ namespace TmMcp {
         tools.Add(MakeTool("PlayMap", "Play a local map (or URL) via ManiaTitleControlScriptAPI.PlayMap. Same path style as OpenMapInEditor (e.g. SkinUrlDemo3.Map.Gbx). Optional mode (empty = vanilla local play) and settingsXml. Unwinds editor/race to the menu first. waitMs (default 1500) reports a blocking leave dialog.", '{"type":"object","properties":{"path":{"type":"string"},"mode":{"type":"string"},"settingsXml":{"type":"string"},"waitMs":{"type":"integer"}},"required":["path"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapInfo", "Get current map name and counts via app.RootMap. Works in MapEditor and Race/play.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapEnvironment", "Read map collection, decoration, map type/style, mood, and collection-unit metadata.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("SetMoodTimeOfDay", "Set CGameCtnEditorFree.MoodTimeOfDay01 (0..1). Optional dynamic sets MoodIsDynamicTime. Returns previous+new timeOfDay01/timeOfDayStr. Change time of day before a second ComputeShadows — the game refuses a rebake when shadows are already cached for that mood.", '{"type":"object","properties":{"timeOfDay01":{"type":"number"},"dynamic":{"type":"boolean"}},"required":["timeOfDay01"],"additionalProperties":false}'));
+        tools.Add(MakeTool("ComputeShadows", "Start editor.PluginMapType.ComputeShadows1 (does not wait; use WaitUntil condition=shadowsClear). quality is CGameEditorPluginMap::EShadowsQuality name or 0..5 (default Default). bustCache (default true) zeros CHmsLightMapCache.m_Quality so a bake actually starts.", '{"type":"object","properties":{"quality":{"type":["string","integer"]},"bustCache":{"type":"boolean"}},"additionalProperties":false}'));
 
         tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx. Response includes dialogPre and a warning when a dialog was up (the save may have been blocked; TM has several dialog systems, so check GetDialog first).", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("SaveMapFlow", "Drive the whole save-dialog chain in one call: answers 'save changes?' (yes, or no when save=false), fills + validates the SaveAs dialog (optional name), answers the overwrite confirm per overwrite (default false -> cancel), waits through WaitMessage, and dismisses the post-save challenge card (dismissCard default true). Returns a step log, final dialog state, and map name/file. Use after OpenMapInEditor warns about a save prompt, or standalone.", '{"type":"object","properties":{"name":{"type":"string"},"save":{"type":"boolean"},"overwrite":{"type":"boolean"},"dismissCard":{"type":"boolean"},"maxIters":{"type":"integer"}},"additionalProperties":false}'));
@@ -1297,8 +1307,10 @@ namespace TmMcp {
         tools.Add(MakeTool("CreateMapViaMenu", "Single-call tool: navigate Page_MapEditorSettings and launch the editor for a chosen map type, environment, mood, input device, and difficulty. Drives the full 7-step click-chain (SetMenuPage + 6 OnAction clicks), polling for each intermediate frame transition. Returns {ok, finalMode, elapsedMs, steps} on success or {ok:false, failedAt, expectedFrame, lastObserved, elapsedMs, steps} on failure. Requires QuickStart disabled (MapEditorUseQuickstart off). Click-chain verified 2026-04-20.", '{"type":"object","properties":{"mapType":{"type":"string","description":"race | royal | stunt | platform"},"environment":{"type":"string","description":"Stadium | RedIsland | GreenCoast | BlueBay | WhiteShore"},"mood":{"type":"string","description":"Sunrise | Day | Sunset | Night"},"inputDevice":{"type":"string","description":"mouse | gamepad"},"difficulty":{"type":"string","description":"simple | advanced"},"timeoutMs":{"type":"integer","description":"Final poll timeout waiting for Editor mode (default 10000ms)"}},"required":["mapType","environment","mood","inputDevice","difficulty","timeoutMs"],"additionalProperties":false}'));
         tools.Add(MakeTool("RunManialinkScript", "Inject ad-hoc ManiaScript via MLHook (menu/in-map/in-editor). script without outer <manialink>. Optional collectMs>0 registers a result hook: script should SendCustomEvent(\"MLHook_Event_McpAdHoc_Result\", [payload...]) (or resultEvent). Also pageUid/replace/persist/waitMs.", '{"type":"object","properties":{"script":{"type":"string"},"context":{"type":"string"},"pageUid":{"type":"string"},"replace":{"type":"boolean"},"persist":{"type":"boolean"},"waitMs":{"type":"integer"},"collectMs":{"type":"integer"},"resultEvent":{"type":"string"}},"required":["script"],"additionalProperties":false}'));
 
-        tools.Add(MakeTool("GetReadiness", "Composite preflight: mode/dialog/editor-ready/inventory/map checks. want=editor|menu|any|race.", '{"type":"object","properties":{"want":{"type":"string"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("WaitUntil", "Poll until condition is true. condition=mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness. timeoutMs is the idle budget (default 20000); once a loading screen is up the clock pauses and the wait continues until the map finishes (up to 30 min). Returns ok/timedOut (not a hard error on timeout).", '{"type":"object","properties":{"condition":{"type":"string"},"equals":{"type":"string"},"page":{"type":"string"},"op":{"type":"string"},"count":{"type":"integer"},"want":{"type":"string"},"timeoutMs":{"type":"integer"},"pollMs":{"type":"integer"}},"required":["condition"],"additionalProperties":false}'));
+        tools.Add(MakeTool("GetReadiness", "Composite preflight: mode/dialog/editor-ready/inventory/map/calculatingShadows checks. want=editor|menu|any|race. Editor want is not ready while calculating shadows.", '{"type":"object","properties":{"want":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetLightmapComputeState", "Whether the map editor is computing shadows / lightmap. editorFlag is CGameCtnEditorFree.Offset+8; waitLooksLikeLm is BasicDialogs WaitMessage whose text looks like the LM bake. calculatingShadows is either.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("WaitUntil", "Poll until condition is true. condition=mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness|shadowsClear. timeoutMs is the idle budget (default 20000); once a loading screen is up the clock pauses and the wait continues until the map finishes (up to 30 min). Returns ok/timedOut (not a hard error on timeout).", '{"type":"object","properties":{"condition":{"type":"string"},"equals":{"type":"string"},"page":{"type":"string"},"op":{"type":"string"},"count":{"type":"integer"},"want":{"type":"string"},"timeoutMs":{"type":"integer"},"pollMs":{"type":"integer"}},"required":["condition"],"additionalProperties":false}'));
+        tools.Add(MakeTool("MeasureFrameTime", "Yield N frames and report wall time. frames default 10 (1..30), warmupFrames default 1 (0..5). Returns elapsedMs, msPerFrame, minMs, maxMs, fps, capFps=30. At the 30fps cap, 10 frames is ~333ms; 10 frames ~3000ms is a hitch.", '{"type":"object","properties":{"frames":{"type":"integer"},"warmupFrames":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("AssertPlacement", "Verify recent placement: expectItemsDelta/expectBlocksDelta, near{x,y,z,radius}+itemPath/blockName, tag/tagMinCount.", '{"type":"object","properties":{"expectItemsDelta":{"type":"integer"},"expectBlocksDelta":{"type":"integer"},"near":{"type":"object"},"itemPath":{"type":"string"},"blockName":{"type":"string"},"mapPre":{"type":"object"},"tag":{"type":"string"},"tagMinCount":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ListPlugins", "List loaded Openplanet plugins (Meta::AllPlugins). Optional query, includeDisabled (default true), includeUnloaded, includeSourcePath (full paths; default basename only).", '{"type":"object","properties":{"query":{"type":"string"},"includeDisabled":{"type":"boolean"},"includeUnloaded":{"type":"boolean"},"includeSourcePath":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetPlugin", "Get one plugin by id or name. includeSettings=true embeds setting values. includeSourcePath=true adds full SourcePath (may be Wine absolute); default is sourcePathBase only.", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"name":{"type":"string"},"includeSettings":{"type":"boolean"},"includeSourcePath":{"type":"boolean"}},"additionalProperties":false}'));
@@ -1355,6 +1367,7 @@ namespace TmMcp {
             output["mapUid"] = app.RootMap.MapInfo !is null ? app.RootMap.MapInfo.MapUid : "";
         }
         output["curGameModeStr"] = GetCurGameModeStr();
+        output["calculatingShadows"] = DetectCalculatingShadows();
         return MakeSuccess(output);
     }
 

@@ -25,7 +25,9 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
 
 ### Landed control surface (high-signal)
 
-- **Readiness:** `GetReadiness` + `WaitUntil` (mode/dialog/editorReady/pageVisible/map counts/readiness). Prefer before mutate.
+- **Readiness:** `GetReadiness` + `WaitUntil` (mode/dialog/editorReady/pageVisible/map counts/readiness/shadowsClear). Prefer before mutate. `GetLightmapComputeState` / `WaitUntil condition=shadowsClear` before plugin reloads during an LM bake.
+- **Frame time:** `MeasureFrameTime {frames:10}` yields N frames (default 10, warmup 1) and returns `elapsedMs` / `msPerFrame` / `fps`. 30fps cap ⇒ 10 frames ~333ms; 10 frames ~3000ms is a hitch.
+- **LM bake:** `SetMoodTimeOfDay {timeOfDay01}` then `ComputeShadows` (`quality` default Default, `bustCache` default true; does not wait). Change TOD between bakes — the game refuses a second bake if shadows are already cached for that mood. Wait with `WaitUntil condition=shadowsClear`.
 - **Editor preflight / control:** `CanPlaceBlock`, `ControlCursor`, `ControlValidation`, `ControlCamera`, `ControlSelection`, `GetEditorSelectionState`, **`ControlEditMode`**.
 - **In-play camera:** **`ControlPlayCamera`** — `get` / `set_mode` (free, cam1-3, backwards, alt, drivable) /
   `set_position`. Pass `x,y,z` **and** `target{x,y,z}` for an exact camera point + look-at; angles alone do
@@ -50,7 +52,7 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
 
 ### Open product themes (still future / partial)
 
-- Mood/style mutation only if concrete need (prefer CreateMapViaMenu).
+- Broader mood/style mutation beyond `SetMoodTimeOfDay` (prefer CreateMapViaMenu for new maps).
 - Native `.Macroblock.Gbx` round-trip beyond JSON durable specs.
 - Absolute cursor set (optional).
 

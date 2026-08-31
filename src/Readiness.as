@@ -96,6 +96,61 @@ namespace TmMcp {
         return false;
     }
 
+    // CGameCtnEditorFree.Offset + 0x8 is the LM compute counter (E++ DGameCtnEditorFree @ 0x1264).
+    const uint16 O_EDITORFREE_CALCULATING_SHADOWS = 0x1264;
+
+    bool EditorFlagCalculatingShadows() {
+        auto editor = GetEditor();
+        if (editor is null) return false;
+        return Dev::GetOffsetUint8(editor, O_EDITORFREE_CALCULATING_SHADOWS) != 0;
+    }
+
+    bool WaitLooksLikeLightmapCompute() {
+        auto app = GetApp();
+        if (app is null || app.BasicDialogs is null) return false;
+        if (app.BasicDialogs.Dialog != CGameDialogs::EDialog::WaitMessage) return false;
+        string t = string(app.BasicDialogs.WaitMessage_LabelText).ToLower();
+        return t.Contains("shadow") || t.Contains("work in progress");
+    }
+
+    bool WaitDialogIsWaitMessage() {
+        auto app = GetApp();
+        return app !is null && app.BasicDialogs !is null
+            && app.BasicDialogs.Dialog == CGameDialogs::EDialog::WaitMessage;
+    }
+
+    bool DetectCalculatingShadows() {
+        // Editor flag alone can stay set after the dialog closes; require the wait UI
+        // unless the wait text already looks like an LM bake.
+        if (WaitLooksLikeLightmapCompute()) return true;
+        return EditorFlagCalculatingShadows() && WaitDialogIsWaitMessage();
+    }
+
+    Json::Value LightmapComputeSnapshot() {
+        Json::Value o = Json::Object();
+        bool flag = EditorFlagCalculatingShadows();
+        bool waitLm = WaitLooksLikeLightmapCompute();
+        o["calculatingShadows"] = DetectCalculatingShadows();
+        o["editorFlag"] = flag;
+        o["waitLooksLikeLm"] = waitLm;
+        auto app = GetApp();
+        if (app !is null && app.BasicDialogs !is null) {
+            o["dialogKind"] = app.BasicDialogs.Dialog == CGameDialogs::EDialog::WaitMessage ? "wait"
+                : (app.BasicDialogs.Dialog == CGameDialogs::EDialog::Message ? "message" : "none");
+            o["waitText"] = string(app.BasicDialogs.WaitMessage_LabelText);
+            o["waitProgress"] = app.BasicDialogs.WaitMessage_Progress;
+        } else {
+            o["dialogKind"] = "unavailable";
+            o["waitText"] = "";
+            o["waitProgress"] = 0.0;
+        }
+        return o;
+    }
+
+    Json::Value@ GetLightmapComputeState(Json::Value &in input) {
+        return MakeSuccess(LightmapComputeSnapshot());
+    }
+
     Json::Value BuildReadinessSnapshot(const string &in wantRaw) {
         string want = wantRaw.ToLower();
         if (want.Length == 0) want = "any";
@@ -111,6 +166,7 @@ namespace TmMcp {
         if (editor !is null && editor.PluginMapType !is null) {
             editorReadyForRequest = editor.PluginMapType.IsEditorReadyForRequest;
         }
+        bool calculatingShadows = DetectCalculatingShadows();
 
         Json::Value inventory = Json::Object();
         bool inventoryReady = true;
@@ -141,6 +197,7 @@ namespace TmMcp {
         if (!modeOk) blocking.InsertLast("mode is " + mode + ", want " + want);
         if (!dialogClear) blocking.InsertLast("dialog active");
         if (want == "editor" && !editorReadyForRequest) blocking.InsertLast("editor not ready for request");
+        if (want == "editor" && calculatingShadows) blocking.InsertLast("calculating shadows");
         if (want == "editor" && !hasChallenge) blocking.InsertLast("no challenge/map loaded");
         if (want == "menu" && !menuOk) blocking.InsertLast("menu module not on stack");
 
@@ -152,6 +209,7 @@ namespace TmMcp {
         checks["modeOk"] = modeOk;
         checks["dialogClear"] = dialogClear;
         checks["editorReadyForRequest"] = editorReadyForRequest;
+        checks["calculatingShadows"] = calculatingShadows;
         checks["inventoryReady"] = inventoryReady;
         checks["hasChallenge"] = hasChallenge;
         checks["menuModuleAvailable"] = MenuModuleAvailable();
@@ -247,6 +305,22 @@ namespace TmMcp {
             return count == target;
         }
 
+        if (cond == "shadowsclear" || cond == "shadows_clear" || cond == "shadows-clear"
+            || cond == "calculatingshadows" || cond == "calculating_shadows") {
+            auto snap = LightmapComputeSnapshot();
+            @last = snap;
+            bool baking = bool(snap["calculatingShadows"]);
+            if (cond == "calculatingshadows" || cond == "calculating_shadows") {
+                bool wantOn = true;
+                if (input.HasKey("equals")) {
+                    string eq = string(input["equals"]).ToLower();
+                    wantOn = eq == "true" || eq == "1" || eq == "yes";
+                }
+                return baking == wantOn;
+            }
+            return !baking;
+        }
+
         if (cond == "readiness" || cond == "ready") {
             string want = input.HasKey("want") ? string(input["want"]) : "editor";
             auto snap = BuildReadinessSnapshot(want);
@@ -258,9 +332,57 @@ namespace TmMcp {
         return false;
     }
 
+    int ClampMeasureFrames(int n) {
+        if (n < 1) return 10;
+        if (n > 30) return 30;
+        return n;
+    }
+
+    int ClampMeasureWarmup(int n) {
+        if (n < 0) return 0;
+        if (n > 5) return 5;
+        return n;
+    }
+
+    // Yield N frames and report wall time. 30fps cap: 10 frames ~333ms.
+    // 10 frames ~3000ms is a hitch (PointCast / leftover HMS / etc).
+    Json::Value@ MeasureFrameTime(Json::Value &in input) {
+        int frames = input.HasKey("frames") ? int(input["frames"]) : 10;
+        frames = ClampMeasureFrames(frames);
+        int warmup = input.HasKey("warmupFrames") ? int(input["warmupFrames"]) : 1;
+        warmup = ClampMeasureWarmup(warmup);
+        for (int i = 0; i < warmup; i++) yield();
+        uint64 t0 = Time::Now;
+        int minMs = 1000000;
+        int maxMs = 0;
+        uint64 prev = t0;
+        for (int i = 0; i < frames; i++) {
+            yield();
+            uint64 now = Time::Now;
+            int dt = int(now - prev);
+            if (dt < minMs) minMs = dt;
+            if (dt > maxMs) maxMs = dt;
+            prev = now;
+        }
+        uint elapsedMs = uint(Time::Now - t0);
+        float msPerFrame = float(elapsedMs) / float(frames);
+        float fps = elapsedMs > 0 ? float(frames) * 1000.0f / float(elapsedMs) : 0.0f;
+        Json::Value output = Json::Object();
+        output["frames"] = frames;
+        output["warmupFrames"] = warmup;
+        output["elapsedMs"] = int(elapsedMs);
+        output["msPerFrame"] = msPerFrame;
+        output["minMs"] = minMs;
+        output["maxMs"] = maxMs;
+        output["fps"] = fps;
+        output["capFps"] = 30;
+        output["hint"] = "30fps cap: 10 frames ~333ms. 10 frames ~3000ms is a hitch.";
+        return MakeSuccess(output);
+    }
+
     Json::Value@ WaitUntil(Json::Value &in input) {
         if (!input.HasKey("condition")) {
-            return MakeError("missing condition", "INVALID_INPUT", false, "", "condition: mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness");
+            return MakeError("missing condition", "INVALID_INPUT", false, "", "condition: mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness|shadowsClear");
         }
         string condition = string(input["condition"]);
         int timeoutMs = input.HasKey("timeoutMs") ? int(input["timeoutMs"]) : 20000;
@@ -279,9 +401,11 @@ namespace TmMcp {
             || condLower == "pagevisible" || condLower == "page_visible" || condLower == "page-visible"
             || condLower == "mapitems" || condLower == "map_items" || condLower == "map-items"
             || condLower == "mapblocks" || condLower == "map_blocks" || condLower == "map-blocks"
-            || condLower == "readiness" || condLower == "ready";
+            || condLower == "readiness" || condLower == "ready"
+            || condLower == "shadowsclear" || condLower == "shadows_clear" || condLower == "shadows-clear"
+            || condLower == "calculatingshadows" || condLower == "calculating_shadows";
         if (!known) {
-            return MakeError("unknown condition: " + condition, "INVALID_INPUT", false, "", "mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness");
+            return MakeError("unknown condition: " + condition, "INVALID_INPUT", false, "", "mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness|shadowsClear");
         }
 
         uint64 t0 = Time::Now;

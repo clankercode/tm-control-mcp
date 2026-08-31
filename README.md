@@ -81,7 +81,7 @@ Pointer peeks, safe memory reads, gizmo/fuzz helpers, macroblock header dumps �
 `.op` packages omit these tools from the registry.
 
 **Ground truth tool list:** `{"route":"tools"}` at runtime, or every
-`MakeTool("…")` in `src/McpTools.as` (**102 tools** (release; +7 DEV-only) at last count).
+`MakeTool("…")` in `src/McpTools.as` (**104 tools** (release; +7 DEV-only) at last count).
 
 ---
 
@@ -296,7 +296,7 @@ python3 tools/call.py EditNewMap '{"environment":"Stadium","decoration":"48x48Da
 
 ---
 
-## Current tools (102 release / 109 DEV)
+## Current tools (104 release / 111 DEV)
 
 Ground truth: every `MakeTool("…")` registration in `src/McpTools.as`.
 Prefer `{"route":"tools"}` at runtime if this list drifts.
@@ -309,6 +309,8 @@ Prefer `{"route":"tools"}` at runtime if this list drifts.
 | `OpenMapInEditor` | Open a local map file in the editor (`path`). Warns if a leave-map dialog pops. |
 | `GetMapInfo` | Current editor map name and counts (+ bounds). |
 | `GetMapEnvironment` | Collection, decoration, map type/style, mood, collection-unit metadata. |
+| `SetMoodTimeOfDay` | Set `MoodTimeOfDay01` (0..1); optional `dynamic` → `MoodIsDynamicTime`. Change TOD before a second LM bake. |
+| `ComputeShadows` | Start `ComputeShadows1` (does not wait). `quality` Default default; `bustCache` default true. Then `WaitUntil condition=shadowsClear`. |
 | `ControlMapObjectives` | Get/set race objectives: `nbClones`, `nbLaps`, `isLapRace` (E++). |
 | `SaveMapAs` | Save under user Maps (`name`+`folder` or `fileName`; `overwrite`). |
 | `GetDialog` | Inspect `BasicDialogs` state / active frame. |
@@ -319,7 +321,8 @@ Prefer `{"route":"tools"}` at runtime if this list drifts.
 | Tool | Summary |
 |------|---------|
 | `GetReadiness` | Composite preflight (`want=editor\|menu\|any\|race`). |
-| `WaitUntil` | Poll mode/dialog/editorReady/pageVisible/map counts/readiness (`timedOut` on budget). |
+| `WaitUntil` | Poll mode/dialog/editorReady/pageVisible/map counts/readiness/shadowsClear (`timedOut` on budget). |
+| `GetLightmapComputeState` | Whether the editor is computing shadows / lightmap. |
 | `SetAgentTag` | Default provenance tag for subsequent `Place*` calls (empty clears). |
 | `ListTagged` | List tracked tagged placements (`prefix` / `tag:` prefix). |
 | `RemoveByTag` | Delete live objects matching tag (re-resolve by pos+idName); optional `dryRun`. |

@@ -248,7 +248,11 @@ namespace TmMcp {
             + " and blockingReasons. Prefer this before mutating.\n"
             + "\n"
             + "WaitUntil {condition, timeoutMs, pollMs, ...} polls in-plugin.\n"
+            + "MeasureFrameTime {frames?, warmupFrames?} yields N frames and returns"
+            + " elapsedMs/msPerFrame/minMs/maxMs/fps (capFps=30). Default 10 frames;"
+            + " ~333ms is the 30fps cap, ~3000ms is a hitch.\n"
             + "conditions: mode (+equals), dialogClear, editorReady, pageVisible (+page),"
+            + " shadowsClear (LM bake done), calculatingShadows (+equals true|false),"
             + " mapItems/mapBlocks (+op eq|gte|lte, count), readiness (+want).\n"
             + "timeoutMs is the idle budget (default 20000). Once a loading screen"
             + " (WaitMessage / LoadProgress) is up, the clock pauses and the wait"
@@ -257,6 +261,11 @@ namespace TmMcp {
             + " (not a hard tool error).\n"
             + "\n"
             + "GetMode reports MapEditor/MapEditor_Test/MapEditor_Validate/MapEditor_Playground/ItemEditor/…; equals=Editor matches any; equals=MapEditor matches MapEditor_*.\n"
+            + "\n"
+            + "Force an LM / shadows bake: SetMoodTimeOfDay {timeOfDay01} (change TOD — the"
+            + " game refuses a second bake if shadows are already cached for that mood),"
+            + " then ComputeShadows {quality?, bustCache?} (default Default / bustCache true;"
+            + " does not wait), then WaitUntil {condition:shadowsClear} / GetLightmapComputeState.\n"
             + "call.py: --wait-mode Editor --until-ready editor --wait-timeout 20");
 
         _RegisterGuide("agent-cleanup",
