@@ -16,6 +16,8 @@ Versions follow `info.toml` `[meta] version`.
 - [Project website](https://clankercode.github.io/tm-control-mcp/) and
   `latest-version.txt` published together through GitHub Pages CI, with a
   [copy-paste author workflow](docs/pack-updates.md) for pack repositories.
+- Native Windows process discovery for `tools/call.py` via `tasklist`, with
+  structured failures if process enumeration is unavailable.
 - `MeasureFrameTime` — yield N frames and report `elapsedMs` / `msPerFrame` / `minMs` / `maxMs` / `fps`. `frames` default 10 (1..30), `warmupFrames` default 1 (0..5). At the 30fps cap, 10 frames is ~333ms; 10 frames ~3000ms is a hitch.
 - `SetMoodTimeOfDay` — write `CGameCtnEditorFree.MoodTimeOfDay01` (0..1); optional `dynamic` sets `MoodIsDynamicTime`. Returns previous+new `timeOfDay01` / `timeOfDayStr`. Needed before a second `ComputeShadows`: the game refuses a rebake when shadows are already cached for that mood.
 - `ComputeShadows` — start `editor.PluginMapType.ComputeShadows1` and return immediately (`started`, `quality`, `bustCache`, `lightmapCompute`). `quality` is `CGameEditorPluginMap::EShadowsQuality` name or 0..5 (default Default). `bustCache` (default true) zeros `CHmsLightMapCache.m_Quality` like E++ Recalculate so a bake actually starts. Wait with `WaitUntil condition=shadowsClear`.

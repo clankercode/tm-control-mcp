@@ -259,7 +259,8 @@ python3 tools/call.py tm-mcp-pack-epp.PlaceItemViaEditorPlusPlus \
 Behavior:
 
 - Compact JSON by default (`--pretty` for humans)
-- Checks for a real `Trackmania.exe` process before connecting (`--skip-process-check` for raw socket debug only)
+- Checks for a real `Trackmania.exe` process before connecting (Linux `/proc` or
+  native Windows `tasklist`; `--skip-process-check` for raw socket debug only)
 - `--strict` validates tool input against the live schema when available
 - Screenshot path detection under common Proton prefixes (`TM_USER_GAME_FOLDER` override)
 

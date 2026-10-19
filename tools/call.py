@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import argparse
+import csv
 import json
 import os
 from pathlib import Path
 import socket
+import subprocess
 import sys
 import time
 
@@ -17,6 +19,16 @@ def is_trackmania_process(cmdline: bytes) -> bool:
 
 
 def find_trackmania_pids() -> list[int]:
+    if sys.platform == "win32":
+        # tasklist ships with Windows. CSV avoids localized column headings and
+        # ambiguous whitespace in image names; the executable/PID fields are ASCII.
+        result = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq Trackmania.exe", "/FO", "CSV", "/NH"],
+            capture_output=True, check=True, timeout=5,
+        )
+        rows = csv.reader(result.stdout.decode(errors="replace").splitlines())
+        return sorted({int(row[1]) for row in rows
+                       if len(row) >= 2 and row[0].lower() == "trackmania.exe" and row[1].isdigit()})
     pids: list[int] = []
     for name in os.listdir("/proc"):
         if not name.isdigit():
@@ -538,7 +550,14 @@ def main() -> int:
 
     pids: list[int] = []
     if not args.skip_process_check:
-        pids = find_trackmania_pids()
+        try:
+            pids = find_trackmania_pids()
+        except (OSError, subprocess.SubprocessError) as exc:
+            print_json_error(
+                f"Could not check for Trackmania.exe: {exc}", args.pretty,
+                hint="Verify that process listing is available, or use --skip-process-check for raw socket debugging.",
+            )
+            return 3
         if not pids:
             print_json_error(
                 "Trackmania.exe process not found; the game may be crashed or not fully launched",

@@ -352,7 +352,7 @@ print(call("GetMode"))</code></pre>
         <li class="folder">
           <p class="folder__tab" aria-hidden="true">4</p>
           <h3>Get the client</h3>
-          <p>The command-line client <code>tools/call.py</code> lives in the repository and needs <strong>Python 3</strong> (standard library only). Clone it:</p>
+          <p>The command-line client <code>tools/call.py</code> lives in the repository and needs <strong>Python 3</strong> (standard library only). It checks for the game on Linux/Proton and native Windows. Clone it:</p>
           <div class="code code--copy">
             <p class="code__label">Shell, get the client</p>
 <pre tabindex="0"><code>git clone https://github.com/clankercode/tm-control-mcp.git
@@ -369,6 +369,7 @@ cd tm-control-mcp</code></pre>
 <pre tabindex="0"><code>python3 tools/call.py status
 python3 tools/call.py GetMode</code></pre>
           </div>
+          <p>On Windows, use <code>py -3</code> in place of <code>python3</code> if that is how your Python installation launches.</p>
         </li>
       </ol>
       <p class="note">Host, port and the listener toggle live under <strong>Openplanet Settings → TM Control MCP → Server</strong> and apply without a reload. Keep the host at <code>127.0.0.1</code>.</p>
