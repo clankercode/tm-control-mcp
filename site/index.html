@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en" data-mood="night">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tm-control-mcp — drive Trackmania from a script</title>
+<meta name="description" content="An Openplanet plugin that opens a localhost JSON socket into Trackmania. Agents and Python scripts create maps, drive the main menu, read race state and capture screenshots.">
+<link rel="canonical" href="https://clankercode.github.io/tm-control-mcp/">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#0b6e43">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="tm-control-mcp">
+<meta property="og:title" content="tm-control-mcp — drive Trackmania from a script">
+<meta property="og:description" content="Openplanet plugin: a localhost JSON socket into Trackmania's map editor, main menu and race. Built for AI agents and Python scripts.">
+<meta property="og:url" content="https://clankercode.github.io/tm-control-mcp/">
+<meta property="og:image" content="https://clankercode.github.io/tm-control-mcp/assets/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:alt" content="tm-control-mcp: drive Trackmania from a script. An example session runs from START through checkpoints to FINISH over a localhost JSON socket at 127.0.0.1:30006.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="tm-control-mcp — drive Trackmania from a script">
+<meta name="twitter:description" content="Openplanet plugin: a localhost JSON socket into Trackmania's map editor, main menu and race. Built for AI agents and Python scripts.">
+<meta name="twitter:image" content="https://clankercode.github.io/tm-control-mcp/assets/og-image.png">
+<meta name="twitter:image:alt" content="tm-control-mcp: drive Trackmania from a script. An example session runs from START through checkpoints to FINISH over a localhost JSON socket at 127.0.0.1:30006.">
+
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="preload" href="assets/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/inter-var-italic.woff2" as="font" type="font/woff2" crossorigin>
+<script>
+  // Mood (theme) before first paint: stored choice, else system preference.
+  (function () {
+    var m = null;
+    try { m = localStorage.getItem("tmcm-mood"); } catch (e) {}
+    if (m !== "day" && m !== "night") {
+      m = window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "day" : "night";
+    }
+    document.documentElement.setAttribute("data-mood", m);
+    document.documentElement.classList.add("js");
+  })();
+</script>
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="bar">
+  <div class="bar__inner wrap">
+    <a class="brand" href="#top" aria-label="tm-control-mcp, back to top">
+      <svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M7 4h22l-4 24H3z" fill="#f4c21b"/><path d="M10.5 11.5l5 4.5-6.2 4.6" fill="none" stroke="#15120a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M16.5 21.5h6" stroke="#15120a" stroke-width="3" stroke-linecap="round"/></svg>
+      <span class="brand__name">tm-control-mcp</span>
+    </a>
+    <nav class="nav" aria-label="Sections">
+      <ul>
+        <li><a href="#controls">Controls</a></li>
+        <li><a href="#protocol">Protocol</a></li>
+        <li><a href="#install">Install</a></li>
+        <li><a href="#packs">Tool packs</a></li>
+        <li><a href="#updates">Updates</a></li>
+      </ul>
+    </nav>
+    <div class="bar__tools">
+      <a class="bar__gh" href="https://github.com/clankercode/tm-control-mcp">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .7a11.5 11.5 0 0 0-3.6 22.4c.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.2c0 .3.2.7.8.6A11.5 11.5 0 0 0 12 .7z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <button class="mood" type="button" data-mood-toggle aria-pressed="false" hidden>
+        <svg class="mood__sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="currentColor"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M4.6 19.4l2.1-2.1M17.3 6.7l2.1-2.1"/></g></svg>
+        <svg class="mood__moon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M20.5 14.6A8.6 8.6 0 0 1 9.4 3.5a8.6 8.6 0 1 0 11.1 11.1z"/></svg>
+        <span class="mood__label">Mood: <span data-mood-name>Night</span></span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" id="top" aria-labelledby="hero-title">
+    <div class="hero__grid wrap">
+      <div class="hero__copy">
+        <p class="kicker">
+          <span class="chip chip--signal">Openplanet plugin</span>
+          <span class="chip">for Trackmania</span>
+          <a class="chip chip--version" href="https://github.com/clankercode/tm-control-mcp/releases/latest" data-version-chip>Latest release</a>
+        </p>
+        <h1 id="hero-title">Drive Trackmania from&nbsp;a&nbsp;script.</h1>
+        <p class="lede">
+          <strong>tm-control-mcp</strong> opens a localhost JSON socket into the game.
+          AI agents and Python scripts create maps, drive the main menu, read race state,
+          capture screenshots and check that what they did actually happened.
+        </p>
+        <div class="cta">
+          <a class="btn btn--signal" href="https://github.com/clankercode/tm-control-mcp/releases/latest">
+            <span>Download the <code>.op</code></span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 20h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+          <a class="btn btn--ghost" href="#install">Install guide</a>
+        </div>
+        <dl class="socket">
+          <div><dt>Socket</dt><dd><code>127.0.0.1:30006</code></dd></div>
+          <div><dt>Wire</dt><dd>one JSON line in, one out</dd></div>
+          <div><dt>Auth</dt><dd>none&nbsp;— localhost only</dd></div>
+        </dl>
+      </div>
+
+      <section class="trace" aria-labelledby="trace-title" data-trace>
+        <div class="trace__bar">
+          <h2 id="trace-title" class="trace__title"><span class="dot" aria-hidden="true"></span>Example session</h2>
+          <p class="trace__count" aria-live="polite"><span data-trace-count>7 stops</span></p>
+        </div>
+        <div class="trace__track" data-trace-track hidden>
+          <div class="trace__line" aria-hidden="true"></div>
+          <div class="trace__car" aria-hidden="true" data-trace-car></div>
+          <div class="trace__gates" role="tablist" aria-label="Session checkpoints" data-trace-tabs></div>
+        </div>
+        <ol class="trace__steps">
+          <li class="step" data-gate="START" data-label="status">
+            <h3 class="step__name"><span class="step__gate">START</span> <code>status</code></h3>
+            <p class="step__why">Is the socket up? The reply names the loaded plugin, its version and id.</p>
+            <div class="wire">
+              <pre class="wire__cmd"><code>python3 tools/call.py status</code></pre>
+              <pre class="wire__line wire__line--out"><code data-json>{"route":"status"}</code></pre>
+              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"route":"status","data":{"alive":true,"port":30006,…}}</code></pre>
+            </div>
+          </li>
+          <li class="step" data-gate="CP1" data-label="EditNewMap">
+            <h3 class="step__name"><span class="step__gate">CP1</span> <code>EditNewMap</code></h3>
+            <p class="step__why">Open a new Stadium map in the editor. If leaving a dirty map pops the unsaved-changes dialog, it warns instead of guessing.</p>
+            <div class="wire">
+              <pre class="wire__cmd"><code>python3 tools/call.py EditNewMap '{"environment":"Stadium","decoration":"48x48Day"}'</code></pre>
+              <pre class="wire__line wire__line--out"><code data-json>{"route":"call","tool":"EditNewMap","input":{"environment":"Stadium","decoration":"48x48Day"}}</code></pre>
+              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"route":"call","data":{"tool":"EditNewMap","result":{"success":true,"output":{…}}}}</code></pre>
+            </div>
+          </li>
+          <li class="step" data-gate="CP2" data-label="WaitUntil">
+            <h3 class="step__name"><span class="step__gate">CP2</span> <code>WaitUntil</code></h3>
+            <p class="step__why">Stop guessing whether the editor is ready. Loading screens pause the clock; a miss returns <code>timedOut</code>, not a crash.</p>
+            <div class="wire">
+              <pre class="wire__cmd"><code>python3 tools/call.py WaitUntil '{"condition":"editorReady","timeoutMs":20000}'</code></pre>
+              <pre class="wire__line wire__line--out"><code data-json>{"route":"call","tool":"WaitUntil","input":{"condition":"editorReady","timeoutMs":20000}}</code></pre>
+              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"route":"call","data":{"tool":"WaitUntil","result":{"success":true,"output":{…}}}}</code></pre>
+            </div>
+          </li>
+          <li class="step" data-gate="CP3" data-label="PlaceBlock">
+            <h3 class="step__name"><span class="step__gate">CP3</span> <code>PlaceBlock</code></h3>
+            <p class="step__why">Place a grid block. Mutating tools return <code>mapPre</code> and <code>mapPost</code>, so the client sees exactly what changed.</p>
+            <div class="wire">
+              <pre class="wire__cmd"><code>python3 tools/call.py PlaceBlock '{"blockName":"RoadTechStraight","x":24,"y":12,"z":24}'</code></pre>
+              <pre class="wire__line wire__line--out"><code data-json>{"route":"call","tool":"PlaceBlock","input":{"blockName":"RoadTechStraight","x":24,"y":12,"z":24}}</code></pre>
+              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"route":"call","data":{"tool":"PlaceBlock","result":{"success":true,"output":{"mapPre":{…},"mapPost":{…}}}}}</code></pre>
+            </div>
+          </li>
+          <li class="step" data-gate="CP4" data-label="TakeScreenshot">
+            <h3 class="step__name"><span class="step__gate">CP4</span> <code>TakeScreenshot</code></h3>
+            <p class="step__why">Native viewport capture with overlay rendering switched off for the shot. Waits for the file and returns its game-side path and size.</p>
+            <div class="wire">
+              <pre class="wire__cmd"><code>python3 tools/call.py TakeScreenshot '{"hideOverlay":true}'</code></pre>
+              <pre class="wire__line wire__line--out"><code data-json>{"route":"call","tool":"TakeScreenshot","input":{"hideOverlay":true}}</code></pre>
+              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"route":"call","data":{"tool":"TakeScreenshot","result":{"success":true,"output":{"fullName":…,"sizeBytes":…}}}}</code></pre>
+            </div>
+          </li>
+          <li class="step" data-gate="CP5" data-label="SaveMapAs">
+            <h3 class="step__name"><span class="step__gate">CP5</span> <code>SaveMapAs</code></h3>
+            <p class="step__why">Save under the user Maps folder. If a dialog was up, the reply carries a warning rather than pretending it saved.</p>
+            <div class="wire">
+              <pre class="wire__cmd"><code>python3 tools/call.py SaveMapAs '{"name":"agent-demo"}'</code></pre>
+              <pre class="wire__line wire__line--out"><code data-json>{"route":"call","tool":"SaveMapAs","input":{"name":"agent-demo"}}</code></pre>
+              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"route":"call","data":{"tool":"SaveMapAs","result":{"success":true,"output":{…}}}}</code></pre>
+            </div>
+          </li>
+          <li class="step" data-gate="FINISH" data-label="BackToMainMenu">
+            <h3 class="step__name"><span class="step__gate">FINISH</span> <code>BackToMainMenu</code></h3>
+            <p class="step__why">Unwind the editor back to the main menu. Stops early on the unsaved-changes dialog instead of spinning.</p>
+            <div class="wire">
+              <pre class="wire__cmd"><code>python3 tools/call.py BackToMainMenu</code></pre>
+              <pre class="wire__line wire__line--out"><code data-json>{"route":"call","tool":"BackToMainMenu","input":{}}</code></pre>
+              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"route":"call","data":{"tool":"BackToMainMenu","result":{"success":true,"output":{…}}}}</code></pre>
+            </div>
+          </li>
+        </ol>
+        <div class="trace__nav" data-trace-nav hidden>
+          <button type="button" class="tbtn" data-trace-prev>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Previous</span>
+          </button>
+          <p class="trace__legend"><span class="key key--out">→ sent</span> <span class="key key--in">← reply</span> <span class="key">… elided</span></p>
+          <button type="button" class="tbtn" data-trace-next>
+            <span>Next</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <section class="section" id="controls" aria-labelledby="controls-title">
+    <div class="wrap">
+      <p class="tab"><span>01</span> What it controls</p>
+      <h2 id="controls-title">The editor, the menu and the race — as named tools.</h2>
+      <p class="intro">Every tool is a name plus a JSON input. Ask the live plugin for the full catalogue with <code>{"route":"tools"}</code>; DEV builds add diagnostics that release <code>.op</code> packages leave out.</p>
+
+      <div class="sectors">
+        <article class="sector">
+          <p class="sector__id" aria-hidden="true">S1</p>
+          <h3>Map editor</h3>
+          <p>Open, create and save maps, read blocks and items, move the cursor and camera, place grid blocks, undo and redo, bake shadows, and capture the viewport.</p>
+          <ul class="tools">
+            <li><code>OpenMapInEditor</code></li><li><code>GetMapInfo</code></li><li><code>SaveMapAs</code></li>
+            <li><code>PlaceBlock</code></li><li><code>GetBlocks</code></li><li><code>ControlCamera</code></li>
+            <li><code>ComputeShadows</code></li><li><code>TakeScreenshot</code></li>
+          </ul>
+        </article>
+        <article class="sector">
+          <p class="sector__id" aria-hidden="true">S2</p>
+          <h3>Main menu</h3>
+          <p>Push menu routes, inspect UI layers and click real controls. Clicks go through <code>CControlBase::OnAction</code>, the same dispatch as a mouse click — never the crash-prone <code>TriggerPageAction</code>.</p>
+          <ul class="tools">
+            <li><code>SetMenuPage</code></li><li><code>ClickMenuButton</code></li><li><code>CreateMapViaMenu</code></li>
+            <li><code>EditNewMap</code></li><li><code>PlayMap</code></li><li><code>BackToMainMenu</code></li>
+          </ul>
+        </article>
+        <article class="sector">
+          <p class="sector__id" aria-hidden="true">S3</p>
+          <h3>Race &amp; play</h3>
+          <p>Read race data, players and server info; inspect vehicle state; place and aim the in-play free camera exactly on a target.</p>
+          <ul class="tools">
+            <li><code>GetRaceData</code></li><li><code>GetPlayers</code></li><li><code>GetServerInfo</code></li>
+            <li><code>GetVehicleState</code></li><li><code>ControlPlayCamera</code></li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="rows">
+        <div class="row">
+          <h3>Built for agents</h3>
+          <ul class="facts">
+            <li><strong>Readiness.</strong> <code>GetReadiness</code> and <code>WaitUntil</code> answer “can I act yet?”; <code>call.py --until-ready</code> wraps them.</li>
+            <li><strong>Structured errors.</strong> Failures can carry <code>code</code>, <code>retryable</code>, <code>requiredMode</code> and <code>hint</code>.</li>
+            <li><strong>Verification.</strong> <code>AssertPlacement</code> checks block and item deltas after a change.</li>
+            <li><strong>In-plugin guides.</strong> <code>ListGuides</code> / <code>GetGuide</code> teach menu routes, screenshots, cleanup and more.</li>
+          </ul>
+        </div>
+        <div class="row">
+          <h3>Openplanet itself</h3>
+          <ul class="facts">
+            <li><strong>Plugins &amp; settings.</strong> List, load, reload and configure plugins; it refuses to disable or unload itself.</li>
+            <li><strong>ManiaScript.</strong> <code>RunManialinkScript</code> injects through MLHook into menu, playground or editor, with an optional result channel.</li>
+            <li><strong>Reflection &amp; files.</strong> <code>GetTypeInfo</code> dumps live classes; <code>ControlFids</code> browses and extracts game files.</li>
+            <li><strong>Overlay.</strong> <code>ControlOverlay</code> hides Openplanet's overlay before camera or pixel work.</li>
+          </ul>
+        </div>
+        <div class="row row--pack">
+          <h3>Via the Editor++ pack</h3>
+          <ul class="facts">
+            <li><strong>Free placement.</strong> Freeblocks and flying items at exact positions and rotations.</li>
+            <li><strong>Named macroblocks.</strong> Compose in memory, preflight, place with offset and pivot, save as durable JSON.</li>
+            <li><strong>Tags &amp; cleanup.</strong> Tag what an agent placed, then remove only that — not the whole map.</li>
+          </ul>
+          <a class="more" href="#packs">See tool packs <span aria-hidden="true">→</span></a>
+        </div>
+      </div>
+
+      <figure class="capture">
+        <div class="capture__frame">
+          <picture>
+            <source srcset="assets/img/editor-demo.webp" type="image/webp">
+            <img src="assets/img/editor-demo.jpg" width="1600" height="677" loading="lazy" decoding="async"
+                 alt="Trackmania map editor viewport: yellow pillar items placed on a dark ground, with the editor's green toolbar along the bottom and the yellow Modes button and block folders on the left.">
+          </picture>
+        </div>
+        <figcaption><span class="chip chip--signal">Real capture</span> <span>The map editor as returned by <code>TakeScreenshot</code>. From the repository's <a href="https://github.com/clankercode/tm-control-mcp/blob/master/docs/images/editor-demo.jpg">docs/images</a>.</span></figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="section section--alt" id="protocol" aria-labelledby="protocol-title">
+    <div class="wrap">
+      <p class="tab"><span>02</span> Protocol</p>
+      <h2 id="protocol-title">One TCP connection, one JSON line each way.</h2>
+      <p class="intro">It is a plain localhost TCP socket, not an HTTP server. Send one newline-terminated JSON object; read one JSON reply; the plugin closes the connection.</p>
+
+      <div class="split">
+        <div>
+          <table class="routes">
+            <caption>Routes</caption>
+            <thead><tr><th scope="col">Request</th><th scope="col">Does</th></tr></thead>
+            <tbody>
+              <tr><td><code data-json>{"route":"status"}</code></td><td>Liveness, host, port, plugin version</td></tr>
+              <tr><td><code data-json>{"route":"tools"}</code></td><td>Every registered tool with its JSON schema</td></tr>
+              <tr><td><code data-json>{"route":"call","tool":"GetMode","input":{}}</code></td><td>Run one tool</td></tr>
+              <tr><td><code data-json>{"route":"GetMode","input":{}}</code></td><td>Shorthand: tool names work as routes</td></tr>
+            </tbody>
+          </table>
+          <h3 class="h-sub">Replies</h3>
+          <div class="code">
+            <p class="code__label"><span class="key key--in">ok</span> success</p>
+            <pre class="pre--wrap"><code data-json>{"ok":true,"route":"call","data":{"tool":"GetMode","result":{"success":true,"output":{"mode":"MapEditor"}}}}</code></pre>
+          </div>
+          <div class="code">
+            <p class="code__label"><span class="key key--err">err</span> a failed tool</p>
+            <pre class="pre--wrap"><code data-json>{"success":false,"error":"…","code":"NOT_IN_EDITOR","retryable":true,"requiredMode":"Editor","hint":"…"}</code></pre>
+          </div>
+        </div>
+        <div>
+          <div class="code code--copy">
+            <p class="code__label">Python, standard library only</p>
+<pre tabindex="0"><code>import json, socket
+
+def call(tool, payload=None, port=30006):
+    req = {"route": "call", "tool": tool, "input": payload or {}}
+    with socket.create_connection(("127.0.0.1", port)) as s:
+        s.sendall((json.dumps(req) + "\n").encode())
+        s.shutdown(socket.SHUT_WR)
+        reply = b""
+        while chunk := s.recv(65536):
+            reply += chunk
+    return json.loads(reply)
+
+print(call("GetMode"))</code></pre>
+          </div>
+          <p class="note">Or use the bundled client, which adds process checks, readiness waits, schema validation (<code class="nw">--strict</code>) and screenshot path detection: <code>python3 tools/call.py --pretty GetMode</code>.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="install" aria-labelledby="install-title">
+    <div class="wrap">
+      <p class="tab"><span>03</span> Install</p>
+      <h2 id="install-title">Four steps to a live socket.</h2>
+
+      <ol class="folders">
+        <li class="folder">
+          <p class="folder__tab" aria-hidden="true">1</p>
+          <h3>Install Openplanet</h3>
+          <p>Get <a href="https://openplanet.dev/">Openplanet</a> for Trackmania. Native Windows and Proton/Wine installs both work.</p>
+        </li>
+        <li class="folder">
+          <p class="folder__tab" aria-hidden="true">2</p>
+          <h3>Add the dependencies</h3>
+          <p>Required: <a href="https://openplanet.dev/plugin/mlhook">MLHook</a> and <a href="https://openplanet.dev/plugin/mlfeedracedata">MLFeed: Race Data</a> (<code>MLFeedRaceData</code>). Optional: <code>VehicleState</code> and <code>Camera</code>. <a href="https://openplanet.dev/plugin/editor">Editor++</a> is only needed by the E++ tool pack.</p>
+        </li>
+        <li class="folder">
+          <p class="folder__tab" aria-hidden="true">3</p>
+          <h3>Install the plugin</h3>
+          <p>Download <code>tm-control-mcp-<span data-latest-version>&lt;version&gt;</span>.op</code> from the <a href="https://github.com/clankercode/tm-control-mcp/releases/latest">latest release</a> into Openplanet's <code>Plugins</code> folder and enable it. Or run from source:</p>
+          <div class="code code--copy">
+            <p class="code__label">Shell, from source</p>
+<pre tabindex="0"><code>git clone https://github.com/clankercode/tm-control-mcp.git
+cd tm-control-mcp
+./build.sh dev</code></pre>
+          </div>
+        </li>
+        <li class="folder">
+          <p class="folder__tab" aria-hidden="true">4</p>
+          <h3>Check the socket</h3>
+          <p>With Trackmania running and the plugin enabled:</p>
+          <div class="code code--copy">
+            <p class="code__label">Shell, verify</p>
+<pre tabindex="0"><code>python3 tools/call.py status
+python3 tools/call.py GetMode</code></pre>
+          </div>
+        </li>
+      </ol>
+      <p class="note">Host, port and the listener toggle live under <strong>Openplanet Settings → TM Control MCP → Server</strong> and apply without a reload. Keep the host at <code>127.0.0.1</code>.</p>
+    </div>
+  </section>
+
+  <section class="section section--alt" id="packs" aria-labelledby="packs-title">
+    <div class="wrap">
+      <p class="tab"><span>04</span> Tool packs</p>
+      <h2 id="packs-title">Add tools without touching the bridge.</h2>
+      <p class="intro">A tool pack is a separate Openplanet plugin that depends on <code>tm-control-mcp</code> and registers its tools at runtime as <code>packId.FuncName</code>. The bridge never imports a pack. <code>ListToolPacks</code> shows what is loaded.</p>
+
+      <div class="table-scroll" tabindex="0" role="region" aria-labelledby="packs-caption">
+        <table class="packs">
+          <caption id="packs-caption">Known packs</caption>
+          <thead><tr><th scope="col">Pack</th><th scope="col">Adds</th></tr></thead>
+          <tbody>
+            <tr>
+              <th scope="row"><a href="https://github.com/clankercode/tm-mcp-pack-epp">Editor++</a><span class="pid"><span class="sr-only">Pack id: </span>tm-mcp-pack-epp</span></th>
+              <td>Editor++ placement as tools: freeblocks and flying items, named macroblocks with skins, provenance tags and tag-based cleanup, inventory and edit-mode control, batch place and delete.</td>
+            </tr>
+            <tr>
+              <th scope="row"><a href="https://github.com/clankercode/tm-mcp-pack-visual">Visual</a><span class="pid"><span class="sr-only">Pack id: </span>Visual</span></th>
+              <td>Point the camera and shoot clean screenshot series: preset and orbit framing, exact camera restore, host-side crops, grids and contact sheets.</td>
+            </tr>
+            <tr>
+              <th scope="row"><a href="https://github.com/clankercode/tm-mcp-pack-gpp">Ghosts++</a><span class="pid"><span class="sr-only">Pack id: </span>GhostsPP</span></th>
+              <td>Ghosts++ diagnostics: a watch loop, spectating, clip snapshots and loaded-ghost state.</td>
+            </tr>
+            <tr>
+              <th scope="row"><a href="https://github.com/clankercode/tm-mlhook-mcp-pack">MLHook</a><span class="pid"><span class="sr-only">Pack id: </span>MLHook</span></th>
+              <td>MLHook's exports as tools: Manialink injection and messaging, custom events, and buffered event capture.</td>
+            </tr>
+            <tr>
+              <th scope="row"><a href="https://github.com/clankercode/tm-map-together-mcp-pack">Map Together</a><span class="pid"><span class="sr-only">Pack id: </span>MapTogether</span></th>
+              <td>Drive Map Together rooms: create, invite and join, chat, admin actions, and desync testing.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">Writing one? Start with <a href="https://github.com/clankercode/tm-control-mcp/blob/master/docs/tool-packs.md">docs/tool-packs.md</a> and the fixture pack in <code>tools/fixtures/</code>. The small monospace label beside each name is its pack id, the prefix its tools use.</p>
+    </div>
+  </section>
+
+  <section class="section" id="updates" aria-labelledby="updates-title">
+    <div class="wrap">
+      <p class="tab"><span>05</span> Updates</p>
+      <h2 id="updates-title">One text file says what's latest.</h2>
+      <p class="intro">The bridge and each pack can publish a tiny <code>latest-version.txt</code> next to their site. The bridge checks those files politely in the background and reports the result through <code>ListToolPacks</code>. It never downloads or installs plugins.</p>
+
+      <div class="split">
+        <div>
+          <h3 class="h-sub">For pack authors</h3>
+          <div class="code code--copy">
+            <p class="code__label">AngelScript, pack <code>Main()</code></p>
+<pre tabindex="0"><code>auto b = TmMcp::ToolPackBuilder("MyPack");
+b.SetLatestReleaseUrl("https://YOUR-ACCOUNT.github.io/YOUR-PACK/latest-version.txt");</code></pre>
+          </div>
+          <ul class="facts facts--tight">
+            <li>The file holds <strong>one semantic version</strong> and nothing else, such as <code>0.2.0</code>. A leading <code>v</code> is accepted.</li>
+            <li>Direct public <strong>HTTPS</strong> URL: no redirects, queries or ports.</li>
+            <li>Ship it in the <strong>same</strong> GitHub Pages deployment as your site, or one will replace the other.</li>
+            <li>The installed version always comes from your <code>info.toml</code>.</li>
+          </ul>
+          <p class="note">Full contract and a Pages workflow template: <a href="https://github.com/clankercode/tm-control-mcp/blob/master/docs/pack-updates.md">docs/pack-updates.md</a>. Authoring basics: <a href="https://github.com/clankercode/tm-control-mcp/blob/master/docs/tool-packs.md">docs/tool-packs.md</a>.</p>
+        </div>
+        <div>
+          <h3 class="h-sub">What clients read</h3>
+          <dl class="fields">
+            <div><dt><code>installedVersion</code></dt><dd>From the pack plugin's own manifest.</dd></div>
+            <div><dt><code>latestVersion</code></dt><dd>Last valid version file result; empty if unknown.</dd></div>
+            <div><dt><code>updateAvailable</code></dt><dd>True only for a known newer version.</dd></div>
+            <div><dt><code>updateStatus</code></dt><dd>Read this first: <code>false</code> above can also mean unknown, disabled or erroring.</dd></div>
+          </dl>
+          <div class="livefile">
+            <p class="livefile__head">This site's own file</p>
+            <p class="livefile__url"><a href="latest-version.txt"><code>clankercode.github.io/tm-control-mcp/latest-version.txt</code></a></p>
+            <p class="livefile__value" aria-live="polite"><span class="livefile__arrow" aria-hidden="true">←</span> <code data-latest-file>not loaded</code></p>
+          </div>
+          <p class="note">Users can switch checks off under <strong>Openplanet Settings → TM Control MCP → Updates</strong>.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="safety" aria-labelledby="safety-title">
+    <div class="wrap safety__inner">
+      <h2 id="safety-title" class="safety__title">Localhost only. No auth.</h2>
+      <p>Any process on your machine can call tools while the plugin is loaded: edit or clear maps, drive menus, inject ManiaScript, change plugins and settings. Treat it like a debugger attached to the game. Never bind it to a LAN or public address. <a href="https://github.com/clankercode/tm-control-mcp/blob/master/SECURITY.md">Read SECURITY.md</a></p>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot__inner">
+    <div>
+      <p class="foot__brand">tm-control-mcp</p>
+      <p>Public domain: <a href="https://github.com/clankercode/tm-control-mcp/blob/master/UNLICENSE">Unlicense</a> or <a href="https://github.com/clankercode/tm-control-mcp/blob/master/CC0-1.0">CC0 1.0</a>, your choice.</p>
+      <p>Created by <a href="https://xk.io">Max Kaye (XertroV)</a> + AI. Maintained under <a href="https://github.com/clankercode">clankercode</a>.</p>
+    </div>
+    <ul class="foot__links">
+      <li><a href="https://github.com/clankercode/tm-control-mcp">Repository</a></li>
+      <li><a href="https://github.com/clankercode/tm-control-mcp/releases">Releases</a></li>
+      <li><a href="https://github.com/clankercode/tm-control-mcp/blob/master/CHANGELOG.md">Changelog</a></li>
+      <li><a href="https://github.com/clankercode/tm-control-mcp/blob/master/README.md">README</a></li>
+    </ul>
+    <p class="foot__legal">Trackmania is a trademark of Ubisoft Nadeo. This project is not affiliated with Ubisoft, Nadeo or Openplanet. Fonts: Inter and JetBrains Mono, SIL Open Font License.</p>
+  </div>
+</footer>
+<div class="sr-only" aria-live="polite" data-announce></div>
+</body>
+</html>
