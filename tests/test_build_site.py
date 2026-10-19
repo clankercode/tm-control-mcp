@@ -8,7 +8,7 @@ import textwrap
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-from build_site import build_site, latest_tagged_version, stable_version
+from build_site import build_site, latest_tagged_version, stable_version, verify_site
 
 
 def git(root, *args):
@@ -80,6 +80,22 @@ def test_refuses_nested_output_before_removing_files(tmp_path):
     with pytest.raises(ValueError, match="separate"):
         build_site(tmp_path, tmp_path / "output", "0.1.0")
     assert (tmp_path / "index.html").read_text() == "Keep me"
+
+
+def test_broken_local_assets_and_anchors_fail_the_build(tmp_path):
+    index = tmp_path / "index.html"
+    index.write_text('<a href="#missing">Section</a>')
+    with pytest.raises(ValueError, match="missing anchor"):
+        verify_site(tmp_path)
+    index.write_text('<link href="absent.css" rel="stylesheet">')
+    with pytest.raises(ValueError, match="missing local file"):
+        verify_site(tmp_path)
+    (tmp_path / "style.css").write_text('@font-face{src:url("font.woff2")}')
+    index.write_text('<link href="style.css" rel="stylesheet"><a href="https://example.com">Offsite</a>')
+    with pytest.raises(ValueError, match="missing asset"):
+        verify_site(tmp_path)
+    (tmp_path / "font.woff2").touch()
+    verify_site(tmp_path)
 
 
 def test_copy_paste_template_preserves_site_and_selects_latest(tagged_repo):

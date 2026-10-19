@@ -4,14 +4,54 @@
 from __future__ import annotations
 
 import argparse
+from html.parser import HTMLParser
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import tomllib
+from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 STABLE_VERSION = re.compile(r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
+
+
+class PageReferences(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.urls: list[str] = []
+        self.ids: set[str] = set()
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if attrs.get("id"):
+            self.ids.add(attrs["id"])
+        for key in ("src", "href"):
+            if attrs.get(key):
+                self.urls.append(attrs[key])
+
+
+def verify_site(destination: Path) -> None:
+    """Fail builds with missing local assets or broken page anchors."""
+    refs = PageReferences()
+    refs.feed((destination / "index.html").read_text(encoding="utf-8"))
+    for reference in refs.urls:
+        url = urlsplit(reference)
+        if url.scheme or url.netloc:
+            continue
+        if url.path:
+            target = destination / unquote(url.path).lstrip("/")
+            if not target.exists():
+                raise ValueError(f"Site references missing local file: {reference}")
+        elif url.fragment and unquote(url.fragment) not in refs.ids:
+            raise ValueError(f"Site references missing anchor: {reference}")
+    for css in destination.rglob("*.css"):
+        for reference in re.findall(r"url\(\s*['\"]?([^'\")\s]+)", css.read_text(encoding="utf-8")):
+            url = urlsplit(reference)
+            if not url.scheme and not url.netloc and url.path:
+                target = destination / url.path.lstrip("/") if url.path.startswith("/") else css.parent / unquote(url.path)
+                if not target.exists():
+                    raise ValueError(f"Stylesheet references missing asset: {reference}")
 
 
 def stable_version(value: str) -> tuple[int, int, int]:
@@ -61,6 +101,7 @@ def build_site(source: Path, destination: Path, version: str) -> None:
     )
     (destination / "latest-version.txt").write_text(version + "\n", encoding="utf-8")
     (destination / ".nojekyll").touch()
+    verify_site(destination)
 
 
 def main() -> None:
