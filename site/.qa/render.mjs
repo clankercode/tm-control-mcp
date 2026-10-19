@@ -1,10 +1,29 @@
 // QA + asset renderer for site/. Own headless Playwright Chromium (launched and
 // closed here); never attaches to a shared CDP browser.
 // Usage: node site/.qa/render.mjs <baseUrl> <outDir> [shots|icons|og]
-import { chromium } from "/home/xertrov/.claude/skills/headless-browser-screenshots/node_modules/playwright/index.mjs";
-import { fileURLToPath } from "node:url";
+//   icons: baseUrl unused; writes favicon-32.png + apple-touch-icon.png from assets/favicon.svg
+//   og:    baseUrl = URL/path of og-source.html; writes og-image.png (1200x630)
+// Needs Playwright with Chromium. Resolution order: $PLAYWRIGHT_MODULE (path to a
+// playwright package dir or its index.mjs), then "playwright" resolved from the
+// current working directory (e.g. `npm i --no-save playwright && npx playwright install chromium`).
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import fs from "node:fs";
+
+async function loadPlaywright() {
+  const tries = [];
+  if (process.env.PLAYWRIGHT_MODULE) tries.push(process.env.PLAYWRIGHT_MODULE);
+  try { tries.push(createRequire(path.join(process.cwd(), "noop.js")).resolve("playwright")); } catch {}
+  for (const t of tries) {
+    try {
+      const p = fs.statSync(t).isDirectory() ? path.join(t, "index.mjs") : t;
+      return await import(pathToFileURL(p).href);
+    } catch {}
+  }
+  throw new Error("Playwright not found: set PLAYWRIGHT_MODULE or install `playwright` where you run this");
+}
+const { chromium } = await loadPlaywright();
 
 const [base, outDir, mode = "shots"] = process.argv.slice(2);
 const here = path.dirname(fileURLToPath(import.meta.url));
