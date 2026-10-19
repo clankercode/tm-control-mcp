@@ -154,6 +154,7 @@ h1, h2, h3 { margin: 0; line-height: 1.1; }
 .nav a {
   display: block; padding: 8px 12px;
   font-weight: 600; font-size: 0.94rem;
+  white-space: nowrap;
   border-radius: 4px;
 }
 .nav a:hover { background: rgba(255, 255, 255, 0.12); }
@@ -656,7 +657,9 @@ code.nw { white-space: nowrap; }
   .split { grid-template-columns: minmax(0, 1fr); }
   .facts { grid-template-columns: minmax(0, 1fr); }
 }
-@media (max-width: 860px) {
+/* One-row toolbar needs ~968px (brand + 5 links + GitHub + Mood: Night + gutters):
+   stack it below 1024px so the row never squeezes links into the tools. */
+@media (max-width: 1023px) {
   .bar__inner { flex-wrap: wrap; gap: 0 12px; padding-top: 8px; }
   .brand { flex: 1; min-height: 44px; }
   .nav { order: 3; flex: 0 0 calc(100% + var(--gutter) * 2); max-width: none; margin: 0 calc(var(--gutter) * -1); border-top: 1px solid rgba(255, 255, 255, 0.16); }

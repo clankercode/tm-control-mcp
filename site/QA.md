@@ -31,11 +31,15 @@ node site/.qa/render.mjs - site/assets icons                                    
 python3 site/.qa/imgdiff.py /tmp/x/og-image.png site/assets/og-image.png         # pixel diff (None = identical)
 ```
 
+Header sweep (V-017): an uncommitted probe, `/tmp/hdrqa/probe.mjs <url> 320 1440 <shot widths>`,
+resizes one page per mood through every width and runs the checks listed in the matrix.
+It writes `report.json` and 140px header strips. The source-tree run used `http://127.0.0.1:8766/`.
+
 Fonts are subsets of system OFL fonts (`pyftsubset`, `fonttools varLib.instancer`):
 Inter Variable upright wght 400–800, Inter Italic wght 700–900 opsz 32,
 JetBrains Mono 400/700, Latin plus punctuation and arrows. Licences are in `assets/fonts/`.
 
-## Capture matrix (final, commit 27f214b)
+## Capture matrix (final, commit 27f214b; header rows re-run after the V-017 fix)
 
 | Capture | Viewport | Mood | Result |
 |---|---:|---|---|
@@ -49,6 +53,8 @@ JetBrains Mono 400/700, Latin plus punctuation and arrows. Licences are in `asse
 | CTA focus | 1440 / 390 / 320 | — | PASS: inset dark/yellow ring visible inside the clipped shape |
 | nav "Updates" focus | 390 / 320 | — | PASS: link scrolled fully into view (390: 310–390, 320: 228–308); ring inside |
 | no-JS | 390 | Night | PASS: all 7 steps visible; Prev/Next and Mood button absent (`[hidden]` enforced) |
+| header sweep (fix V-017) | every width 320–1440, 1px steps | both | PASS: 0 failing widths (before: 202 = 861–965 Night, 861–955 Day, plus a 1px edge sliver at 337 that the probe now ignores). Checks per width: no overlap between brand / 5 links / GitHub / Mood, centre hit test of every visible control returns itself, nothing past the viewport, no wrapped link or brand, one-row nav→tools gap ≥ 12px, `scrollWidth` = viewport |
+| header boundaries | 861, 900, 901, 960, 961, 1023 / 1024, 1080 | both | PASS: ≤1023 two rows (bar 99px, nav strip below); ≥1024 one row (bar 61px), smallest nav→tools gap 78px Night / 88px Day at 1024. Before: at 861 "Tool packs" wrapped and the centre of "Updates" hit GitHub (47px overlap), still 7px at 901, "Tool packs" wrapped until 965 |
 | OG card | 1200×630 + 300w thumb | — | PASS: two-line title, one-line subline, progress ends at CP3 centre (geometry noted in source); parent independent geometry + vision PASS at `4fbee27` |
 
 Vision review was done by viewing the actual PNGs, with banded slices and crop-zooms.
@@ -73,6 +79,7 @@ Vision review was done by viewing the actual PNGs, with banded slices and crop-z
 | V-014 | P2 (review) | CP1 used raw `decoration:"48x48Day"` | `{"environment":"Stadium"}` (default vista) |
 | V-015 | P2 (review) | Failed-tool example showed only the inner result | Full envelope with `data.result.success:false`; replies use real `ok,id,route,error,data` |
 | V-016 | P2 | OG title wrapped to 3 lines into the track; progress overshot CP3 | Two-line title, one-line subline, car width from gate centres |
+| V-017 | P1 (review) | 861–965px: one-row header too narrow (needs ~968px), so "Tool packs" wrapped and "Updates" slid under GitHub (centre hit GitHub at 861) | Two-row header breakpoint 860 → 1023px; nav links `nowrap` at every width |
 
 ## Final statement
 
