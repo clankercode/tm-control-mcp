@@ -19,6 +19,8 @@ def as_runner(tmp_path_factory):
     sdk = Path(os.environ.get("ANGELSCRIPT_ROOT", Path.home() / "src/angelscript")) / "sdk"
     lib = sdk / "angelscript/lib/libangelscript.a"
     if not lib.is_file() or not shutil.which("g++"):
+        if os.environ.get("TCM_REQUIRE_ANGELSCRIPT") == "1":
+            pytest.fail("Required AngelScript SDK static library or g++ is missing")
         pytest.skip("AngelScript SDK static library and g++ required; set ANGELSCRIPT_ROOT")
     out = tmp_path_factory.mktemp("pack-update-policy") / "runner"
     addon = sdk / "add_on"

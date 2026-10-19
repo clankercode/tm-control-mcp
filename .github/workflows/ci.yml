@@ -20,8 +20,25 @@ jobs:
       - name: Install test deps
         run: pip install pytest
 
+      - name: Check out pinned AngelScript SDK for production-policy tests
+        uses: actions/checkout@v4
+        with:
+          repository: XertroV/angelscript
+          ref: 0b8dacb8acac4e844a312c4405f124d97fc33af0
+          path: .test-deps/angelscript
+
+      - name: Build AngelScript
+        run: |
+          cmake -S .test-deps/angelscript/sdk/angelscript/projects/cmake -B /tmp/tcm-angelscript-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_ARCHIVE_OUTPUT_DIRECTORY="$GITHUB_WORKSPACE/.test-deps/angelscript/sdk/angelscript/lib"
+          cmake --build /tmp/tcm-angelscript-build --parallel 2
+
       - name: Unit tests (offline)
-        run: python -m pytest tests/test_call_wait.py tests/test_tool_packs.py tests/test_build_site.py -q
+        env:
+          ANGELSCRIPT_ROOT: ${{ github.workspace }}/.test-deps/angelscript
+          TCM_REQUIRE_ANGELSCRIPT: '1'
+        run: python -m pytest tests -q
 
       - name: Syntax-check call.py
         run: python -m py_compile tools/call.py

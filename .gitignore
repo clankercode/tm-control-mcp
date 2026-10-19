@@ -10,3 +10,4 @@ op-next-formatted.json
 .hermes/
 .worktrees/
 _site/
+.test-deps/

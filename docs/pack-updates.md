@@ -54,7 +54,8 @@ wait for HTTP. URLs share a cache, including failures. Successful checks are
 cached for six hours; errors retry after 30 minutes. The cache is persisted in
 the bridge's Openplanet storage as `pack-updates-v1.json`, so reloading the bridge
 does not normally start another request. Checks are serialized, time out after
-five seconds, and stop on disable/unload. A maximum of 64 URL entries bounds
+five seconds, have a global two-second minimum between HTTP starts, and stop on
+disable/unload. A maximum of 64 URL entries bounds
 storage. Only the bridge and currently enabled, registered packs are checked.
 
 The last valid result survives transient errors and is marked stale. The worker
