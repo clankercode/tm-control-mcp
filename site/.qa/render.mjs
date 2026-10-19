@@ -25,7 +25,8 @@ async function loadPlaywright() {
 }
 const { chromium } = await loadPlaywright();
 
-const [base, outDir, mode = "shots"] = process.argv.slice(2);
+const [rawBase, outDir, mode = "shots"] = process.argv.slice(2);
+const base = /^[a-z][a-z0-9+.-]*:/i.test(rawBase || "") ? rawBase : pathToFileURL(path.resolve(rawBase || ".")).href;
 const here = path.dirname(fileURLToPath(import.meta.url));
 const site = path.resolve(here, "..");
 fs.mkdirSync(outDir, { recursive: true });

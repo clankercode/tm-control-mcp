@@ -30,6 +30,14 @@
     syncMood();
   }
 
+  /* ---- Scrolling mobile nav: Chrome leaves a partly visible focused link
+     clipped, so bring the whole link (and its focus ring) into view. ---- */
+  var navList = document.querySelector(".nav ul");
+  if (navList) navList.addEventListener("focusin", function (e) {
+    var a = e.target, r = a.getBoundingClientRect(), c = navList.getBoundingClientRect();
+    if (r.left < c.left || r.right > c.right) a.scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
+
   /* ---- JSON tint (display only; text content unchanged) ---- */
   var TOKEN = /("(?:[^"\\]|\\.)*")(\s*:)?|(-?\d+(?:\.\d+)?)|\b(true|false|null)\b|([{}\[\],:])/g;
   function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
@@ -86,7 +94,9 @@
     addCopy(box, function () { return pre.textContent; }, label ? label.textContent.trim() : "command");
   });
   Array.prototype.forEach.call(document.querySelectorAll(".wire__cmd"), function (pre) {
-    pre.style.paddingRight = "92px";
+    pre.classList.add("wire__cmd--copy");
+    var code = pre.querySelector("code");
+    code.innerHTML = esc(code.textContent).replace(/,/g, ",<wbr>");
     var holder = document.createElement("div");
     holder.className = "copy-wrap";
     pre.parentNode.insertBefore(holder, pre);

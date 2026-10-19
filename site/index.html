@@ -124,16 +124,16 @@
             <div class="wire">
               <pre class="wire__cmd"><code>python3 tools/call.py status</code></pre>
               <pre class="wire__line wire__line--out"><code data-json>{"route":"status"}</code></pre>
-              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"route":"status","data":{"alive":true,"port":30006,…}}</code></pre>
+              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"id":null,"route":"status","error":"","data":{"alive":true,"port":30006,…}}</code></pre>
             </div>
           </li>
           <li class="step" data-gate="CP1" data-label="EditNewMap">
             <h3 class="step__name"><span class="step__gate">CP1</span> <code>EditNewMap</code></h3>
-            <p class="step__why">Open a new Stadium map in the editor. If leaving a dirty map pops the unsaved-changes dialog, it warns instead of guessing.</p>
+            <p class="step__why">Open a new Stadium map in the editor (default vista). If leaving a dirty map pops the unsaved-changes dialog, it warns instead of guessing.</p>
             <div class="wire">
-              <pre class="wire__cmd"><code>python3 tools/call.py EditNewMap '{"environment":"Stadium","decoration":"48x48Day"}'</code></pre>
-              <pre class="wire__line wire__line--out"><code data-json>{"route":"call","tool":"EditNewMap","input":{"environment":"Stadium","decoration":"48x48Day"}}</code></pre>
-              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"route":"call","data":{"tool":"EditNewMap","result":{"success":true,"output":{…}}}}</code></pre>
+              <pre class="wire__cmd"><code>python3 tools/call.py EditNewMap '{"environment":"Stadium"}'</code></pre>
+              <pre class="wire__line wire__line--out"><code data-json>{"route":"call","tool":"EditNewMap","input":{"environment":"Stadium"}}</code></pre>
+              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"id":null,"route":"call","error":"","data":{"tool":"EditNewMap","result":{"success":true,"output":{…}}}}</code></pre>
             </div>
           </li>
           <li class="step" data-gate="CP2" data-label="WaitUntil">
@@ -142,7 +142,7 @@
             <div class="wire">
               <pre class="wire__cmd"><code>python3 tools/call.py WaitUntil '{"condition":"editorReady","timeoutMs":20000}'</code></pre>
               <pre class="wire__line wire__line--out"><code data-json>{"route":"call","tool":"WaitUntil","input":{"condition":"editorReady","timeoutMs":20000}}</code></pre>
-              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"route":"call","data":{"tool":"WaitUntil","result":{"success":true,"output":{…}}}}</code></pre>
+              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"id":null,"route":"call","error":"","data":{"tool":"WaitUntil","result":{"success":true,"output":{…}}}}</code></pre>
             </div>
           </li>
           <li class="step" data-gate="CP3" data-label="PlaceBlock">
@@ -151,7 +151,7 @@
             <div class="wire">
               <pre class="wire__cmd"><code>python3 tools/call.py PlaceBlock '{"blockName":"RoadTechStraight","x":24,"y":12,"z":24}'</code></pre>
               <pre class="wire__line wire__line--out"><code data-json>{"route":"call","tool":"PlaceBlock","input":{"blockName":"RoadTechStraight","x":24,"y":12,"z":24}}</code></pre>
-              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"route":"call","data":{"tool":"PlaceBlock","result":{"success":true,"output":{"mapPre":{…},"mapPost":{…}}}}}</code></pre>
+              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"id":null,"route":"call","error":"","data":{"tool":"PlaceBlock","result":{"success":true,"output":{"mapPre":{…},"mapPost":{…}}}}}</code></pre>
             </div>
           </li>
           <li class="step" data-gate="CP4" data-label="TakeScreenshot">
@@ -160,7 +160,7 @@
             <div class="wire">
               <pre class="wire__cmd"><code>python3 tools/call.py TakeScreenshot '{"hideOverlay":true}'</code></pre>
               <pre class="wire__line wire__line--out"><code data-json>{"route":"call","tool":"TakeScreenshot","input":{"hideOverlay":true}}</code></pre>
-              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"route":"call","data":{"tool":"TakeScreenshot","result":{"success":true,"output":{"fullName":…,"sizeBytes":…}}}}</code></pre>
+              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"id":null,"route":"call","error":"","data":{"tool":"TakeScreenshot","result":{"success":true,"output":{"fullName":…,"sizeBytes":…}}}}</code></pre>
             </div>
           </li>
           <li class="step" data-gate="CP5" data-label="SaveMapAs">
@@ -169,7 +169,7 @@
             <div class="wire">
               <pre class="wire__cmd"><code>python3 tools/call.py SaveMapAs '{"name":"agent-demo"}'</code></pre>
               <pre class="wire__line wire__line--out"><code data-json>{"route":"call","tool":"SaveMapAs","input":{"name":"agent-demo"}}</code></pre>
-              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"route":"call","data":{"tool":"SaveMapAs","result":{"success":true,"output":{…}}}}</code></pre>
+              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"id":null,"route":"call","error":"","data":{"tool":"SaveMapAs","result":{"success":true,"output":{…}}}}</code></pre>
             </div>
           </li>
           <li class="step" data-gate="FINISH" data-label="BackToMainMenu">
@@ -178,7 +178,7 @@
             <div class="wire">
               <pre class="wire__cmd"><code>python3 tools/call.py BackToMainMenu</code></pre>
               <pre class="wire__line wire__line--out"><code data-json>{"route":"call","tool":"BackToMainMenu","input":{}}</code></pre>
-              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"route":"call","data":{"tool":"BackToMainMenu","result":{"success":true,"output":{…}}}}</code></pre>
+              <pre class="wire__line wire__line--in"><code data-json>{"ok":true,"id":null,"route":"call","error":"","data":{"tool":"BackToMainMenu","result":{"success":true,"output":{…}}}}</code></pre>
             </div>
           </li>
         </ol>
@@ -298,16 +298,16 @@
           <h3 class="h-sub">Replies</h3>
           <div class="code">
             <p class="code__label"><span class="key key--in">ok</span> success</p>
-            <pre class="pre--wrap"><code data-json>{"ok":true,"route":"call","data":{"tool":"GetMode","result":{"success":true,"output":{"mode":"MapEditor"}}}}</code></pre>
+            <pre class="pre--wrap"><code data-json>{"ok":true,"id":null,"route":"call","error":"","data":{"tool":"GetMode","result":{"success":true,"output":{"mode":"MapEditor"}}}}</code></pre>
           </div>
           <div class="code">
-            <p class="code__label"><span class="key key--err">err</span> a failed tool</p>
-            <pre class="pre--wrap"><code data-json>{"success":false,"error":"…","code":"NOT_IN_EDITOR","retryable":true,"requiredMode":"Editor","hint":"…"}</code></pre>
+            <p class="code__label"><span class="key key--err">err</span> a tool that failed: see <code>data.result</code></p>
+            <pre class="pre--wrap"><code data-json>{"ok":true,"id":null,"route":"call","error":"","data":{"tool":"PlaceBlock","result":{"success":false,"error":"…","code":"NOT_IN_EDITOR","retryable":true,"requiredMode":"Editor","hint":"…"}}}</code></pre>
           </div>
         </div>
         <div>
           <div class="code code--copy">
-            <p class="code__label">Python, standard library only</p>
+            <p class="code__label">Python, stdlib only</p>
 <pre tabindex="0"><code>import json, socket
 
 def call(tool, payload=None, port=30006):
@@ -331,7 +331,7 @@ print(call("GetMode"))</code></pre>
   <section class="section" id="install" aria-labelledby="install-title">
     <div class="wrap">
       <p class="tab"><span>03</span> Install</p>
-      <h2 id="install-title">Four steps to a live socket.</h2>
+      <h2 id="install-title">Five steps to a live socket.</h2>
 
       <ol class="folders">
         <li class="folder">
@@ -347,18 +347,23 @@ print(call("GetMode"))</code></pre>
         <li class="folder">
           <p class="folder__tab" aria-hidden="true">3</p>
           <h3>Install the plugin</h3>
-          <p>Download <code>tm-control-mcp-<span data-latest-version>&lt;version&gt;</span>.op</code> from the <a href="https://github.com/clankercode/tm-control-mcp/releases/latest">latest release</a> into Openplanet's <code>Plugins</code> folder and enable it. Or run from source:</p>
-          <div class="code code--copy">
-            <p class="code__label">Shell, from source</p>
-<pre tabindex="0"><code>git clone https://github.com/clankercode/tm-control-mcp.git
-cd tm-control-mcp
-./build.sh dev</code></pre>
-          </div>
+          <p>Download <code>tm-control-mcp-<span data-latest-version>&lt;version&gt;</span>.op</code> from the <a href="https://github.com/clankercode/tm-control-mcp/releases/latest">latest release</a> into Openplanet's <code>Plugins</code> folder and enable it.</p>
         </li>
         <li class="folder">
           <p class="folder__tab" aria-hidden="true">4</p>
+          <h3>Get the client</h3>
+          <p>The command-line client <code>tools/call.py</code> lives in the repository and needs <strong>Python 3</strong> (standard library only). Clone it:</p>
+          <div class="code code--copy">
+            <p class="code__label">Shell, get the client</p>
+<pre tabindex="0"><code>git clone https://github.com/clankercode/tm-control-mcp.git
+cd tm-control-mcp</code></pre>
+          </div>
+          <p>Building from source instead of step 3? In the clone, <code>./build.sh dev</code> stages the plugin into <code>~/OpenplanetNext/Plugins</code> by default (override with <code>PLUGINS_DIR</code>).</p>
+        </li>
+        <li class="folder folder--wide">
+          <p class="folder__tab" aria-hidden="true">5</p>
           <h3>Check the socket</h3>
-          <p>With Trackmania running and the plugin enabled:</p>
+          <p>With Trackmania running and the plugin enabled, from the clone:</p>
           <div class="code code--copy">
             <p class="code__label">Shell, verify</p>
 <pre tabindex="0"><code>python3 tools/call.py status

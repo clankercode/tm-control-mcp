@@ -100,6 +100,7 @@
 
 /* ---------- base ---------- */
 *, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; scroll-padding-top: 84px; }
 @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
 body {
@@ -217,6 +218,12 @@ h1, h2, h3 { margin: 0; line-height: 1.1; }
 .btn--ghost { color: var(--text); box-shadow: inset 0 0 0 2px var(--line-strong); }
 .btn--ghost:hover { color: var(--text); box-shadow: inset 0 0 0 2px var(--text); text-decoration: none; }
 .btn:active { transform: translateY(1px); }
+/* clip-path would cut an outside outline: draw the focus ring inside the shape */
+.btn--signal:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 3px var(--signal-ink), inset 0 0 0 6px var(--signal), inset 0 0 0 8px var(--signal-ink);
+  text-decoration: underline; text-underline-offset: 0.2em;
+}
 
 /* Section tab = the editor's yellow MODES button */
 .tab {
@@ -384,6 +391,7 @@ h1 {
   font-weight: 700; font-family: var(--font-mono);
 }
 .wire__cmd { background: rgba(255, 255, 255, 0.03); }
+.wire__cmd--copy { padding-right: 92px !important; }
 .wire__cmd::before { content: "$"; color: var(--code-muted); }
 .wire__cmd code { color: #fff; }
 .wire__line--out::before { content: "→"; color: var(--signal); }
@@ -575,6 +583,8 @@ code.nw { white-space: nowrap; }
 .folder h3 { font-size: 1.25rem; font-weight: 750; }
 .folder > p:not(.folder__tab) { margin: 10px 0 0; color: var(--text-2); }
 .folder .code { margin-top: 16px; }
+.folder--wide { grid-column: 1 / -1; }
+@media (min-width: 721px) { .folder--wide .code { max-width: calc(50% - 20px); } }
 
 /* packs */
 .table-scroll { margin-top: 44px; overflow-x: auto; }
@@ -649,10 +659,11 @@ code.nw { white-space: nowrap; }
 @media (max-width: 860px) {
   .bar__inner { flex-wrap: wrap; gap: 0 12px; padding-top: 8px; }
   .brand { flex: 1; min-height: 44px; }
-  .nav { order: 3; flex-basis: 100%; margin: 0 calc(var(--gutter) * -1); border-top: 1px solid rgba(255, 255, 255, 0.16); }
+  .nav { order: 3; flex: 0 0 calc(100% + var(--gutter) * 2); max-width: none; margin: 0 calc(var(--gutter) * -1); border-top: 1px solid rgba(255, 255, 255, 0.16); }
   .nav ul { overflow-x: auto; padding: 0 calc(var(--gutter) - 8px); scrollbar-width: none; }
+  .nav li:last-child { padding-right: calc(var(--gutter) - 8px); }
+  .nav a:focus-visible { outline-offset: -3px; }
   .nav ul::-webkit-scrollbar { display: none; }
-  .nav { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 36px), transparent); }
   .nav a { padding: 11px 10px; white-space: nowrap; font-size: 0.9rem; }
   html { scroll-padding-top: 116px; }
 }
@@ -692,6 +703,9 @@ code.nw { white-space: nowrap; }
   .trace__legend { display: none; }
   .tbtn { flex: 1; justify-content: center; }
   .wire pre { padding-left: 32px; font-size: 0.8rem; }
+  .wire__cmd--copy { padding-right: 52px !important; }
+  .wire .copy { width: 36px; padding: 0; justify-content: center; }
+  .wire .copy span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .wire pre::before { left: 11px; }
   .btn { flex: 1 1 100%; justify-content: center; }
   .code pre { font-size: 0.8rem; }
