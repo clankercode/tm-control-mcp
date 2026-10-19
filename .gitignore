@@ -9,3 +9,4 @@ op-next-formatted.json
 .DS_Store
 .hermes/
 .worktrees/
+_site/

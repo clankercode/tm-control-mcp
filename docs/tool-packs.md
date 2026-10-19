@@ -38,6 +38,7 @@ Json::Value@ MyDispatch(const string &in name, Json::Value &in input) {
 
 void Main() {
     auto b = TmMcp::ToolPackBuilder("mypack"); // or ToolPackBuilder() + SetPackId; default is this plugin's id
+    b.SetLatestReleaseUrl("https://YOUR-ACCOUNT.github.io/YOUR-PACK/latest-version.txt");
     b.AddTool("Ping", "Ping.", '{"type":"object","properties":{},"additionalProperties":false}');
     b.SetDispatch(MyDispatch);
     auto r = TmMcp::RegisterToolPack(b);
@@ -57,6 +58,18 @@ Custom pack ids (constructor or `SetPackId`) must match the charset above. The d
 
 Adding the pack-id field / constructor is a shared-type change: reload TmMcp, then reload packs.
 
+## Release metadata
+
+Declare `latestReleaseUrl` with `SetLatestReleaseUrl` on every builder. The URL
+serves only the latest version string as plain text. The bridge compares it with
+the registering plugin's actual installed version, caches results, and checks
+in the background. Missing/invalid URLs warn without breaking registration.
+
+Prefer a CI-built GitHub Pages site that includes `latest-version.txt` in the
+same deployment as the rest of the site. See the full
+[version-file contract and copy-paste Pages workflow](pack-updates.md), including
+cache behavior, discovery fields, reload guidance, and existing-pack follow-ups.
+
 ## Call back into TmMcp
 
 Pack dispatch may call `TmMcp::CallTool`. Same tool must not re-enter itself (`reentrant_tool`). Each `CallTool` logs `TM Control MCP tool start/done`; pack dispatch also logs `TM Control MCP pack start/done`.
@@ -64,7 +77,10 @@ Pack dispatch may call `TmMcp::CallTool`. Same tool must not re-enter itself (`r
 ## Discovery
 
 - `GetToolList` / `tools`: pack entries have `name` = `packId.FuncName` and `pack`.
-- Builtin `ListToolPacks`: `{id, plugin, toolCount, enabled}`.
+- Builtin `ListToolPacks`: `{id, plugin, toolCount, enabled, installedVersion,
+  latestReleaseUrl, latestVersion, updateAvailable, updateStatus, ...}` for each
+  pack, plus `output.bridge` for the bridge's own update status. Inspect
+  `updateStatus` and `updateStale` before treating a false update flag as current.
 
 See `tools/fixtures/tm-mcp-pack-fixture/` for a working Ping / Echo / GetMode pack.
 

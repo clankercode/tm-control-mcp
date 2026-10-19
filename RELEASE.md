@@ -213,6 +213,16 @@ attach `.op` → Publish.
 - [ ] `gh release view "$TAG"`
 - [ ] Optional: announce / Openplanet site upload (human decision)
 - [ ] Restore local dev plugin if needed: `TM_PLUGIN_SKIP_LSP=1 ./build.sh dev`
+- [ ] Pages workflow is green; the [site](https://clankercode.github.io/tm-control-mcp/)
+  loads and [latest-version.txt](https://clankercode.github.io/tm-control-mcp/latest-version.txt)
+  contains only the latest stable version plus a newline
+
+The Pages workflow builds the current `master` site and appends the highest
+stable tagged version, checked against `info.toml` at that tag. It runs on
+branch/tag pushes, release events, and manual dispatch. A tag is a public
+version-file publication boundary; do not push stable tags before a release is
+ready. Unreleased manifest bumps and prerelease tags do not change this file.
+See [pack updates](docs/pack-updates.md) for the reusable workflow and local build.
 
 ---
 

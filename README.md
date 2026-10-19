@@ -2,6 +2,10 @@
 
 **Local Openplanet bridge for controlling Trackmania from external tools and AI agents.**
 
+[Website](https://clankercode.github.io/tm-control-mcp/) ·
+[Latest version](https://clankercode.github.io/tm-control-mcp/latest-version.txt) ·
+[Pack authoring](docs/tool-packs.md) · [Pack updates](docs/pack-updates.md)
+
 `tm-control-mcp` is an Openplanet plugin that exposes Trackmania’s **map editor**,
 **main menu**, and related game state over a **localhost JSON TCP socket**. Coding
 agents, scripts, and MCP-style clients can create maps, place freeblocks and
@@ -21,6 +25,7 @@ themselves — without clicking the UI by hand.
 | **Security** | Localhost JSON, **no auth** → [SECURITY.md](./SECURITY.md) |
 | **Releasing** | Agent checklist → [RELEASE.md](./RELEASE.md) · history → [CHANGELOG.md](./CHANGELOG.md) |
 | **Migration** | From tm-mcptm → [docs/migration-from-mcptm.md](./docs/migration-from-mcptm.md) |
+| **Pack updates** | Cached version checks in `ListToolPacks` and Settings → Updates; [author guide + Pages template](docs/pack-updates.md) |
 
 ![Editor viewport capture via TakeScreenshot](docs/images/editor-demo.jpg)
 

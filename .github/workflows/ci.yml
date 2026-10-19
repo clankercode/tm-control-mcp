@@ -20,8 +20,8 @@ jobs:
       - name: Install test deps
         run: pip install pytest
 
-      - name: Unit tests (call.py wait helpers)
-        run: python -m pytest tests/test_call_wait.py -q
+      - name: Unit tests (offline)
+        run: python -m pytest tests/test_call_wait.py tests/test_tool_packs.py tests/test_build_site.py -q
 
       - name: Syntax-check call.py
         run: python -m py_compile tools/call.py

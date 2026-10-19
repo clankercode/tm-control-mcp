@@ -6,5 +6,9 @@ Known packs:
 * E++: ../tm-mcp-pack-epp (pack id `tm-mcp-pack-epp`)
 * Map Together: ../tm-map-together-mcp-pack (pack id `MapTogether`)
 * MLHook: ../tm-mlhook-mcp-pack (pack id `MLHook`; wraps existing MLHook exports: events, ML injection/messaging, capturing hooks)
-* todo: add any others and their repo urls
+* Ghosts++: [tm-mcp-pack-gpp](https://github.com/clankercode/tm-mcp-pack-gpp) (pack id `GhostsPP`)
+* Visual: [tm-mcp-pack-visual](https://github.com/clankercode/tm-mcp-pack-visual) (camera framing, screenshots, contact sheets)
+
+[Website](https://clankercode.github.io/tm-control-mcp/) ·
+[Version-file setup and per-pack follow-ups](docs/pack-updates.md#follow-ups-for-existing-packs)
 

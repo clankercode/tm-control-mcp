@@ -1,0 +1,78 @@
+# Copy to .github/workflows/pages.yml in your pack repository.
+# Change `master` below if your default branch has another name.
+name: Pack site and latest version
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*', '[0-9]*']
+  release:
+    types: [published, edited, deleted]
+  workflow_dispatch:
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/configure-pages@v5
+
+      # Replace ONLY this step with your full static site's build command.
+      # It must finish with the complete site in _site/.
+      - name: Build static site (optional)
+        run: |
+          mkdir -p _site
+          if [ -d site ]; then cp -a site/. _site/; fi
+
+      # Keep this AFTER the site build: frameworks often clear their output.
+      - name: Add latest-version.txt to the complete site
+        shell: python
+        run: |
+          import pathlib, re, subprocess, tomllib
+          pattern = re.compile(r'v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z')
+          tags = subprocess.check_output(['git', 'tag', '--list'], text=True).splitlines()
+          versions = [(tuple(map(int, m.groups())), t) for t in tags if (m := pattern.fullmatch(t))]
+          if not versions:
+              raise SystemExit('No stable version tag found; publish/tag a release first')
+          version, tag = max(versions)
+          manifest = subprocess.check_output(['git', 'show', f'{tag}:info.toml'], text=True)
+          declared = tomllib.loads(manifest)['meta']['version']
+          match = pattern.fullmatch(declared)
+          if match is None or tuple(map(int, match.groups())) != version:
+              raise SystemExit(f'Tag {tag} disagrees with its info.toml version')
+          out = pathlib.Path('_site')
+          out.mkdir(exist_ok=True)
+          (out / 'latest-version.txt').write_text('.'.join(map(str, version)) + '\n', encoding='utf-8')
+          (out / '.nojekyll').touch()
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment
