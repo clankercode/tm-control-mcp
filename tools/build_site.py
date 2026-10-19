@@ -8,6 +8,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import tomllib
 from urllib.parse import unquote, urlsplit
@@ -21,11 +22,17 @@ class PageReferences(HTMLParser):
         super().__init__()
         self.urls: list[str] = []
         self.ids: set[str] = set()
+        self.social_images: list[str] = []
+        self.canonical: str | None = None
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
         if attrs.get("id"):
             self.ids.add(attrs["id"])
+        if tag == "link" and attrs.get("rel") == "canonical":
+            self.canonical = attrs.get("href")
+        if tag == "meta" and (attrs.get("property") == "og:image" or attrs.get("name") == "twitter:image"):
+            self.social_images.append(attrs.get("content", ""))
         for key in ("src", "href"):
             if attrs.get(key):
                 self.urls.append(attrs[key])
@@ -52,6 +59,15 @@ def verify_site(destination: Path) -> None:
                 target = destination / url.path.lstrip("/") if url.path.startswith("/") else css.parent / unquote(url.path)
                 if not target.exists():
                     raise ValueError(f"Stylesheet references missing asset: {reference}")
+    for image_url in refs.social_images:
+        if not refs.canonical or not image_url.startswith(refs.canonical):
+            raise ValueError("Social images must use the absolute canonical site URL")
+        image_path = destination / unquote(urlsplit(image_url[len(refs.canonical):]).path)
+        if not image_path.is_file():
+            raise ValueError(f"Missing social image: {image_url}")
+        data = image_path.read_bytes()
+        if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n" or struct.unpack(">II", data[16:24]) != (1200, 630):
+            raise ValueError("Social image must be a 1200x630 PNG")
 
 
 def stable_version(value: str) -> tuple[int, int, int]:

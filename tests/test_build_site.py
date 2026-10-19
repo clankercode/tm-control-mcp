@@ -1,6 +1,7 @@
 """Behavior checks for the release-file/site deployment boundary (no network)."""
 from pathlib import Path
 import re
+import struct
 import subprocess
 import sys
 import textwrap
@@ -111,3 +112,17 @@ def test_copy_paste_template_preserves_site_and_selects_latest(tagged_repo):
     subprocess.run([sys.executable, "-c", textwrap.dedent(match[1])], cwd=tagged_repo, check=True)
     assert (output / "latest-version.txt").read_bytes() == b"0.10.0\n"
     assert (output / "index.html").read_text() == "A complete existing site"
+
+
+def test_social_image_is_absolute_present_and_expected_dimensions(tmp_path):
+    index = tmp_path / "index.html"
+    index.write_text('<link rel="canonical" href="https://example.com/project/">'
+                     '<meta property="og:image" content="https://example.com/project/og.png">')
+    with pytest.raises(ValueError, match="Missing social image"):
+        verify_site(tmp_path)
+    # Header fixture: the build checks format/dimensions; browser QA decodes the complete image.
+    (tmp_path / "og.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 8 + struct.pack(">II", 400, 200))
+    with pytest.raises(ValueError, match="1200x630"):
+        verify_site(tmp_path)
+    (tmp_path / "og.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 8 + struct.pack(">II", 1200, 630))
+    verify_site(tmp_path)
