@@ -56,7 +56,9 @@ the bridge's Openplanet storage as `pack-updates-v1.json`, so reloading the brid
 does not normally start another request. Checks are serialized, time out after
 five seconds, have a global two-second minimum between HTTP starts, and stop on
 disable/unload. A maximum of 64 URL entries bounds
-storage. Only the bridge and currently enabled, registered packs are checked.
+storage; inactive historical entries are evicted when current packs need room.
+The bridge and in-flight checks are retained. Only the bridge and currently
+enabled, registered packs are checked.
 
 The last valid result survives transient errors and is marked stale. The worker
 requests a bounded byte range and rejects partial, oversized, malformed, and
