@@ -4,6 +4,7 @@ namespace TmMcp {
     class RegisteredPack {
         string packId;
         string pluginId;
+        string latestReleaseUrl;
         array<string> toolNames;
         array<string> descriptions;
         array<Json::Value@> schemas;
@@ -113,6 +114,7 @@ namespace TmMcp {
         auto pack = RegisteredPack();
         pack.packId = packId;
         pack.pluginId = plugin.ID;
+        pack.latestReleaseUrl = builder.latestReleaseUrl.Trim().SubStr(0, UPDATE_URL_LIMIT + 1);
         @pack.dispatch = builder.dispatch;
 
         for (uint i = 0; i < builder.tools.Length; i++) {
@@ -158,6 +160,8 @@ namespace TmMcp {
             }
         }
 
+        string updateWarning = PackUpdateUrlError(pack.latestReleaseUrl);
+        if (updateWarning.Length > 0) warn("TM Control MCP pack '" + packId + "': " + updateWarning);
         g_Packs.InsertLast(pack);
         InvalidateToolList();
         trace("TM Control MCP pack registered " + packId + " tools=" + pack.toolNames.Length);
@@ -165,6 +169,7 @@ namespace TmMcp {
         output["pack"] = packId;
         output["plugin"] = plugin.ID;
         output["toolCount"] = int(pack.toolNames.Length);
+        AppendPackUpdateStatus(output, pack.pluginId, pack.latestReleaseUrl);
         return MakeSuccess(output);
     }
 
@@ -271,10 +276,12 @@ namespace TmMcp {
             o["toolCount"] = int(pack.toolNames.Length);
             auto p = Meta::GetPluginFromID(pack.pluginId);
             o["enabled"] = p !is null && p.Enabled;
+            AppendPackUpdateStatus(o, pack.pluginId, pack.latestReleaseUrl);
             packs.Add(o);
         }
         auto output = Json::Object();
         output["packs"] = packs;
+        output["bridge"] = BridgeUpdateStatus();
         output["count"] = int(g_Packs.Length);
         return MakeSuccess(output);
     }

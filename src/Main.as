@@ -4,6 +4,7 @@ void Main() {
     // is correct even when invoked in-process from another plugin's context.
     TmMcp::CacheSelfPlugin();
     TmMcp::InitToolSchemas();
+    TmMcp::StartPackUpdates();
     TmMcp::Start();
 }
 

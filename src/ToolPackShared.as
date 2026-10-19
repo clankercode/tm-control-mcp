@@ -14,6 +14,7 @@ namespace TmMcp {
 
     shared class ToolPackBuilder {
         string packId;
+        string latestReleaseUrl;
         array<ToolPackTool@> tools;
         ToolPackDispatch@ dispatch;
 
@@ -23,6 +24,12 @@ namespace TmMcp {
         // Public MCP prefix (packId.FuncName). Empty = Openplanet plugin id.
         ToolPackBuilder@ SetPackId(const string &in id) {
             packId = id;
+            return this;
+        }
+
+        // HTTPS text file containing one semantic version (optional v prefix).
+        ToolPackBuilder@ SetLatestReleaseUrl(const string &in url) {
+            latestReleaseUrl = url;
             return this;
         }
 
