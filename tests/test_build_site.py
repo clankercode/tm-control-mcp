@@ -1,7 +1,9 @@
 """Behavior checks for the release-file/site deployment boundary (no network)."""
 from pathlib import Path
+import re
 import subprocess
 import sys
+import textwrap
 
 import pytest
 
@@ -78,3 +80,18 @@ def test_refuses_nested_output_before_removing_files(tmp_path):
     with pytest.raises(ValueError, match="separate"):
         build_site(tmp_path, tmp_path / "output", "0.1.0")
     assert (tmp_path / "index.html").read_text() == "Keep me"
+
+
+def test_copy_paste_template_preserves_site_and_selects_latest(tagged_repo):
+    tag_version(tagged_repo, "0.9.0")
+    tag_version(tagged_repo, "0.10.0")
+    tag_version(tagged_repo, "1.0.0-rc.1")
+    template = (Path(__file__).resolve().parents[1] / "docs/templates/pack-pages.yml").read_text()
+    match = re.search(r"shell: python\n        run: \|\n(.*?)      - uses:", template, re.S)
+    assert match is not None
+    output = tagged_repo / "_site"
+    output.mkdir()
+    (output / "index.html").write_text("A complete existing site")
+    subprocess.run([sys.executable, "-c", textwrap.dedent(match[1])], cwd=tagged_repo, check=True)
+    assert (output / "latest-version.txt").read_bytes() == b"0.10.0\n"
+    assert (output / "index.html").read_text() == "A complete existing site"
