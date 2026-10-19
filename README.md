@@ -18,7 +18,7 @@ themselves — without clicking the UI by hand.
 | **Protocol** | One newline-terminated JSON request per TCP connection; newline JSON response; socket closes |
 | **Platform** | Trackmania (current) + [Openplanet](https://openplanet.dev/) |
 | **Hard deps** | [MLHook](https://openplanet.dev/plugin/mlhook) · MLFeedRaceData |
-| **Optional** | [Editor++](https://openplanet.dev/plugin/editor) (`Editor`) · Openplanet builtins `VehicleState` + `Camera` |
+| **Optional** | [E++ tool pack](https://github.com/clankercode/tm-mcp-pack-epp) + Editor++ for placement · Openplanet builtins `VehicleState` + `Camera` |
 | **License** | Dual **[Unlicense](./UNLICENSE)** **or** **[CC0 1.0](./CC0-1.0)** — public domain / no attribution required (GitHub may show “Other”) |
 | **Status** | Active development (`info.toml` `0.4.0`) |
 | **Script timeout** | `15000` ms (`info.toml` `[script] timeout`) — long menu/place/wait tools need headroom |
@@ -35,6 +35,12 @@ themselves — without clicking the UI by hand.
 ---
 
 ## What it provides
+
+Editor++ placement, named macroblocks, inventory, and provenance cleanup are
+provided by the separate [E++ tool pack](https://github.com/clankercode/tm-mcp-pack-epp).
+Install it with Editor++ and call those tools as `tm-mcp-pack-epp.ToolName`.
+Legacy unprefixed E++ calls return `moved_to_pack`; discovery (`route: tools`)
+is authoritative for each installed set of plugins.
 
 ### For AI / agent workflows
 
@@ -96,7 +102,7 @@ Pointer peeks, safe memory reads, gizmo/fuzz helpers, macroblock header dumps �
 2. **[Openplanet](https://openplanet.dev/)** for Trackmania.
 3. Plugins (install from Openplanet site or your usual channel):
    - **[Editor++](https://openplanet.dev/plugin/editor)** — optional, id `Editor`  
-     Tested with **0.8.x**. Needed for free placement, inventory cache, named macroblocks, E++ delete. Without it the plugin still loads; those tools return `missing_dependency`.  
+     Tested with **0.8.x**. Install with the [E++ tool pack](https://github.com/clankercode/tm-mcp-pack-epp) for free placement, inventory cache, named macroblocks, and E++ delete. The bridge itself does not depend on Editor++. Legacy unprefixed E++ tools return `moved_to_pack`.
    - **[MLHook](https://openplanet.dev/plugin/mlhook)** — dependency id `MLHook`  
      Tested with **≥ 0.5.4** (site id 252). Required for menu `Router_Push` and Manialink inject.
    - **[MLFeedRaceData](https://openplanet.dev/)** — dependency id `MLFeedRaceData`  
@@ -246,7 +252,7 @@ python3 tools/call.py --pretty GetMode
 python3 tools/call.py GetReadiness '{"want":"editor"}'
 python3 tools/call.py --until-ready editor GetMapInfo
 python3 tools/call.py --wait-mode Editor --wait-timeout 30 GetMode
-python3 tools/call.py PlaceItemViaEditorPlusPlus \
+python3 tools/call.py tm-mcp-pack-epp.PlaceItemViaEditorPlusPlus \
   '{"itemPath":"LightCube2m","x":128,"y":64,"z":128,"yaw":15}'
 ```
 
@@ -261,27 +267,29 @@ Behavior:
 
 ## Agent-oriented quick start
 
+Steps 2–3 require the E++ pack. `AssertPlacement`, readiness, and menu tools remain builtins.
+
 ```bash
 # 1. Preflight
 python3 tools/call.py --until-ready editor GetReadiness '{"want":"editor"}'
 
-# 2. Tag agent work, place, verify, clean
-python3 tools/call.py SetAgentTag '{"tag":"agent:demo"}'
-python3 tools/call.py PlaceItemViaEditorPlusPlus \
+# 2. Tag agent work, place, verify, clean (requires the E++ pack)
+python3 tools/call.py tm-mcp-pack-epp.SetAgentTag '{"tag":"agent:demo"}'
+python3 tools/call.py tm-mcp-pack-epp.PlaceItemViaEditorPlusPlus \
   '{"itemPath":"LightCube2m","x":200,"y":80,"z":200}'
 python3 tools/call.py AssertPlacement \
   '{"expectItemsDelta":1,"near":{"x":200,"y":80,"z":200,"radius":5},"tag":"agent:demo","tagMinCount":1}'
-python3 tools/call.py RemoveByTag '{"tag":"agent:demo"}'
+python3 tools/call.py tm-mcp-pack-epp.RemoveByTag '{"tag":"agent:demo"}'
 
 # 3. Named macroblock batch place
-python3 tools/call.py CreateNamedMacroblock '{"name":"part-a","replace":true}'
-python3 tools/call.py AddBlocksToNamedMacroblock '{"name":"part-a","blocks":[
+python3 tools/call.py tm-mcp-pack-epp.CreateNamedMacroblock '{"name":"part-a","replace":true}'
+python3 tools/call.py tm-mcp-pack-epp.AddBlocksToNamedMacroblock '{"name":"part-a","blocks":[
   {"blockName":"RoadTechStraight","x":0,"y":0,"z":0,"yaw":0},
   {"blockName":"RoadTechStraight","x":32,"y":0,"z":0,"yaw":0}
 ]}'
-python3 tools/call.py PreflightNamedMacroblockPlacement '{"name":"part-a","offsetX":128,"offsetY":64,"offsetZ":128}'
-python3 tools/call.py PlaceNamedMacroblock '{"name":"part-a","offsetX":128,"offsetY":64,"offsetZ":128}'
-python3 tools/call.py SaveNamedMacroblock '{"name":"part-a"}'   # durable JSON
+python3 tools/call.py tm-mcp-pack-epp.PreflightNamedMacroblockPlacement '{"name":"part-a","offsetX":128,"offsetY":64,"offsetZ":128}'
+python3 tools/call.py tm-mcp-pack-epp.PlaceNamedMacroblock '{"name":"part-a","offsetX":128,"offsetY":64,"offsetZ":128}'
+python3 tools/call.py tm-mcp-pack-epp.SaveNamedMacroblock '{"name":"part-a"}'   # durable JSON
 
 # 4. Menu → new map (QuickStart must be off for CreateMapViaMenu)
 python3 tools/call.py CreateMapViaMenu \
