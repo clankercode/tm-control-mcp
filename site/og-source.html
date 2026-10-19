@@ -1,0 +1,106 @@
+<!doctype html>
+<!-- OG card source (1200x630). Not deployed: tools/build_site.py ignores og-source.html.
+     Render: node site/.qa/render.mjs site/og-source.html site/assets og -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>tm-control-mcp OG card</title>
+<style>
+  @font-face { font-family: "Inter Site"; src: url("assets/fonts/inter-var.woff2") format("woff2"); font-weight: 400 800; font-style: normal; }
+  @font-face { font-family: "Inter Site"; src: url("assets/fonts/inter-var-italic.woff2") format("woff2"); font-weight: 700 900; font-style: italic; }
+  @font-face { font-family: "JB"; src: url("assets/fonts/jbmono-400.woff2") format("woff2"); font-weight: 400; }
+  @font-face { font-family: "JB"; src: url("assets/fonts/jbmono-700.woff2") format("woff2"); font-weight: 700; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    position: relative;
+    background: #0d1110; color: #eef2ef;
+    font-family: "Inter Site", sans-serif;
+  }
+  .grid {
+    position: absolute; inset: 0;
+    background-image: linear-gradient(rgba(255,255,255,.05) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(255,255,255,.05) 1px, transparent 1px);
+    background-size: 32px 32px; background-position: -1px -1px;
+    -webkit-mask-image: radial-gradient(ellipse 80% 90% at 78% 40%, #000 25%, transparent 78%);
+  }
+  .top {
+    position: absolute; left: 0; right: 0; top: 0; height: 84px;
+    background: #0b6e43; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 56px;
+  }
+  .brand { display: flex; align-items: center; gap: 16px; font: 700 34px/1 "JB", monospace; color: #fff; }
+  .brand svg { width: 46px; height: 46px; }
+  .tag {
+    background: #f4c21b; color: #15120a;
+    font: italic 800 20px/1 "Inter Site"; letter-spacing: .07em; text-transform: uppercase;
+    padding: 11px 34px 11px 16px;
+    clip-path: polygon(0 0, 100% 0, calc(100% - 14px) 100%, 0 100%);
+  }
+  h1 {
+    position: absolute; left: 52px; top: 116px; width: 1100px;
+    font: italic 900 100px/0.98 "Inter Site"; letter-spacing: -0.03em;
+  }
+  .sub { position: absolute; left: 56px; top: 326px; width: 1088px;
+    font: 500 29px/1.3 "Inter Site"; color: #bac5c0; }
+  .sub b { color: #eef2ef; font-weight: 700; }
+  .track {
+    position: absolute; left: 56px; right: 56px; top: 404px; height: 74px;
+  }
+  .line { position: absolute; left: 40px; right: 40px; top: 18px; height: 6px;
+    background: repeating-linear-gradient(90deg, rgba(255,255,255,.3) 0 14px, transparent 14px 22px); }
+  /* gate centres: START 40, CP1 220, CP2 382, CP3 544 (80+5*44+80, gaps 118) */
+  .car { position: absolute; left: 40px; top: 18px; height: 6px; width: 504px; background: #f4c21b; }
+  .gates { position: relative; display: flex; justify-content: space-between; }
+  .gate { width: 44px; display: flex; flex-direction: column; align-items: center; gap: 12px;
+    font: 700 19px/1 "JB"; color: #bac5c0; }
+  .gate i { display: block; width: 40px; height: 40px; background: #1b2420; border: 3px solid rgba(255,255,255,.3);
+    clip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%); margin-top: 1px; }
+  .gate.pass i { border-color: #5aa5ff; }
+  .gate.on i { background: #f4c21b; border-color: #f4c21b; }
+  .gate.on { color: #fff; }
+  .gate.end i { background: repeating-conic-gradient(#eef2ef 0 25%, #1b2420 0 50%) 0 0 / 13px 13px; }
+  .gate.wide { width: 80px; }
+  .foot {
+    position: absolute; left: 56px; right: 56px; bottom: 40px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .wire { display: flex; align-items: center; gap: 18px;
+    font: 700 26px/1 "JB"; color: #eef2ef;
+    background: #0a0e0d; border: 1px solid rgba(255,255,255,.12); border-left: 8px solid #0b6e43;
+    padding: 16px 22px; }
+  .wire b { color: #f4c21b; }
+  .wire span { color: #93a09a; font-weight: 400; font-size: 22px; }
+  .url { font: 600 24px/1 "Inter Site"; color: #bac5c0; }
+</style>
+</head>
+<body>
+  <div class="grid"></div>
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 4h22l-4 24H3z" fill="#f4c21b"/><path d="M10.5 11.5l5 4.5-6.2 4.6" fill="none" stroke="#15120a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M16.5 21.5h6" stroke="#15120a" stroke-width="3" stroke-linecap="round"/></svg>
+      tm-control-mcp
+    </div>
+    <div class="tag">Openplanet plugin · Trackmania</div>
+  </header>
+  <h1>Drive Trackmania<br>from a script.</h1>
+  <p class="sub">A JSON bridge into the <b>editor</b>, <b>menu</b> and <b>race</b>, for AI agents and scripts.</p>
+  <div class="track">
+    <div class="line"></div>
+    <div class="car"></div>
+    <div class="gates">
+      <div class="gate end pass wide"><i></i>START</div>
+      <div class="gate pass"><i></i>CP1</div>
+      <div class="gate pass"><i></i>CP2</div>
+      <div class="gate on"><i></i>CP3</div>
+      <div class="gate"><i></i>CP4</div>
+      <div class="gate"><i></i>CP5</div>
+      <div class="gate end wide"><i></i>FINISH</div>
+    </div>
+  </div>
+  <div class="foot">
+    <div class="wire"><b>→</b> 127.0.0.1:30006 <span>localhost JSON socket</span></div>
+    <div class="url">clankercode.github.io/tm-control-mcp</div>
+  </div>
+</body>
+</html>
