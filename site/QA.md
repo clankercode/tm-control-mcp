@@ -31,7 +31,7 @@ node site/.qa/render.mjs - site/assets icons                                    
 python3 site/.qa/imgdiff.py /tmp/x/og-image.png site/assets/og-image.png         # pixel diff (None = identical)
 ```
 
-Header sweep (V-017): an uncommitted probe, `/tmp/hdrqa/probe.mjs <url> 320 1440 <shot widths>`,
+Header sweep (V-017): `site/.qa/header-sweep.mjs <url> 320 1440 <shot widths>`,
 resizes one page per mood through every width and runs the checks listed in the matrix.
 It writes `report.json` and 140px header strips. The source-tree run used `http://127.0.0.1:8766/`.
 
