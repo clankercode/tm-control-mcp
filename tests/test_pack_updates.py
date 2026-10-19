@@ -1,11 +1,13 @@
 """Execute the production pure policy in stock AngelScript, not a Python port.
 
 Requires a local AngelScript SDK (ANGELSCRIPT_ROOT, default ~/src/angelscript).
-The harness supplies Openplanet string aliases only. It does not emulate Net,
+The harness supplies Openplanet string aliases and explicit activity/response
+fixtures for selected production functions. It does not exercise real Net,
 Meta, persistence, coroutine scheduling, or prove in-game compilation/lifecycle.
 """
 from pathlib import Path
 import os
+import re
 import shutil
 import subprocess
 
@@ -34,9 +36,9 @@ def as_runner(tmp_path_factory):
     return out
 
 
-def run_policy(as_runner, tmp_path, body):
+def run_policy(as_runner, tmp_path, body, fixtures=""):
     test = tmp_path / "tests.as"
-    test.write_text("void RunTests() {\n" + body + "\n}")
+    test.write_text(fixtures + "\nvoid RunTests() {\n" + body + "\n}")
     run = subprocess.run([str(as_runner), str(ROOT / "src/PackUpdatePolicy.as"), str(test)], capture_output=True, text=True)
     assert run.returncode == 0, run.stdout + run.stderr
 
@@ -130,3 +132,182 @@ def test_global_request_spacing(as_runner, tmp_path):
     Check(PackUpdateStartDelay(true, 1000, 3001) == 0, "spacing past boundary");
     Check(PackUpdateStartDelay(true, 1000, 0) == 2000, "clock rollback stays bounded");
     ''')
+
+
+def production_function(name):
+    source = (ROOT / "src/PackUpdates.as").read_text()
+    match = re.search(r"^    [^\n]* " + name + r"\([^\n]*\) \{.*?^    }", source, re.M | re.S)
+    assert match, name
+    return match[0]
+
+
+def test_cache_admission(as_runner, tmp_path):
+    # Run real Find/Ensure and the pure eviction selector. Only the registry's
+    # plugin activity lookup is replaced; fixtures never decide cache admission.
+    fixtures = r'''
+    namespace TmMcp {
+        const string BRIDGE_UPDATE_URL = "https://bridge.example/latest.txt";
+        array<PackUpdateEntry@> g_PackUpdates;
+        array<string> activeUrls;
+        bool IsPackUpdateActive(const string &in url) {
+            return url == BRIDGE_UPDATE_URL || activeUrls.Find(url) >= 0;
+        }
+    ''' + production_function("FindPackUpdate") + production_function("EnsurePackUpdate") + r'''
+    }
+    '''
+    run_policy(as_runner, tmp_path, r'''
+    using namespace TmMcp;
+    auto bridge = EnsurePackUpdate(BRIDGE_UPDATE_URL);
+    // The bridge and 63 historical URLs survive persistence/reload.
+    for (uint i = 0; i < UPDATE_CACHE_LIMIT - 1; i++) {
+        auto e = EnsurePackUpdate("https://old.example/" + i, true);
+        e.lastAttemptAt = 100 + i;
+    }
+    FindPackUpdate("https://old.example/50").lastAttemptAt = 1;
+    string current = "https://current.example/latest.txt";
+    activeUrls.InsertLast(current);
+    auto admitted = EnsurePackUpdate(current);
+    Check(admitted !is null, "full historical cache must admit a current pack");
+    Check(g_PackUpdates.Length == UPDATE_CACHE_LIMIT, "eviction keeps capacity bounded");
+    Check(FindPackUpdate(BRIDGE_UPDATE_URL) is bridge, "bridge never evicted");
+    Check(FindPackUpdate("https://old.example/50") is null, "oldest inactive attempt evicted, not first slot");
+    Check(EnsurePackUpdate(current) is admitted, "existing cache identity preserved");
+
+    // Neither current registrations nor requests already in flight may be evicted.
+    string protectedUrl = "https://old.example/1";
+    activeUrls.InsertLast(protectedUrl);
+    auto protectedEntry = FindPackUpdate(protectedUrl);
+    auto inFlight = FindPackUpdate("https://old.example/2");
+    inFlight.checking = true;
+    string second = "https://current.example/second.txt";
+    activeUrls.InsertLast(second);
+    Check(EnsurePackUpdate(second) !is null, "admit past active and in-flight entries");
+    Check(FindPackUpdate(protectedUrl) is protectedEntry, "active cache never evicted");
+    Check(FindPackUpdate(inFlight.url) is inFlight, "in-flight cache never evicted");
+    Check(FindPackUpdate("https://old.example/0") is null, "next oldest eligible victim");
+
+    Check(EnsurePackUpdate("https://history.example/restored.txt", true) is null,
+          "restoration cannot evict at capacity");
+    Check(EnsurePackUpdate("https://inactive.example/latest.txt") is null,
+          "inactive new registration cannot evict");
+    Check(FindPackUpdate(current) is admitted, "history cannot displace current URL");
+    // A persisted entry for an already-admitted URL can still be restored.
+    Check(EnsurePackUpdate(current, true) is admitted, "restore existing cache entry");
+
+    for (uint i = 0; i < g_PackUpdates.Length; i++) activeUrls.InsertLast(g_PackUpdates[i].url);
+    string overflow = "https://current.example/overflow.txt";
+    activeUrls.InsertLast(overflow);
+    Check(EnsurePackUpdate(overflow) is null, "genuinely full active cache refuses admission");
+    Check(g_PackUpdates.Length == UPDATE_CACHE_LIMIT, "full active cache remains bounded");
+    Check(FindPackUpdate(BRIDGE_UPDATE_URL) is bridge, "bridge protected at full capacity");
+
+    // Inactive but in-flight entries alone can also make the cache honestly full.
+    while (activeUrls.Length > 0) activeUrls.RemoveAt(0);
+    activeUrls.InsertLast(overflow);
+    for (uint i = 0; i < g_PackUpdates.Length; i++) g_PackUpdates[i].checking = true;
+    Check(EnsurePackUpdate(overflow) is null, "all in-flight entries are protected even if inactive");
+    Check(FindPackUpdate(BRIDGE_UPDATE_URL) is bridge, "bridge still protected");
+    ''', fixtures)
+
+
+def test_response_acceptance(as_runner, tmp_path):
+    run_policy(as_runner, tmp_path, r'''
+    using namespace TmMcp;
+    Check(PackUpdateTransferError("connection reset", 200, 5, 5).Length > 0,
+          "HTTP 200 with a transfer error is not a success");
+    Check(PackUpdateTransferError("", 200, 5, 60).Length > 0, "short known transfer");
+    Check(PackUpdateTransferError("", 200, 6, 5).Length > 0, "excess known transfer");
+    Check(PackUpdateTransferError("", 200, 5, 1025).Length > 0, "oversized advertised transfer");
+    Check(PackUpdateTransferError("", 200, 1025, 0).Length > 0, "oversized unknown-length transfer");
+    Check(PackUpdateTransferError("", 503, 5, 5).Length > 0, "HTTP error");
+    Check(PackUpdateTransferError("", 200, 5, 5) == "", "complete 200 transfer");
+    Check(PackUpdateTransferError("", 206, 5, 5) == "", "complete 206 transfer");
+    Check(PackUpdateTransferError("", 200, 5, 0) == "", "unknown-length transfer allowed");
+    Check(PackUpdateBodyError(200, "5", "", 5) == "", "matching content length");
+    Check(PackUpdateBodyError(200, " 0005 ", "", 5) == "", "valid header whitespace and zero padding");
+    Check(PackUpdateBodyError(200, "", "", 5) == "", "chunked response without length");
+    Check(PackUpdateBodyError(206, "5", "bytes 0-4/5", 5) == "", "whole ranged body");
+    Check(PackUpdateBodyError(206, "5", "bytes 0-4/50", 5).Length > 0, "partial ranged body");
+    Check(PackUpdateBodyError(206, "5", "", 5).Length > 0, "missing range");
+    Check(PackUpdateBodyError(200, "6", "", 5).Length > 0, "short body with known length");
+    Check(PackUpdateBodyError(200, "0", "", 5).Length > 0, "zero known length with body");
+    Check(PackUpdateBodyError(200, "5garbage", "", 5).Length > 0, "malformed length");
+    Check(PackUpdateBodyError(200, "999999999999999999999999999", "", 5).Length > 0, "length cannot overflow");
+    Check(PackUpdateBodyError(200, "1025", "", 1025).Length > 0, "body size bound");
+    Check(PackUpdateBodyError(200, "32", "", 5, 32) == "", "encoded length measures wire bytes");
+    Check(PackUpdateBodyError(206, "32", "bytes 0-31/32", 5, 32) == "", "encoded range measures wire bytes");
+    Check(PackUpdateBodyError(200, "31", "", 5, 32).Length > 0, "encoded header still checked");
+    Check(PackUpdateBodyError(200, "32", "", 1025, 32).Length > 0, "decoded body remains bounded");
+    ''')
+
+
+def test_production_response_wiring(as_runner, tmp_path):
+    # Execute the exact response-acceptance block from the worker, with a
+    # completed request fixture, then the real cache state transition.
+    source = production_function("FetchPackUpdate")
+    start = source.index("            if (error.Length == 0) {")
+    end = source.index("            if (error.Length > 0) g_UpdateRequest.Cancel();", start)
+    acceptance = source[start:end]
+    fixtures = r'''
+    class CompletedRequest {
+        string transferError, contentLength, range, encoding, response = "9.0.0";
+        int code = 200, reads = 0;
+        int64 downloaded = 5, total = 5;
+        string Error() { return transferError; }
+        int ResponseCode() { return code; }
+        int64 ProgressDownload() { return downloaded; }
+        int64 ProgressDownloadTotal() { return total; }
+        string ResponseHeader(const string &in name) {
+            if (name == "Content-Length") return contentLength;
+            if (name == "Content-Encoding") return encoding;
+            return range;
+        }
+        string String() { reads++; return response; }
+    }
+    CompletedRequest@ g_UpdateRequest;
+    void Complete(TmMcp::PackUpdateEntry@ e) {
+        using namespace TmMcp;
+        string error = "", body = "";
+    ''' + acceptance + r'''
+        FinishPackUpdate(e, 100, body, error);
+    }
+    '''
+    run_policy(as_runner, tmp_path, r'''
+    using namespace TmMcp;
+    auto e = PackUpdateEntry();
+    FinishPackUpdate(e, 10, "1.0.0", "");
+    @g_UpdateRequest = CompletedRequest();
+    g_UpdateRequest.transferError = "connection reset";
+    auto empty = PackUpdateEntry(); Complete(empty);
+    Check(empty.latestVersion == "" && empty.lastSuccessAt == 0 && empty.error.Length > 0,
+          "failed parseable prefix cannot create first success");
+    BeginPackUpdate(e, 99); Complete(e);
+    Check(g_UpdateRequest.reads == 0, "transfer error rejected before body read");
+    Check(e.latestVersion == "1.0.0" && e.lastSuccessAt == 10, "error preserves last success");
+    Check(e.error.Length > 0 && e.nextAttemptAt == 100 + UPDATE_RETRY_TTL && !e.checking,
+          "transfer error terminates with failure retry");
+    Check(!PackUpdateAvailable("1.0.0", e.latestVersion), "partial prefix cannot advertise update");
+
+    @g_UpdateRequest = CompletedRequest(); g_UpdateRequest.total = 50;
+    Complete(e);
+    Check(g_UpdateRequest.reads == 0 && e.latestVersion == "1.0.0", "short transfer rejected before body read");
+    @g_UpdateRequest = CompletedRequest(); g_UpdateRequest.contentLength = "50";
+    Complete(e);
+    Check(e.error.Length > 0 && e.latestVersion == "1.0.0", "body length check is wired");
+    @g_UpdateRequest = CompletedRequest(); g_UpdateRequest.code = 206;
+    g_UpdateRequest.range = "bytes 0-4/50";
+    Complete(e);
+    Check(e.error.Length > 0 && e.latestVersion == "1.0.0", "range completeness check is wired");
+    @g_UpdateRequest = CompletedRequest(); g_UpdateRequest.contentLength = "5";
+    Complete(e);
+    Check(e.error == "" && e.latestVersion == "9.0.0" && e.lastSuccessAt == 100,
+          "valid response recovers successfully");
+    Check(e.nextAttemptAt == 100 + UPDATE_SUCCESS_TTL, "successful recovery uses success TTL");
+    @g_UpdateRequest = CompletedRequest(); g_UpdateRequest.encoding = "gzip";
+    g_UpdateRequest.contentLength = "32"; g_UpdateRequest.downloaded = 32; g_UpdateRequest.total = 32;
+    Complete(e);
+    Check(e.error == "" && e.latestVersion == "9.0.0", "encoded HTTP 200 uses wire length, not decoded length");
+    g_UpdateRequest.code = 206; g_UpdateRequest.range = "bytes 0-31/32";
+    Complete(e);
+    Check(e.error == "", "encoded HTTP 206 uses wire length for range completeness");
+    ''', fixtures)

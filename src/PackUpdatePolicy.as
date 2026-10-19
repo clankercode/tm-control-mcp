@@ -137,6 +137,48 @@ namespace TmMcp {
         bool checking = false;
     }
 
+    // Oldest attempted inactive entry first; never evict a live registration or
+    // an in-flight request. Activity is supplied by the runtime (bridge included).
+    int SelectInactivePackUpdate(const array<PackUpdateEntry@> &in entries, const array<bool> &in active) {
+        if (entries.Length != active.Length) return -1;
+        int oldest = -1;
+        for (uint i = 0; i < entries.Length; i++) {
+            if (active[i] || entries[i].checking) continue;
+            if (oldest < 0 || entries[i].lastAttemptAt < entries[uint(oldest)].lastAttemptAt) oldest = int(i);
+        }
+        return oldest;
+    }
+
+    // Finished() includes failed transfers. Check this before reading a body:
+    // even a parseable HTTP 200 prefix must never become a cached success.
+    string PackUpdateTransferError(const string &in error, int code, int64 downloaded, int64 total) {
+        if (error.Length > 0) return "Version request failed: " + error;
+        if (code != 200 && code != 206) return "Version request returned HTTP " + code + ".";
+        if (downloaded > int64(UPDATE_BODY_LIMIT) || total > int64(UPDATE_BODY_LIMIT))
+            return "Version response exceeds 1024 bytes.";
+        // Net reports zero when the server does not supply a known total.
+        if (total > 0 && downloaded != total) return "Version response has an incomplete transfer.";
+        return "";
+    }
+
+    string PackUpdateBodyError(int code, const string &in contentLength, const string &in range, uint length, int64 encodedLength = -1) {
+        if (length > UPDATE_BODY_LIMIT || encodedLength > int64(UPDATE_BODY_LIMIT))
+            return "Version response exceeds 1024 bytes.";
+        // HTTP lengths describe representation bytes, not a decoded body. When
+        // Content-Encoding is present, use Net's transferred count for headers.
+        uint representationLength = encodedLength < 0 ? length : uint(encodedLength);
+        if (contentLength.Length > 0) {
+            string declared = contentLength.Trim();
+            if (!VersionDigits(declared)) return "Version response has an invalid Content-Length.";
+            // Compare decimal strings, without parsing an untrusted integer.
+            while (declared.Length > 1 && declared[0] == 48) declared = declared.SubStr(1);
+            if (declared != "" + representationLength) return "Version response does not match Content-Length.";
+        }
+        if (code == 206 && !CompleteVersionRange(range, representationLength))
+            return "Version response is an incomplete byte range.";
+        return "";
+    }
+
     uint64 PackUpdateStartDelay(bool startedBefore, uint64 lastStart, uint64 now) {
         if (!startedBefore) return 0;
         if (now < lastStart) return UPDATE_START_SPACING_MS;

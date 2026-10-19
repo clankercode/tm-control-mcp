@@ -1,5 +1,5 @@
 // Minimal stock AngelScript runner for the actual pure production policy.
-// Adapters only map Openplanet string spellings; no policy is reimplemented.
+// Adapters only map Openplanet string/array spellings; no policy is reimplemented.
 #include <angelscript.h>
 #include <scriptstdstring.h>
 #include <scriptarray.h>
@@ -44,6 +44,9 @@ int main(int argc, char** argv) {
     e->SetEngineProperty(asEP_PROPERTY_ACCESSOR_MODE, 2);
     RegisterStdString(e); RegisterScriptArray(e, true);
     assert(e->RegisterObjectMethod("array<T>", "uint get_Length() const property", asMETHOD(CScriptArray, GetSize), asCALL_THISCALL) >= 0);
+    assert(e->RegisterObjectMethod("array<T>", "void InsertLast(const T&in)", asMETHOD(CScriptArray, InsertLast), asCALL_THISCALL) >= 0);
+    assert(e->RegisterObjectMethod("array<T>", "void RemoveAt(uint)", asMETHOD(CScriptArray, RemoveAt), asCALL_THISCALL) >= 0);
+    assert(e->RegisterObjectMethod("array<T>", "int Find(const T&in) const", asMETHODPR(CScriptArray, Find, (const void*) const, int), asCALL_THISCALL) >= 0);
     assert(e->RegisterObjectMethod("string", "uint get_Length() const property", asFUNCTION(Length), asCALL_CDECL_OBJLAST) >= 0);
     assert(e->RegisterObjectMethod("string", "string Trim() const", asFUNCTION(Trim), asCALL_CDECL_OBJLAST) >= 0);
     assert(e->RegisterObjectMethod("string", "string SubStr(uint, uint = 0xffffffff) const", asFUNCTION(SubStr), asCALL_CDECL_OBJLAST) >= 0);

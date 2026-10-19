@@ -19,11 +19,20 @@ namespace TmMcp {
         return null;
     }
 
-    PackUpdateEntry@ EnsurePackUpdate(const string &in url) {
+    PackUpdateEntry@ EnsurePackUpdate(const string &in url, bool restoring = false) {
         if (PackUpdateUrlError(url).Length > 0) return null;
         auto e = FindPackUpdate(url);
         if (e !is null) return e;
-        if (g_PackUpdates.Length >= UPDATE_CACHE_LIMIT) return null;
+        if (g_PackUpdates.Length >= UPDATE_CACHE_LIMIT) {
+            // Historical disk records may fill free slots, but only a current
+            // active URL may displace one. Never churn history during restore.
+            if (restoring || !IsPackUpdateActive(url)) return null;
+            array<bool> active;
+            for (uint i = 0; i < g_PackUpdates.Length; i++) active.InsertLast(IsPackUpdateActive(g_PackUpdates[i].url));
+            int victim = SelectInactivePackUpdate(g_PackUpdates, active);
+            if (victim < 0) return null;
+            g_PackUpdates.RemoveAt(uint(victim));
+        }
         @e = PackUpdateEntry();
         e.url = url;
         g_PackUpdates.InsertLast(e);
@@ -73,7 +82,7 @@ namespace TmMcp {
                 if (latest.Length > 0 && ParsePackVersion(latest) is null) continue;
                 int64 attempted = int64(o["lastAttemptAt"]), succeeded = int64(o["lastSuccessAt"]), next = int64(o["nextAttemptAt"]);
                 if (attempted < 0 || succeeded < 0 || next < 0 || attempted > now || succeeded > now || next > now + UPDATE_SUCCESS_TTL) continue;
-                auto e = EnsurePackUpdate(url);
+                auto e = EnsurePackUpdate(url, true);
                 if (e is null) continue;
                 e.latestVersion = latest;
                 e.error = string(o["error"]).SubStr(0, 256);
@@ -130,6 +139,8 @@ namespace TmMcp {
             // Ask cooperative servers for a bounded body, then enforce progress
             // and final size as well. Net has no hard receive-buffer-size option.
             g_UpdateRequest.Headers["Range"] = "bytes=0-1023";
+            // Keep wire lengths comparable to the plain-text body length.
+            g_UpdateRequest.Headers["Accept-Encoding"] = "identity";
             g_LastUpdateStart = Time::Now;
             g_UpdateStartedBefore = true;
             g_UpdateRequest.Start();
@@ -146,15 +157,16 @@ namespace TmMcp {
             if (!S_TmMcpCheckUpdates) error = "Update checks disabled during request.";
             if (error.Length == 0) {
                 int code = g_UpdateRequest.ResponseCode();
-                if (code != 200 && code != 206) error = "Version request returned HTTP " + code + ".";
-                else if (g_UpdateRequest.ProgressDownload() > int64(UPDATE_BODY_LIMIT)) error = "Version response exceeds 1024 bytes.";
-                else {
+                error = PackUpdateTransferError(g_UpdateRequest.Error(), code,
+                    g_UpdateRequest.ProgressDownload(), g_UpdateRequest.ProgressDownloadTotal());
+                if (error.Length == 0) {
                     body = g_UpdateRequest.String();
-                    if (uint(body.Length) > UPDATE_BODY_LIMIT) error = "Version response exceeds 1024 bytes.";
-                    // Reject truncated ranged representations, even if their prefix parses.
-                    string range = g_UpdateRequest.ResponseHeader("Content-Range");
-                    if (code == 206 && (range.Length == 0 || !CompleteVersionRange(range, body.Length)))
-                        error = "Version response is an incomplete byte range.";
+                    // A server can ignore Accept-Encoding: identity. Encoded
+                    // Content-Length/Range apply to wire bytes, not String().
+                    int64 encodedLength = g_UpdateRequest.ResponseHeader("Content-Encoding").Length > 0
+                        ? g_UpdateRequest.ProgressDownload() : int64(-1);
+                    error = PackUpdateBodyError(code, g_UpdateRequest.ResponseHeader("Content-Length"),
+                        g_UpdateRequest.ResponseHeader("Content-Range"), body.Length, encodedLength);
                 }
             }
             if (error.Length > 0) g_UpdateRequest.Cancel();
