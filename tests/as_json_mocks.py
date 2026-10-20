@@ -7,7 +7,7 @@ namespace Json {
         Type kind = Type::Null;
         string text;
         bool flag;
-        uint number;
+        double number;
         array<string> keys;
         array<Value@> values;
         array<string>@ GetKeys() { return keys; }
@@ -31,10 +31,12 @@ namespace Json {
         }
         Value &opAssign(const string &in value) { kind = Type::String; text = value; return this; }
         Value &opAssign(bool value) { kind = Type::Boolean; flag = value; return this; }
+        Value &opAssign(double value) { kind = Type::Number; number = value; return this; }
+        Value &opAssign(int value) { kind = Type::Number; number = value; return this; }
         Value &opAssign(uint value) { kind = Type::Number; number = value; return this; }
         bool opConv() const { Check(kind == Type::Boolean, "expected JSON boolean"); return flag; }
         string opConv() const { Check(kind == Type::String, "expected JSON string"); return text; }
-        uint opConv() const { Check(kind == Type::Number, "expected JSON number"); return number; }
+        uint opConv() const { Check(kind == Type::Number, "expected JSON number"); return uint(number); }
         uint get_Length() const property { return values.Length; }
         void Add(const string &in value) {
             auto row = Value(); row = value; values.InsertLast(row);

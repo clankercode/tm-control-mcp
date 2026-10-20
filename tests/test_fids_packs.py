@@ -399,3 +399,23 @@ def test_external_unmount_and_overlapping_namespace_are_conservative(as_runner, 
     Code(FidsActionMountPack(input), "MOUNT_COLLISION");
     Check(mount.Leaves.Length == 1 && p.installs == 1, "foreign hierarchy preserved");
     ''')
+
+
+def test_replaced_ancestor_slot_loses_ownership(as_runner, tmp_path):
+    run_as(as_runner, tmp_path, r'''
+    using namespace TmMcp;
+    auto p = AddPack(); auto input = Input();
+    Good(FidsActionMountPack(input));
+    auto retainedMedia = p.backing.ParentFolder;
+    auto retainedMount = p.Location;
+    // Keep parent links and objects alive while replacing the root child slot.
+    userRoot.Trees.RemoveAt(0);
+    auto replacement = AddFolder(userRoot, "Media");
+    Check(retainedMedia.ParentFolder is userRoot && replacement !is retainedMedia, "stale parent link fixture");
+    auto status = FidsActionPackStatus(input); Good(status);
+    Check(!bool(status["output"]["owned"]) && string(status["output"]["state"]) == "ownershipLost", "canonical ancestor identity required");
+    Code(FidsActionUnmountPack(input), "OWNERSHIP_LOST");
+    Code(FidsActionMountPack(input), "OWNERSHIP_LOST");
+    FidsPacksShutdown();
+    Check(p.uninstalls == 0 && p.refs == 0 && retainedMedia.refs == 0 && retainedMount.refs == 0, "never delete through stale ancestors");
+    ''')

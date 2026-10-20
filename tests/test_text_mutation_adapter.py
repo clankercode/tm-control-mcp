@@ -120,3 +120,11 @@ def test_confirmation_types_scope_and_faults(as_runner, tmp_path):
     readFailure = false; writeFailure = true;
     Check(!bool(TmMcp::FidsActionSetText(input)["success"]) && writes == 1, "setter fault is error");
     ''')
+
+
+@pytest.mark.parametrize("index", ["-1.0", "0.5", "4097.0"])
+def test_page_index_must_be_bounded_integer(as_runner, tmp_path, index):
+    run(as_runner, tmp_path, f'mode = "Menu"; auto input = Input(); input["layerIndex"] = double({index});\n' + r'''
+    auto v = TmMcp::PatchLayerXml(input);
+    Check(!bool(v["success"]) && string(v["code"]) == "BAD_INPUT" && writes == 0, "invalid numeric index refused before native access");
+    ''')

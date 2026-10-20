@@ -25,7 +25,9 @@ successful no-op only while this plugin instance still owns the exact mount.
 
 Paths are validated directly from the input, before any generic FID path
 normalization. Only `drive:"user"` is accepted. Supply the canonical case of
-each USER folder and filename. The path must be relative, at most 512 ASCII
+each USER folder and filename, including each current ancestor child slot
+through noncreating lookups. Retained parent pointers alone never establish
+canonical ownership. The path must be relative, at most 512 ASCII
 bytes and 16 components, with each component at most 255 bytes. Allowed
 characters are letters, digits, spaces inside components, `_`, `-`, `.`, and
 the `/` separator.

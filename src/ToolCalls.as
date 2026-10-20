@@ -21,10 +21,11 @@ namespace TmMcp {
     uint64 g_ToolCallsStarted = 0;
 
     void ToolCallEvent(const string &in message) {
-        trace("TM Control MCP " + message);
+        string bounded = TmMcpTraceOneLine(message);
+        trace("TM Control MCP " + bounded);
         // Persist admissions, rejections and terminals even with traceRequests
         // off or Openplanet's trace level hidden. No input payloads here.
-        TmMcpAppendRequestTrace("call", g_ToolCallInstance + " " + message);
+        TmMcpAppendRequestTrace("call", g_ToolCallInstance + " " + bounded);
     }
 
     void StartToolCalls() {
@@ -82,7 +83,17 @@ namespace TmMcp {
         // shared_exports and a genuine reload creates a fresh instance.
     }
 
+    Json::Value@ ValidateToolCallName(const string &in name) {
+        if (FindSchema(name) >= 0 || IsToolName(name)) return null;
+        // Never interpolate an unrecognized caller-controlled name into either
+        // sink or the diagnostic result. It may contain secrets or newlines.
+        ToolCallEvent("tool rejected <unknown> unknown_tool");
+        return MakeError("unknown tool", "unknown_tool");
+    }
+
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
+        auto invalidName = ValidateToolCallName(name);
+        if (invalidName !is null) return invalidName;
         SweepToolCalls();
         if (!g_MonitorToolCalls) return MakeError("dispatch not running", "tool_shutdown", true);
         if (g_UnfinishedWorkers.Length > 0) {

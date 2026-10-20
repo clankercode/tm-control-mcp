@@ -3,7 +3,7 @@
 Implementing owner: Codex (`codex-vermic-lumi-8amm`).
 
 - Offline suite: `TCM_REQUIRE_ANGELSCRIPT=1 python3 -m pytest tests -q`:
-  **588 passed, 6 skipped, 41 subtests passed**. The SDK is the same pinned
+  **593 passed, 6 skipped, 41 subtests passed**. The SDK is the same pinned
   `0b8dacb8acac4e844a312c4405f124d97fc33af0` used by CI. Skips require a live game.
 - Behavioral tests execute production AngelScript for replacement planning,
   writer/readback faults, mode restrictions, auth availability and rejected old
@@ -47,5 +47,11 @@ readback proves script health. The public PR stays draft until this gate closes.
 `local/preserved-work-20261020` remains unchanged at `90be5a0` in both local
 clones. The [decision table](preserved-work-decisions.md) identifies the remaining
 held functionality. No old mixed checkpoint history should be pushed or merged.
+The first native T3 Codex review requested two changes: require canonical child
+slots for every retained pack ancestor, and reject unrecognized tool names before
+lifecycle logging while bounding both log sinks. Both now have behavioral
+regressions. Fractional, negative and oversized page indices are tested too.
+The final native review and current-head CI receipt are reported with the PR.
+
 Both local master refs remain at the verified public base until the new PR can
 be merged with a merge commit and fast-forwarded in each clone.

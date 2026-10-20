@@ -54,7 +54,11 @@ namespace TmMcp {
         CSystemFidsFolder@ cur = parent;
         for (int i = int(parts.Length) - 1; i >= 0; i--) {
             if (cur is null || string(cur.DirName) != parts[i]) return false;
-            @cur = cur.ParentFolder;
+            auto ancestor = cur.ParentFolder;
+            // Retained parent links can outlive replacement of the canonical
+            // child slot. Require both directions to identify the live tree.
+            if (ancestor is null || Fids::GetFidsFolder(ancestor, parts[i]) !is cur) return false;
+            @cur = ancestor;
         }
         return cur is root;
     }
