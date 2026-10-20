@@ -9,6 +9,10 @@ Versions follow `info.toml` `[meta] version`.
 
 ### Added
 
+- Read-only `GetManiaScriptDiagnostics`, `ControlFids getText`, item animation metadata scanning with `ScanKinematicItems`, and a tool-pack schema settings tab.
+- Successful dialog-prone socket actions include a dialog snapshot after one frame. Script result collection reports unconfirmed execution when no event arrives and preserves observed crash diagnostics.
+- `ShutdownGame` requires explicit confirmation and presents a cancellable 30-second countdown.
+
 - Pack release metadata via `ToolPackBuilder.SetLatestReleaseUrl`, cached
   background SemVer checks using the actual installed plugin version, and update
   status in `ListToolPacks` and Settings → Updates. Missing metadata warns without

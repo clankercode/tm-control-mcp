@@ -63,7 +63,16 @@ namespace TmMcp {
         if (dialog is null) return false;
         if (!bool(dialog["available"])) return false;
         string kind = string(dialog["dialogKind"]);
-        return kind != "none" && kind.Length > 0;
+        if (kind != "none" && kind.Length > 0) return true;
+        // FrameAskYesNo/FrameDialog can remain live while BasicDialogs.Dialog
+        // has already returned to None (observed on the embedding warning).
+        // Treat only known modal frame names as blocking; ordinary menu frames
+        // are intentionally ignored.
+        if (bool(dialog["hasFrame"])) {
+            string frame = string(dialog["frameIdName"]);
+            if (frame == "FrameAskYesNo" || frame.StartsWith("FrameDialog")) return true;
+        }
+        return false;
     }
 
     bool MenuModuleAvailable() {
@@ -196,7 +205,9 @@ namespace TmMcp {
         array<string> blocking;
         if (!modeOk) blocking.InsertLast("mode is " + mode + ", want " + want);
         if (!dialogClear) blocking.InsertLast("dialog active");
-        if (want == "editor" && !editorReadyForRequest) blocking.InsertLast("editor not ready for request");
+        if (want == "editor" && mode.StartsWith("MapEditor") && mode != "MapEditor")
+            blocking.InsertLast(EditorCameraBlockReason(mode));
+        else if (want == "editor" && !editorReadyForRequest) blocking.InsertLast("editor not ready for request");
         if (want == "editor" && calculatingShadows) blocking.InsertLast("calculating shadows");
         if (want == "editor" && !hasChallenge) blocking.InsertLast("no challenge/map loaded");
         if (want == "menu" && !menuOk) blocking.InsertLast("menu module not on stack");
@@ -209,6 +220,9 @@ namespace TmMcp {
         checks["modeOk"] = modeOk;
         checks["dialogClear"] = dialogClear;
         checks["editorReadyForRequest"] = editorReadyForRequest;
+        checks["isTesting"] = mode == "MapEditor_Test";
+        checks["isValidating"] = mode == "MapEditor_Validate";
+        checks["isSwitchedToPlayground"] = editor !is null && GetApp().CurrentPlayground !is null;
         checks["calculatingShadows"] = calculatingShadows;
         checks["inventoryReady"] = inventoryReady;
         checks["hasChallenge"] = hasChallenge;

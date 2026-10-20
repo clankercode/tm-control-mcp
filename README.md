@@ -77,7 +77,7 @@ is authoritative for each installed set of plugins.
 - **Never use `TriggerPageAction`** — that path crashes; this plugin uses the same
   `CControlBase::OnAction` dispatch as a real click
 - One-shot map create: `CreateMapViaMenu` (QuickStart off) or faster `EditNewMap`
-- Leave editor/race: `BackToMainMenu`
+- Leave editor/race: `BackToMainMenu`; `ShutdownGame` starts a cancellable 30-second countdown with `confirm:true` (may lose unsaved work)
 
 ### ManiaScript injection
 
@@ -316,6 +316,18 @@ Ground truth: every `MakeTool("…")` registration in `src/McpTools.as`.
 Prefer `{"route":"tools"}` at runtime if this list drifts.
 
 ### Mode / map / dialogs
+
+`GetManiaScriptDiagnostics` preserves script crash observations without dismissing or restarting anything. `ControlFids action=getText` reads script text with bounded slices or search, and `ScanKinematicItems` reads item animation metadata. Registered tool schemas are visible in Settings → TM Control MCP → Tool packs.
+
+Successful public socket calls for the bounded dialog-prone action set include
+`output.dialogAfter`, the same full state returned by `GetDialog`, sampled after
+one rendered frame. `output.dialogAfterFrameDelay` is `1`. The set currently
+covers map/menu transitions, save/dialog responses, shadow computation,
+validation/editor clicks, and ManiaLink actions; read-only and polling tools do
+not incur the extra frame or payload. The runtime `route=tools` descriptions are
+the authoritative per-tool indicator for whether these fields are present. The
+snapshot is the global dialog state after the call, not a claim that the tool
+caused it; another concurrent request or game action can change that state.
 
 | Tool | Summary |
 |------|---------|

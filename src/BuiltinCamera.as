@@ -59,6 +59,8 @@ namespace TmMcp {
         if (editor is null) {
             return MakeError("SetEditorOrbitalTarget requires the map editor", "NOT_IN_EDITOR", true, "Editor");
         }
+        auto modeError = EditorCameraModeError(editor);
+        if (modeError !is null) return modeError;
         if (editor.OrbitalCameraControl is null) {
             return MakeError("orbital camera not available", "no_orbital", true, "Editor");
         }

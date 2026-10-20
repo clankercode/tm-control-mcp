@@ -1,4 +1,45 @@
 namespace TmMcp {
+    // These tools can synchronously or asynchronously surface a Trackmania
+    // BasicDialogs/editor/menu dialog. Keep this list narrow: every match adds
+    // one rendered-frame delay and a full dialog snapshot to the public socket
+    // result. Read-only/polling tools must remain zero-overhead.
+    bool ShouldObserveDialogAfterTool(const string &in name) {
+        return name == "OpenMapInEditor"
+            || name == "PlayMap"
+            || name == "ComputeShadows"
+            || name == "SaveMapAs"
+            || name == "SaveMapFlow"
+            || name == "RespondDialog"
+            || name == "ControlValidation"
+#if DEV
+            || name == "TriggerEditorControl"
+#endif
+            || name == "SetMenuPage"
+            || name == "EditNewMap"
+            || name == "BackToMainMenu"
+            || name == "ClickMenuButton"
+            || name == "TriggerControlOnAction"
+            || name == "CreateMapViaMenu"
+            || name == "RunManialinkScript";
+    }
+
+    void AttachDialogAfterTool(const string &in name, Json::Value@ result) {
+        if (!ShouldObserveDialogAfterTool(name)
+            || result is null
+            || !result.HasKey("success")
+            || !bool(result["success"])
+            || !result.HasKey("output")) return;
+
+        Json::Value output = result["output"];
+        if (output.GetType() != Json::Type::Object) return;
+
+        // Let OnAction/BackToMainMenu/editor requests advance before observing.
+        yield();
+        output["dialogAfter"] = BuildDialogSummary();
+        output["dialogAfterFrameDelay"] = 1;
+        result["output"] = output;
+    }
+
     Json::Value@ HandlePayload(const string &in payload) {
         if (payload.Length == 0) {
             return MakeResponse("", "", null, "empty request payload");
@@ -81,6 +122,7 @@ namespace TmMcp {
         if (result is null) {
             return MakeResponse(id, route, null, "unknown tool: " + tool);
         }
+        AttachDialogAfterTool(tool, result);
 
         Json::Value data = Json::Object();
         data["tool"] = tool;
