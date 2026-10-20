@@ -18,6 +18,12 @@ Inspect the saved image and confirm the intended plugin title/content is visible
 windows exist. This was checked on 2026-10-20: the captured Trackmania window
 contained both Openplanet settings and the Dips++ CustomMap Editor window.
 
+The repository also provides `python3 tools/tm_capture.py --list` and
+`python3 tools/tm_capture.py --pid PID --xid XID -o /tmp/trackmania-ui.png`
+for an exact PID-owned XWayland window capture through ImageMagick. That helper
+refuses ambiguous windows; its capture was also verified on xsm to include
+Openplanet settings. Inspect each output for the intended plugin UI.
+
 For a desktop capture, use `spectacle -b -n -f -o /tmp/desktop.png` and crop the
 Trackmania area before sharing. Desktop captures can include unrelated windows.
 Run in the logged-in graphical session, with its `DISPLAY`, Wayland and D-Bus

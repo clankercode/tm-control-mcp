@@ -94,11 +94,12 @@ namespace TmMcp {
         // a worker destroys the waiting socket coroutine before it can reply.
         // This exact path never yields and deliberately destroys its module.
         if (name == "ControlPlugin" && IsBridgeReloadRequest(input)) {
-            auto held = g_ToolCalls.Find(name);
-            if (held !is null) {
-                auto err = MakeError("reentrant tool call: " + name, "reentrant_tool", false);
-                err["inFlight"] = ToolCallToJson(held);
-                return err;
+            // Nested pack workers still have an outer socket waiter. Refuse
+            // self-reload during any tracked invocation rather than destroy
+            // that outer waiter before it receives an acknowledgement.
+            if (g_ToolCalls.calls.Length > 0) {
+                return MakeError("bridge reload requires idle tool dispatch", "tool_busy", true,
+                    "", "Wait for status.calls.active to empty, then use direct recover with its instance token");
             }
             ToolCallEvent("self reload requested on caller stack");
             return ControlPlugin(input);
@@ -191,6 +192,10 @@ namespace TmMcp {
         string action = input.HasKey("action") ? string(input["action"]) : "ok";
         if (action == "throw") throw("DEV call-guard caught exception");
         if (action == "reenter") return CallTool("DevCallGuardProbe", input);
+        if (action == "self_reload") {
+            auto reload = Json::Object(); reload["action"] = "reload"; reload["id"] = SelfPlugin().ID;
+            return CallTool("ControlPlugin", reload);
+        }
         if (action == "wait") { uint64 until = Time::Now + 80; while (Time::Now < until) yield(); }
         if (action == "forever") { while (true) yield(); }
         return MakeSuccess(Json::Object());

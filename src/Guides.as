@@ -180,7 +180,7 @@ namespace TmMcp {
             + "  Response includes results[] with type/data/dataParts (capped).\n"
             + "\n"
             + "Notes:\n"
-            + "- GetManiaScriptDiagnostics reads crash prompts/debugger visibility. Native log rows require an overlay-visible TakeScreenshot.\n"
+            + "- GetManiaScriptDiagnostics reads crash prompts/debugger visibility. Read native log rows in a verified screenshot. Openplanet/plugin UI requires a window/compositor capture; see the screenshots guide.\n"
             + "- No collected event returns MANIASCRIPT_RESULT_TIMEOUT (unconfirmed); observed crash returns MANIASCRIPT_CRASH. Without collection, success confirms injection only.\n"
             + "- Manialink pages are sandboxed from each other.\n"
             + "- Bad syntax can trigger the game recovery restart — keep scripts small.\n"

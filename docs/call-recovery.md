@@ -11,7 +11,9 @@ Except for the nonyielding bridge-self-reload acknowledgement, every `CallTool`,
 including imported calls and pack callbacks, dispatches through
 a bridge-owned coroutine. The public signature is unchanged, but calls now yield
 even when the tool itself is immediate; use a coroutine/`DispatchAsync` from
-nonyieldable UI callbacks. Different nested tools remain callable. Input is copied
+nonyieldable UI callbacks. Ordinary bridge self-reload requires idle dispatch;
+a nested pack call receives `tool_busy` and should use the direct recovery route
+after other calls finish. Different nested tools remain callable. Input is copied
 at admission. Disconnecting a socket does not cancel an already admitted mutation.
 
 Normal return and caught errors release the exact invocation ID. An independent

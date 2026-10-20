@@ -70,7 +70,9 @@ Openplanet **1.29.14 (next, Public, 6fd4200f)**; game engine build
 - Recovery with populated required dependents followed by restoration passed.
   A TitlePack.ListPackCandidates -> imported CallTool(ControlFids) call passed.
 - Ordinary self-reload first reproduced a dropped response, then passed with
-  `queued:true` after the caller-stack acknowledgement fix.
+  `queued:true` after the caller-stack acknowledgement fix. Nested self-reload
+  now refuses with `tool_busy` while any invocation is active; a DEV nested
+  call confirmed refusal without changing the healthy instance.
 - Spectacle active-window capture visibly included Openplanet settings and the
   Dips++ CustomMap Editor. See [window capture](window-screenshots.md).
 

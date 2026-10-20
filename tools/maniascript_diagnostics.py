@@ -47,7 +47,7 @@ def collect(call, screenshot=False):
     report["crashDialogDetected"] = crash if isinstance(crash, bool) else None
     # No native log getter exists. Never call missing text an empty/clean log.
     report["logAvailable"] = False
-    report["nextStep"] = "Read the native Script debugger Log tab in the captured image before recovery. A dismissed prompt is not proof of script health."
+    report["nextStep"] = "Read the native Script debugger Log tab in a verified image before recovery. TakeScreenshot is viewport only; Openplanet/plugin UI needs a window/compositor capture (docs/window-screenshots.md). Image existence does not prove the debugger is visible. A dismissed prompt is not proof of script health."
     if screenshot:
         try:
             report["screenshot"] = call("TakeScreenshot", {"currentView": True, "hideOverlay": False})
@@ -61,7 +61,7 @@ def collect(call, screenshot=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--screenshot", action="store_true", help="capture current viewport with debugger overlays")
+    parser.add_argument("--screenshot", action="store_true", help="capture native viewport; Openplanet/plugin UI needs a separate window capture")
     parser.add_argument("--output", type=Path, help="also preserve JSON evidence at this path")
     args = parser.parse_args()
     process_failures = {}

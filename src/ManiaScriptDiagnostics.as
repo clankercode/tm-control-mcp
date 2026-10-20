@@ -10,7 +10,7 @@ namespace TmMcp {
     Json::Value ManiaScriptDiagnostics() {
         Json::Value output = Json::Object();
         output["logAvailable"] = false;
-        output["logUnavailableReason"] = "Native Script debugger log rows are not exposed by Openplanet. Capture TakeScreenshot with currentView=true and hideOverlay=false while the debugger log is visible; DialogEditScript_TempText is source, not the log.";
+        output["logUnavailableReason"] = "Native Script debugger log rows are not exposed by Openplanet. Read the visible debugger log in a verified capture. TakeScreenshot is native viewport only; Openplanet/plugin UI requires a window/compositor capture (see the screenshots guide); DialogEditScript_TempText is source, not the log.";
         output["crashDialogDetected"] = false;
         output["debuggerAvailable"] = false;
         Json::Value messages = Json::Array();
