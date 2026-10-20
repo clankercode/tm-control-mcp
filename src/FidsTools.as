@@ -19,7 +19,11 @@ namespace TmMcp {
         if (a == "stat") return "get";
         if (a == "ls") return "list";
         if (a == "load") return "preload";
+        if (a == "packstatus") return "packStatus";
+        if (a == "mountpack") return "mountPack";
+        if (a == "unmountpack") return "unmountPack";
         if (a == "gettext" || a == "readtext") return "getText";
+        if (a == "settext" || a == "writetext" || a == "patchtext") return "setText";
         return a;
     }
 
@@ -717,10 +721,13 @@ namespace TmMcp {
                 "BAD_ACTION",
                 false,
                 "",
-                "drives|get|list|preload|updateTree|extract|getFullPath|fromNod|getText"
+                "drives|get|list|preload|updateTree|extract|getFullPath|fromNod|getText|setText|packStatus|mountPack|unmountPack"
             );
         }
         string action = FidsNormAction(raw);
+        if (action == "packStatus") return FidsActionPackStatus(input);
+        if (action == "mountPack") return FidsActionMountPack(input);
+        if (action == "unmountPack") return FidsActionUnmountPack(input);
         if (action == "drives") return FidsActionDrives();
         if (action == "get") return FidsActionGet(input);
         if (action == "list") return FidsActionList(input);
@@ -730,8 +737,9 @@ namespace TmMcp {
         if (action == "getFullPath") return FidsActionGetFullPath(input);
         if (action == "fromNod") return FidsActionFromNod(input);
         if (action == "getText") return FidsActionGetText(input);
+        if (action == "setText") return FidsActionSetText(input);
         return MakeError(
-            "unknown action '" + raw + "' (expected drives|get|list|preload|updateTree|extract|getFullPath|fromNod|getText)",
+            "unknown action '" + raw + "' (expected drives|get|list|preload|updateTree|extract|getFullPath|fromNod|getText|setText|packStatus|mountPack|unmountPack)",
             "BAD_ACTION"
         );
     }

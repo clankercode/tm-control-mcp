@@ -387,6 +387,8 @@ namespace TmMcp {
             + "  (nod.ptr) or another tool. from=app|editor|challenge was"
             + "  removed — those nods usually have no useful fid. Unreadable/"
             + "  unaligned pointers return BAD_PTR instead of wrapping.\n"
+            + "- packStatus|mountPack|unmountPack {drive:user, path} inspects preloaded user packs; mutations need Menu and confirm:true. Only bridge-owned exact mounts can be unmounted.\n"
+            + "- setText {drive:user, path:Scripts/EditorPlugins/Example.Script.txt, find, replace, confirm:true} applies bounded replacements in an idle MapEditor only. Readback confirms assignment, not compilation.\n"
             + "- getText {drive, path, find?} reads CPlugFileTextScript.Text. "
             + "Use find/context/maxHits for bounded search or offset/length for a slice (maximum 65536).\n"
             + "\n"
