@@ -3,6 +3,7 @@ void Main() {
     // "self" resolution in tools (e.g. ListPluginSettings default plugin)
     // is correct even when invoked in-process from another plugin's context.
     TmMcp::CacheSelfPlugin();
+    TmMcp::StartToolCalls();
     TmMcp::InitToolSchemas();
     TmMcp::StartPackUpdates();
     TmMcp::Start();

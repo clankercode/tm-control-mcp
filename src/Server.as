@@ -36,6 +36,7 @@ namespace TmMcp {
     }
 
     void Shutdown() {
+        StopToolCalls();
         StopPackUpdates();
         g_running = false;
         g_starting = false;

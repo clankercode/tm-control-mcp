@@ -551,9 +551,13 @@ Consequences worth knowing before you trust a number:
   `NO_PLAYGROUND` in menus. In the map editor use `SetEditorCamera` /
   `ControlCamera` instead. MediaTracker clips override this camera.
 
+See [in-flight diagnostics and recovery](docs/call-recovery.md) for call IDs/ages, worker interruption, deadlines, and recovery without a game restart.
+
 ### Screenshots
 
 `TakeScreenshot` triggers the game's **native viewport capture** (same path as the in-game screenshot key), waits for the file, and returns its game-side `fullName` + `sizeBytes`. Options: `format` (`jpg` default / `webp` / `tga` / `dds`), `waitMs` (default 5000; `0`/`noWait` = fire-and-forget), `hideOverlay` (clean shot without HUD/overlays), `forceRes` + `width`/`height` (capture at a forced resolution; restored after). Crash-prone native paths (360° capture, tiled supersampling, alpha/pixel-output switching) are deliberately **not** exposed — see the `screenshots` guide (`GetGuide {"topic":"screenshots"}`).
+
+**Openplanet/plugin UI needs a window capture.** The native viewport excludes Openplanet ImGui even with `hideOverlay:false`. On xsm, activate Trackmania with `xdotool search --name '^Trackmania$' windowactivate --sync`, then run `spectacle -b -n -a -o /tmp/trackmania-with-openplanet.png`. Inspect the result for the intended plugin window; see [window capture details](docs/window-screenshots.md).
 
 `call.py` additionally reports `detectedScreenshot.linuxPath` by diffing the folder before/after (`TM_USER_GAME_FOLDER` override).
 

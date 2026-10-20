@@ -548,6 +548,10 @@ def main() -> int:
         print(f"invalid input JSON: {exc}", file=sys.stderr)
         return 2
 
+    if args.route_or_tool == "recover" and not isinstance(input_data, dict):
+        print(f"invalid input for recover: input must be an object, got {_json_type(input_data)}", file=sys.stderr)
+        return 2
+
     pids: list[int] = []
     if not args.skip_process_check:
         try:
@@ -615,8 +619,10 @@ def main() -> int:
         print_json(wait_resp, args.pretty)
         return 0
 
-    if args.route_or_tool in {"status", "tools"}:
+    if args.route_or_tool in {"status", "tools", "recover"}:
         request = {"route": args.route_or_tool}
+        if args.route_or_tool == "recover":
+            request["instance"] = input_data.get("instance", "")
     else:
         if args.strict or args.refresh_schemas:
             try:
@@ -719,14 +725,14 @@ def main() -> int:
     if screenshot_before is not None:
         attach_screenshot_path(response, find_new_screenshot(screenshot_before, screenshot_ext, args.timeout))
 
-    if args.route_or_tool not in {"status", "tools"}:
+    if args.route_or_tool not in {"status", "tools", "recover"}:
         enrich_control_plugin_logs(response, args.route_or_tool, input_data)
 
     # Surface structured tool errors on stderr lightly when present
     if isinstance(response, dict):
         data = response.get("data")
         if isinstance(data, dict):
-            result = data.get("result")
+            result = data if args.route_or_tool == "recover" else data.get("result")
             if isinstance(result, dict) and result.get("success") is False:
                 code = result.get("code")
                 hint = result.get("hint")
