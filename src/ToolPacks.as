@@ -14,7 +14,6 @@ namespace TmMcp {
     }
 
     array<RegisteredPack@> g_Packs;
-    array<string> g_CallStack;
 
     bool IsReservedPackId(const string &in id) {
         return id == "core" || id == "tm-control-mcp" || id == "TmMcp";
@@ -286,15 +285,4 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
-    bool PushCallStack(const string &in name) {
-        for (uint i = 0; i < g_CallStack.Length; i++) {
-            if (g_CallStack[i] == name) return false;
-        }
-        g_CallStack.InsertLast(name);
-        return true;
-    }
-
-    void PopCallStack() {
-        if (g_CallStack.Length > 0) g_CallStack.RemoveLast();
-    }
 }

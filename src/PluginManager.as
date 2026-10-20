@@ -169,6 +169,10 @@ namespace TmMcp {
         string body = "";
         try {
             IO::File f(path, IO::FileMode::Read);
+            // Seek BEFORE reading: a large session log must not consume the
+            // script time budget merely to return its tail.
+            uint64 size = f.Size();
+            if (size > 524288) { f.SetPos(size - 524288); report["truncated"] = true; }
             body = f.ReadToEnd();
             f.Close();
         } catch {
@@ -693,12 +697,25 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
+    bool IsBridgeReloadRequest(Json::Value &in input) {
+        if (!input.HasKey("action") || string(input["action"]).ToLower() != "reload") return false;
+        string id = input.HasKey("id") ? string(input["id"])
+            : (input.HasKey("plugin") ? string(input["plugin"])
+            : (input.HasKey("name") ? string(input["name"]) : ""));
+        string err;
+        auto plugin = ResolvePlugin(id, err);
+        auto self = SelfPlugin();
+        return plugin !is null && self !is null && plugin.ID == self.ID;
+    }
+
     Json::Value@ ControlPlugin(Json::Value &in input) {
         string action = input.HasKey("action") ? string(input["action"]) : "";
         if (action.Length == 0) {
             return MakeError("action required", "bad_request", false, "", "enable|disable|reload|unload|load|openSettings|setEnabled|getLogs");
         }
         string act = action.ToLower();
+
+        if (act == "status") return GetPluginInfo(input);
 
         if (act == "load") {
             string path = input.HasKey("path") ? string(input["path"]) : "";
@@ -756,7 +773,13 @@ namespace TmMcp {
                     fail["output"] = output;
                     return fail;
                 }
+                // Loading/unloading can invalidate Meta handles on the next
+                // frame. Keep the ID and resolve a fresh handle after yielding.
+                string loadedId = loaded.ID;
+                @loaded = null;
                 yield();
+                @loaded = Meta::GetPluginFromID(loadedId);
+                if (loaded is null) return MakeError("plugin disappeared after load: " + loadedId, "load_failed", true);
                 Json::Value output = Json::Object();
                 output["action"] = "load";
                 output["plugin"] = PluginToJson(loaded);
@@ -863,6 +886,7 @@ namespace TmMcp {
             string reloadId = p.ID;
             try {
                 Meta::ReloadPlugin(p);
+                @p = null;
             } catch {
                 return MakeError("ReloadPlugin failed: " + getExceptionInfo(), "plugin_control_failed", true, "", "");
             }
@@ -881,6 +905,7 @@ namespace TmMcp {
             }
             try {
                 Meta::UnloadPlugin(p);
+                @p = null;
             } catch {
                 return MakeError("UnloadPlugin failed: " + getExceptionInfo(), "plugin_control_failed", true, "", "");
             }

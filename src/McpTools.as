@@ -981,6 +981,9 @@ namespace TmMcp {
     }
 
     bool IsToolName(const string &in name) {
+#if DEV
+        if (name == "DevCallGuardProbe") return true;
+#endif
         return name == "GetMode"
             || name == "OpenMapInEditor"
             || name == "PlayMap"
@@ -1098,31 +1101,10 @@ namespace TmMcp {
         return s;
     }
 
-    Json::Value@ CallTool(const string &in name, Json::Value &in input) {
-        if (!PushCallStack(name)) {
-            return MakeError("reentrant tool call: " + name, "reentrant_tool", false);
-        }
-        uint started = Time::Now;
-        trace("TM Control MCP tool start " + name + " " + CompactJsonForTrace(input));
-        Json::Value@ result = null;
-        try {
-            @result = DispatchTool(name, input);
-        } catch {
-            @result = MakeError("tool threw: " + getExceptionInfo(), "tool_exception", true);
-        }
-        PopCallStack();
-        string status = "err";
-        string extra = "";
-        if (result !is null && result.HasKey("success") && bool(result["success"])) {
-            status = "ok";
-        } else if (result !is null && result.HasKey("code")) {
-            extra = " " + string(result["code"]);
-        }
-        trace("TM Control MCP tool done " + name + " " + status + extra + " " + (Time::Now - started) + "ms");
-        return result;
-    }
-
     Json::Value@ DispatchTool(const string &in name, Json::Value &in input) {
+#if DEV
+        if (name == "DevCallGuardProbe") return DevCallGuardProbe(input);
+#endif
         if (ToolRequiresEditorPlusPlus(name) && !IsEditorPlusPlusAvailable()) {
             return EditorPlusPlusMissingError();
         }
@@ -1384,7 +1366,7 @@ namespace TmMcp {
         tools.Add(MakeTool("AssertPlacement", "Verify recent placement: expectItemsDelta/expectBlocksDelta, near{x,y,z,radius}+itemPath/blockName, tag/tagMinCount.", '{"type":"object","properties":{"expectItemsDelta":{"type":"integer"},"expectBlocksDelta":{"type":"integer"},"near":{"type":"object"},"itemPath":{"type":"string"},"blockName":{"type":"string"},"mapPre":{"type":"object"},"tag":{"type":"string"},"tagMinCount":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ListPlugins", "List loaded Openplanet plugins (Meta::AllPlugins). Optional query, includeDisabled (default true), includeUnloaded, includeSourcePath (full paths; default basename only).", '{"type":"object","properties":{"query":{"type":"string"},"includeDisabled":{"type":"boolean"},"includeUnloaded":{"type":"boolean"},"includeSourcePath":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetPlugin", "Get one plugin by id or name. includeSettings=true embeds setting values. includeSourcePath=true adds full SourcePath (may be Wine absolute); default is sourcePathBase only.", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"name":{"type":"string"},"includeSettings":{"type":"boolean"},"includeSourcePath":{"type":"boolean"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("ControlPlugin", "Plugin lifecycle (RemoteBuild-parity): enable|disable|setEnabled|reload|unload|load|openSettings|getLogs. load accepts id (Plugins/<id>/ or <id>.op) like tm-remote-build, or absolute path. Already-loaded id is unloaded then reloaded from disk. getLogs tails Openplanet.log filtered by plugin id. Refuses disable/unload/rebuild of self.", '{"type":"object","properties":{"action":{"type":"string"},"id":{"type":"string"},"plugin":{"type":"string"},"name":{"type":"string"},"enabled":{"type":"boolean"},"path":{"type":"string"},"source":{"type":"string"},"type":{"type":"string"},"maxLines":{"type":"integer"},"compileOnly":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
+        tools.Add(MakeTool("ControlPlugin", "Plugin lifecycle (RemoteBuild-parity): status|enable|disable|setEnabled|reload|unload|load|openSettings|getLogs. load accepts id (Plugins/<id>/ or <id>.op) like tm-remote-build, or absolute path. Already-loaded id is unloaded then reloaded from disk. getLogs tails Openplanet.log filtered by plugin id. Refuses disable/unload/rebuild of self.", '{"type":"object","properties":{"action":{"type":"string"},"id":{"type":"string"},"plugin":{"type":"string"},"name":{"type":"string"},"enabled":{"type":"boolean"},"path":{"type":"string"},"source":{"type":"string"},"type":{"type":"string"},"maxLines":{"type":"integer"},"compileOnly":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
         tools.Add(MakeTool("ListPluginSettings", "List Meta::PluginSetting for a plugin (default: this MCP plugin). Filters: category, query, includeHidden, includeValues.", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"name":{"type":"string"},"category":{"type":"string"},"query":{"type":"string"},"includeHidden":{"type":"boolean"},"includeValues":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetPluginSetting", "Read one setting by varName (or unique display name). Default plugin = self.", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"varName":{"type":"string"},"setting":{"type":"string"},"name":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("SetPluginSetting", "Write a setting value (typed). save=true (default) calls Meta::SaveSettings. This plugin's socket host/port/enable apply live (no reload).", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"varName":{"type":"string"},"setting":{"type":"string"},"value":{},"save":{"type":"boolean"}},"required":["value"],"additionalProperties":false}'));

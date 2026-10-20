@@ -70,6 +70,7 @@ namespace TmMcp {
             data["port"] = S_TmMcpPort;
             data["host"] = S_TmMcpHost;
             data["socket"] = GetSocketStatus();
+            data["calls"] = ToolCallStatus();
             auto self = Meta::ExecutingPlugin();
             if (self !is null) {
                 data["plugin"] = self.Name;
@@ -80,6 +81,10 @@ namespace TmMcp {
                 data["version"] = "unknown";
             }
             return MakeResponse(id, route, data, "");
+        }
+
+        if (route == "recover") {
+            return MakeResponse(id, route, RecoverToolCalls(request), "");
         }
 
         if (route == "tools") {

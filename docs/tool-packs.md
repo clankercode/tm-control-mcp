@@ -72,7 +72,7 @@ cache behavior, discovery fields, reload guidance, and existing-pack follow-ups.
 
 ## Call back into TmMcp
 
-Pack dispatch may call `TmMcp::CallTool`. Same tool must not re-enter itself (`reentrant_tool`). Each `CallTool` logs `TM Control MCP tool start/done`; pack dispatch also logs `TM Control MCP pack start/done`.
+Pack dispatch may call `TmMcp::CallTool` from a coroutine. Each call now runs in a bridge-owned worker and yields, including immediate tools. Same-tool recursion and independent overlap are conservatively refused (`reentrant_tool`); different nested tools work. Calls release by invocation ID rather than nesting order. See [in-flight status, deadlines and recovery](call-recovery.md). Admissions, rejections and terminals are persisted in the bridge request event log.
 
 ## Discovery
 
