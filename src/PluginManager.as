@@ -731,6 +731,9 @@ namespace TmMcp {
                 if (loadId.Length == 0) loadId = PluginStemFromPath(path);
             }
 
+            // Folder paths require a trailing slash, including absolute paths.
+            if (ptype == Meta::PluginType::Folder && !path.EndsWith("/")) path += "/";
+
             if (IsSelfPluginTarget(loadId, path)) {
                 return MakeError("refusing to unload+load the executing MCP plugin", "forbidden", false, "", "Use action=reload for self");
             }
