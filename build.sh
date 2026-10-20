@@ -81,9 +81,31 @@ stage_folder_plugin() {
   fi
 }
 
+can_reload() {
+  [[ "$mode" != "release" && "${TM_PLUGIN_SKIP_RELOAD:-0}" != "1" ]] \
+    && command -v tm-remote-build >/dev/null 2>&1
+}
+
+snapshot_tool_pack_plugins() {
+  if ! can_reload; then
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "warning: python3 unavailable; tool-pack state unknown, restoration skipped" >&2
+    return 0
+  fi
+  python3 tools/build_pack_state.py snapshot "$plugin_name"
+}
+
+restore_tool_pack_plugins() {
+  if can_reload && [[ -n "$pack_plugins" ]]; then
+    python3 tools/build_pack_state.py restore "$pack_plugins"
+  fi
+}
+
 remote_load_folder() {
   local slug="$1"
-  if ! command -v tm-remote-build >/dev/null 2>&1 || [[ "${TM_PLUGIN_SKIP_RELOAD:-0}" == "1" ]]; then
+  if ! can_reload; then
     return 0
   fi
 
@@ -119,12 +141,17 @@ if [[ "$mode" == "dev" ]]; then
   run_lsp_check
 fi
 
+# Retain the prior running consumers before any dependency/provider reload.
+# Unknown snapshots warn and disable restoration without guessing at plugin state.
+pack_plugins="$(snapshot_tool_pack_plugins)" || pack_plugins=""
+
 if [[ "$mode" == "dev" ]]; then
   if [[ "${TM_PLUGIN_STAGE_LOCAL_DEPS:-1}" != "0" ]]; then
     stage_local_dependencies
   fi
   stage_folder_plugin . "$plugin_name" 1
   remote_load_folder "$plugin_name"
+  restore_tool_pack_plugins
 elif [[ "$mode" == "release-check" ]]; then
   # Release-like folder stage: NO DEV define, NO (Dev) suffix, then reload.
   if [[ "${TM_PLUGIN_STAGE_LOCAL_DEPS:-1}" != "0" ]]; then
@@ -132,6 +159,7 @@ elif [[ "$mode" == "release-check" ]]; then
   fi
   stage_folder_plugin . "$plugin_name" 0
   remote_load_folder "$plugin_name"
+  restore_tool_pack_plugins
   echo "release-check: staged without DEV. Confirm Openplanet compile Loaded + run tools/call.py status"
 else
   version="$(awk -F= '/^version/ { gsub(/[ \"]/, "", $2); print $2; exit }' info.toml)"
