@@ -210,6 +210,13 @@ namespace TmMcp {
             input.HasKey("resultEvent") ? string(input["resultEvent"]) : MCP_ADHOC_RESULT_EVENT_DEFAULT
         );
 
+        auto diagnosticsBefore = ManiaScriptDiagnostics();
+        if (bool(diagnosticsBefore["crashDialogDetected"])) {
+            auto error = MakeError("A ManiaScript crash dialog is already open; preserve diagnostics and recover before injecting.", "MANIASCRIPT_CRASH");
+            error["output"] = diagnosticsBefore;
+            return error;
+        }
+
         McpAdHocResultHook@ hook = null;
         bool hookRegistered = false;
         if (collectMs > 0) {
@@ -245,6 +252,7 @@ namespace TmMcp {
             }
         }
 
+        auto diagnosticsAfter = ManiaScriptDiagnostics();
         bool removed = false;
         if (!persist) {
             try {
@@ -284,6 +292,19 @@ namespace TmMcp {
             + resultEvent + "\", [\"payload\", ...]) from the script. "
             + "Manialink pages are sandboxed. Bad ManiaScript can trigger game recovery — keep scripts small. "
             + "prefer persist=true and re-inject with replace=true to re-run; set persist=false to blank the layer after wait+collect.";
+        output["diagnostics"] = diagnosticsAfter;
+        output["executionConfirmed"] = hook !is null && hook.eventTypes.Length > 0;
+        if (bool(diagnosticsAfter["crashDialogDetected"])) {
+            output["executionConfirmed"] = false;
+            auto error = MakeError("ManiaScript crash dialog observed after injection. Read output.diagnostics; preserve the debugger log before recovery.", "MANIASCRIPT_CRASH");
+            error["output"] = output;
+            return error;
+        }
+        if (collectMs > 0 && (hook is null || hook.eventTypes.Length == 0)) {
+            auto error = MakeError("No result event received within collectMs; execution is unconfirmed. Inspect GetManiaScriptDiagnostics and the native debugger log.", "MANIASCRIPT_RESULT_TIMEOUT");
+            error["output"] = output;
+            return error;
+        }
         return MakeSuccess(output);
     }
 

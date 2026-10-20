@@ -1,4 +1,64 @@
-// Socket settings tab + DEV preview window.
+bool g_ShutdownPending = false;
+uint64 g_ShutdownDeadline = 0;
+int g_ShutdownLastLoggedSecond = -1;
+
+Json::Value@ RequestShutdownGame() {
+    g_ShutdownPending = true;
+    g_ShutdownDeadline = Time::Now + 30000;
+    g_ShutdownLastLoggedSecond = -1;
+    Json::Value output = Json::Object();
+    output["requested"] = true;
+    output["countdownSeconds"] = 30;
+    output["note"] = "Shutdown countdown shown in the Openplanet settings window.";
+    return TmMcp::MakeSuccess(output);
+}
+
+void ShutdownGameAfterOneFrame() {
+    yield();
+    Meta::Terminate();
+}
+
+void RenderShutdownDialog() {
+    if (!g_ShutdownPending) return;
+    uint64 now = Time::Now;
+    if (now >= g_ShutdownDeadline) {
+        trace("TM Control MCP shutdown UI: automatic countdown reached zero; shutting down Trackmania");
+        g_ShutdownPending = false;
+        startnew(CoroutineFunc(ShutdownGameAfterOneFrame));
+        return;
+    }
+    int seconds = int((g_ShutdownDeadline - now + 999) / 1000);
+    if (seconds <= 10 && seconds >= 1 && seconds != g_ShutdownLastLoggedSecond) {
+        trace("TM Control MCP shutdown UI: Trackmania is shutting down in " + seconds + " seconds");
+        g_ShutdownLastLoggedSecond = seconds;
+    }
+    UI::SetNextWindowSize(420, 0, UI::Cond::FirstUseEver);
+    if (UI::Begin("Trackmania shutdown", g_ShutdownPending, UI::WindowFlags::AlwaysAutoResize)) {
+        UI::TextWrapped("Trackmania will close automatically in " + seconds + " seconds.");
+        UI::Dummy(vec2(0, 6));
+        if (UI::Button("Close TM now", vec2(120, 0))) {
+            trace("TM Control MCP shutdown UI: player pressed \"Close TM now\"; shutting down next frame");
+            g_ShutdownPending = false;
+            startnew(CoroutineFunc(ShutdownGameAfterOneFrame));
+        }
+        UI::SameLine();
+        if (UI::Button("Add +60s", vec2(100, 0))) {
+            trace("TM Control MCP shutdown UI: player pressed \"Add +60s\"; extending countdown by 60 seconds");
+            g_ShutdownDeadline += 60000;
+        }
+        UI::SameLine();
+        if (UI::Button("Cancel shutdown", vec2(140, 0))) {
+            trace("TM Control MCP shutdown UI: player pressed \"Cancel shutdown\"; shutdown cancelled");
+            g_ShutdownPending = false;
+        }
+    }
+    UI::End();
+}
+
+void Render() {
+    RenderShutdownDialog();
+}
+
 
 string g_SocketHostDraft = "127.0.0.1";
 string g_SocketHostError = "";

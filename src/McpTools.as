@@ -369,6 +369,11 @@ namespace TmMcp {
         o["id"] = c.Id.GetName();
         auto t = Reflection::TypeOf(c);
         o["class"] = t is null ? "?" : string(t.Name);
+        o["visible"] = c.IsVisible;
+        o["readOnly"] = c.IsReadOnly;
+        o["hiddenExternal"] = c.IsHiddenExternal;
+        o["hiddenInternal"] = c.IsHiddenInternal;
+        o["tooltip"] = string(c.ToolTip);
         auto label = cast<CControlLabel>(c);
         if (label !is null) {
             o["text"] = string(label.Label);
@@ -439,20 +444,32 @@ namespace TmMcp {
 
     Json::Value@ GetEditorInterfaceTree(Json::Value &in input) {
         auto app = cast<CTrackMania>(GetApp());
-        auto editor = app is null ? null : cast<CGameCtnEditorFree>(app.Editor);
-        if (editor is null || editor.EditorInterface is null || editor.EditorInterface.InterfaceRoot is null) {
+        CControlBase@ root = null;
+        string source = "";
+        auto itemEditor = app is null ? null : cast<CGameEditorItem>(app.Editor);
+        if (itemEditor !is null && itemEditor.FrameRoot !is null) {
+            @root = itemEditor.FrameRoot;
+            source = "CGameEditorItem.FrameRoot";
+        } else {
+            auto editor = app is null ? null : cast<CGameCtnEditorFree>(app.Editor);
+            if (editor !is null && editor.EditorInterface !is null && editor.EditorInterface.InterfaceRoot !is null) {
+                @root = editor.EditorInterface.InterfaceRoot;
+                source = "CGameCtnEditorFree.EditorInterface.InterfaceRoot";
+            }
+        }
+        if (root is null) {
             return MakeError("editor interface not available", "NOT_IN_EDITOR", true, "Editor");
         }
         int maxDepth = input.HasKey("maxDepth") ? int(input["maxDepth"]) : 6;
         int maxNodes = input.HasKey("maxNodes") ? int(input["maxNodes"]) : 4000;
         string rootId = input.HasKey("rootId") ? string(input["rootId"]) : "";
-        CControlBase@ root = editor.EditorInterface.InterfaceRoot;
         if (rootId.Length > 0) {
             @root = _DlgFindChild(cast<CControlContainer>(root), rootId);
-            if (root is null) return MakeError("rootId not found under InterfaceRoot: " + rootId);
+            if (root is null) return MakeError("rootId not found under editor root: " + rootId);
         }
         auto count = _Counter();
         Json::Value output = Json::Object();
+        output["source"] = source;
         output["tree"] = _EditorControlTreeToJson(root, 0, maxDepth, count, maxNodes);
         output["nodeCount"] = count.n;
         output["truncated"] = count.n >= maxNodes;
@@ -600,6 +617,7 @@ namespace TmMcp {
 
     Json::Value CameraToJson(CGameCtnEditorFree@ editor) {
         Json::Value output = Json::Object();
+        AddEditorCameraContext(output, editor);
         auto pmt = editor.PluginMapType;
         auto orbital = editor.OrbitalCameraControl;
         output["target"] = Vec3ToJson(pmt.CameraTargetPosition);
@@ -781,6 +799,7 @@ namespace TmMcp {
         obj["isFlying"] = item.IsFlying;
         obj["scale"] = item.Scale;
         obj["variant"] = int(item.IVariant);
+        obj["mapElemColor"] = int(item.MapElemColor);
         if (item.ItemModel is null) {
             obj["name"] = "";
             obj["idName"] = "";
@@ -965,6 +984,7 @@ namespace TmMcp {
         return name == "GetMode"
             || name == "OpenMapInEditor"
             || name == "PlayMap"
+            || name == "ShutdownGame"
             || name == "GetMapInfo"
             || name == "GetMapEnvironment"
             || name == "SetMoodTimeOfDay"
@@ -1033,6 +1053,7 @@ namespace TmMcp {
             || name == "SetMenuControlVisible"
             || name == "TriggerControlOnAction"
             || name == "CreateMapViaMenu"
+            || name == "GetManiaScriptDiagnostics"
             || name == "RunManialinkScript"
             || name == "GetReadiness"
             || name == "GetLightmapComputeState"
@@ -1065,6 +1086,7 @@ namespace TmMcp {
             || name == "ListToolPacks"
             || name == "GetTypeInfo"
             || name == "ControlFids"
+            || name == "ScanKinematicItems"
             || IsPackToolName(name)
             || IsMovedEppTool(name);
     }
@@ -1107,6 +1129,7 @@ namespace TmMcp {
         if (name == "GetMode") return GetMode(input);
         if (name == "OpenMapInEditor") return OpenMapInEditor(input);
         if (name == "PlayMap") return PlayMap(input);
+        if (name == "ShutdownGame") return ShutdownGame(input);
         if (name == "GetMapInfo") return GetMapInfo(input);
         if (name == "GetMapEnvironment") return GetMapEnvironment(input);
         if (name == "SetMoodTimeOfDay") return SetMoodTimeOfDay(input);
@@ -1200,6 +1223,7 @@ namespace TmMcp {
         if (name == "SetMenuControlVisible") return SetMenuControlVisible(input);
         if (name == "TriggerControlOnAction") return TriggerControlOnAction(input);
         if (name == "CreateMapViaMenu") return CreateMapViaMenu(input);
+        if (name == "GetManiaScriptDiagnostics") return GetManiaScriptDiagnostics(input);
         if (name == "RunManialinkScript") return RunManialinkScript(input);
         if (name == "GetReadiness") return GetReadiness(input);
         if (name == "GetLightmapComputeState") return GetLightmapComputeState(input);
@@ -1240,6 +1264,7 @@ namespace TmMcp {
         if (name == "ListToolPacks") return ListToolPacks(input);
         if (name == "GetTypeInfo") return GetTypeInfo(input);
         if (name == "ControlFids") return ControlFids(input);
+        if (name == "ScanKinematicItems") return ScanKinematicItems(input);
         Json::Value@ packResult = DispatchPackTool(name, input);
         if (packResult !is null) return packResult;
         return MakeError("unknown tool: " + name, "unknown_tool", false, "", "");
@@ -1276,8 +1301,9 @@ namespace TmMcp {
     Json::Value@ BuildToolList() {
         Json::Value tools = Json::Array();
         tools.Add(MakeTool("GetMode", "Get current game mode: Menu, Race, Loading, or a specific editor (MapEditor, MapEditor_Test, MapEditor_Validate, MapEditor_Playground, ItemEditor, MediatrackerEditor, MeshEditor, SkinEditor, ModuleEditor). In-editor test/validate/playground stay MapEditor_* (not Race). Unknown editor classes return Editor. WaitUntil equals=Editor matches any editor; equals=MapEditor matches MapEditor and MapEditor_*. Also returns curGameModeStr from ServerInfo (TM_PlayMap_Local, hotseat, matchmaking, …) when ServerInfo is present.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("OpenMapInEditor", "Open a local map file in the editor. Waits waitMs (default 1500) and reports any blocking dialog (e.g. unsaved-changes AskYesNo when leaving a dirty map) with a warning — answer it via RespondDialog or SaveMapFlow.", '{"type":"object","properties":{"path":{"type":"string"},"waitMs":{"type":"integer"}},"required":["path"],"additionalProperties":false}'));
+        tools.Add(MakeTool("OpenMapInEditor", "Open a local map file in the editor. Optional decoration overrides the map inferred decoration FID. Waits waitMs (default 1500) and reports any blocking dialog (e.g. unsaved-changes AskYesNo when leaving a dirty map) with a warning — answer it via RespondDialog or SaveMapFlow.", '{"type":"object","properties":{"path":{"type":"string"},"decoration":{"type":"string"},"waitMs":{"type":"integer"}},"required":["path"],"additionalProperties":false}'));
         tools.Add(MakeTool("PlayMap", "Play a local map (or URL) via ManiaTitleControlScriptAPI.PlayMap. Same path style as OpenMapInEditor (e.g. SkinUrlDemo3.Map.Gbx). Optional mode (empty = vanilla local play) and settingsXml. Unwinds editor/race to the menu first. waitMs (default 1500) reports a blocking leave dialog.", '{"type":"object","properties":{"path":{"type":"string"},"mode":{"type":"string"},"settingsXml":{"type":"string"},"waitMs":{"type":"integer"}},"required":["path"],"additionalProperties":false}'));
+        tools.Add(MakeTool("ShutdownGame", "Immediately start a 30-second shutdown countdown and show an Openplanet ImGui dialog. The dialog offers Close TM now, Add +60s, and Cancel shutdown; the game terminates when the countdown reaches zero unless cancelled. Requires confirm:true. Unsaved work may be lost on termination.", '{"type":"object","properties":{"confirm":{"type":"boolean"}},"required":["confirm"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapInfo", "Get current map name and counts via app.RootMap. Works in MapEditor and Race/play.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapEnvironment", "Read map collection, decoration, map type/style, mood, and collection-unit metadata.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("SetMoodTimeOfDay", "Set CGameCtnEditorFree.MoodTimeOfDay01 (0..1). Optional dynamic sets MoodIsDynamicTime. Returns previous+new timeOfDay01/timeOfDayStr. Change time of day before a second ComputeShadows — the game refuses a rebake when shadows are already cached for that mood.", '{"type":"object","properties":{"timeOfDay01":{"type":"number"},"dynamic":{"type":"boolean"}},"required":["timeOfDay01"],"additionalProperties":false}'));
@@ -1288,7 +1314,7 @@ namespace TmMcp {
         tools.Add(MakeTool("UndoRedo", "Undo or redo editor actions (CGameEditorPluginMapMapType Undo/Redo). action: undo (default) | redo; count: repeat N times (default 1).", '{"type":"object","properties":{"action":{"type":"string"},"count":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetDialog", "Inspect Trackmania's current dialog state across the dialog systems: BasicDialogs (kind/frame), SaveAs frame filename, and editor interface frames (where e.g. the 'map saved' temp message lives).", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetMenuFrameTree", "Recursive dump of the CurrentFrame on app.ActiveMenus[menuIndex] (default 0) — where modal menu dialogs like the 'map saved' challenge card live. Params: menuIndex, maxDepth (default 8), maxNodes (default 4000).", '{"type":"object","properties":{"menuIndex":{"type":"integer"},"maxDepth":{"type":"integer"},"maxNodes":{"type":"integer"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("GetEditorInterfaceTree", "Recursive dump of the editor interface control tree (EditorInterface.InterfaceRoot) with per-node id, class, and children. Expensive; use maxDepth (default 6), maxNodes (default 4000), and optional rootId to dump a subtree (e.g. FrameTempMsg).", '{"type":"object","properties":{"maxDepth":{"type":"integer"},"maxNodes":{"type":"integer"},"rootId":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetEditorInterfaceTree", "Read-only recursive dump of the active editor control tree: CGameEditorItem.FrameRoot in Item Editor, otherwise CGameCtnEditorFree.EditorInterface.InterfaceRoot. Includes per-node id, class, visibility/read-only/hidden flags, tooltip, and children. Expensive; use maxDepth (default 6), maxNodes (default 4000), and optional rootId to dump a subtree (e.g. FrameTempMsg).", '{"type":"object","properties":{"maxDepth":{"type":"integer"},"maxNodes":{"type":"integer"},"rootId":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("RespondDialog", "Respond to Trackmania dialogs (BasicDialogs + SaveAs frame). action: yes, no, cancel, ok, wait-ok, validate/saveas-validate, saveas-cancel, saveas-up, saveas-setname (with name), hide, frame-ok (dismiss modal menu dialog like the map-saved challenge card via its ButtonOk). By default yields one frame and includes an 'after' summary of the next dialog in the chain; set disable1FrameYieldAndWarning=true to return immediately.", '{"type":"object","properties":{"action":{"type":"string"},"name":{"type":"string"},"disable1FrameYieldAndWarning":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
         tools.Add(MakeTool("ControlValidation", "Inspect or trigger map validation/test/playground controls. Actions: status, validate, requestEnterPlayground, requestLeavePlayground, testFromStart, testFromCoord.", '{"type":"object","properties":{"action":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlSelection", "Inspect or control editor copy-paste/custom selection. Actions: status, showCustom, hideCustom, resetSelection, selectAll, addSelection, copy, cut, remove, symmetrize.", '{"type":"object","properties":{"action":{"type":"string"},"x1":{"type":"integer"},"y1":{"type":"integer"},"z1":{"type":"integer"},"x2":{"type":"integer"},"y2":{"type":"integer"},"z2":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":false}'));
@@ -1301,7 +1327,7 @@ namespace TmMcp {
         tools.Add(MakeTool("GetBlocks", "Get blocks by optional grid/world radius, model query, and freeblock filter. Works in MapEditor and Race/play (RootMap).", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"radius":{"type":"number"},"world":{"type":"boolean"},"query":{"type":"string"},"isFree":{"type":"boolean"},"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetRecentBlocks", "Get the last N blocks in map block order, useful for freeblock placement readback. Works in MapEditor and Race/play (RootMap).", '{"type":"object","properties":{"count":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetBlockAt", "Get block info at exact grid coordinate.", '{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"}},"required":["x","y","z"],"additionalProperties":false}'));
-        tools.Add(MakeTool("GetItems", "Get anchored items near a world position, or all items up to limit if no position is provided. Works in MapEditor and Race/play (RootMap).", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"radius":{"type":"number"},"limit":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetItems", "Get anchored items with optional position/radius, name query, and offset pagination. Works in MapEditor and Race/play (RootMap).", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"radius":{"type":"number"},"query":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetRecentItems", "Get the last N anchored items in map item order. Works in MapEditor and Race/play (RootMap).", '{"type":"object","properties":{"count":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetWaypoints", "List every waypoint (start/finish/checkpoint/multilap) in the map: blocks and items with their type, name, index, position (grid coord + dir for blocks, world pos + rot for items), linkOrder and tag (linked checkpoints). Lightweight enumeration only — no spawn/fall analysis (see tm-mcp-pack-epp.CheckCheckpoints for that). Works in MapEditor and Race/play (RootMap).", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetInventorySummary", "Get E++ inventory cache counts and scan status.", '{"type":"object","properties":{},"additionalProperties":false}'));
@@ -1348,6 +1374,7 @@ namespace TmMcp {
         tools.Add(MakeTool("SetMenuControlVisible", "Call Show()/Hide() on a menu control. Resolve either by {controlId} (global search) or {indexPath, layerIndex|layerName} (direct walk from MainFrame). visible=true calls Show; false calls Hide. Menu may re-render and reset visibility on the next tick — re-observe after to confirm. Works from Angelscript (unlike TriggerPageAction).", '{"type":"object","properties":{"controlId":{"type":"string"},"indexPath":{"type":"string"},"layerIndex":{"type":"integer"},"layerName":{"type":"string"},"visible":{"type":"boolean"}},"required":["visible"],"additionalProperties":false}'));
         tools.Add(MakeTool("TriggerControlOnAction", "Click a menu control by invoking its underlying CControlBase.OnAction() — the same dispatch the game uses when a button is activated. Resolve via {controlId} (global search) or {indexPath, layerIndex|layerName}. For Nadeo expendable-button nav-items (e.g. button-create on Page_HomePage) the click target is the leaf nav-zone at Controls[0]/[4]/[0]; pass that indexPath explicitly. Safe from Angelscript (OnAction is on CControlBase, not the script-handler). Set recursive=true to fire OnAction on every descendant (DFS) — useful when a single nav-zone click does not advance the state machine; tune with maxDepth (default 10), maxFires (default 128), onlyVisible (default true).", '{"type":"object","properties":{"controlId":{"type":"string"},"indexPath":{"type":"string"},"layerIndex":{"type":"integer"},"layerName":{"type":"string"},"recursive":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxFires":{"type":"integer"},"onlyVisible":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("CreateMapViaMenu", "Single-call tool: navigate Page_MapEditorSettings and launch the editor for a chosen map type, environment, mood, input device, and difficulty. Drives the full 7-step click-chain (SetMenuPage + 6 OnAction clicks), polling for each intermediate frame transition. Returns {ok, finalMode, elapsedMs, steps} on success or {ok:false, failedAt, expectedFrame, lastObserved, elapsedMs, steps} on failure. Requires QuickStart disabled (MapEditorUseQuickstart off). Click-chain verified 2026-04-20.", '{"type":"object","properties":{"mapType":{"type":"string","description":"race | royal | stunt | platform"},"environment":{"type":"string","description":"Stadium | RedIsland | GreenCoast | BlueBay | WhiteShore"},"mood":{"type":"string","description":"Sunrise | Day | Sunset | Night"},"inputDevice":{"type":"string","description":"mouse | gamepad"},"difficulty":{"type":"string","description":"simple | advanced"},"timeoutMs":{"type":"integer","description":"Final poll timeout waiting for Editor mode (default 10000ms)"}},"required":["mapType","environment","mood","inputDevice","difficulty","timeoutMs"],"additionalProperties":false}'));
+        tools.Add(MakeTool("GetManiaScriptDiagnostics", "Read native ManiaScript crash prompt text and debugger visibility. Reports log API limitations; use an overlay-visible screenshot for the native debugger log. Does not restart or dismiss anything.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("RunManialinkScript", "Inject ad-hoc ManiaScript via MLHook (menu/in-map/in-editor). script without outer <manialink>. Optional collectMs>0 registers a result hook: script should SendCustomEvent(\"MLHook_Event_McpAdHoc_Result\", [payload...]) (or resultEvent). Also pageUid/replace/persist/waitMs.", '{"type":"object","properties":{"script":{"type":"string"},"context":{"type":"string"},"pageUid":{"type":"string"},"replace":{"type":"boolean"},"persist":{"type":"boolean"},"waitMs":{"type":"integer"},"collectMs":{"type":"integer"},"resultEvent":{"type":"string"}},"required":["script"],"additionalProperties":false}'));
 
         tools.Add(MakeTool("GetReadiness", "Composite preflight: mode/dialog/editor-ready/inventory/map/calculatingShadows checks. want=editor|menu|any|race. Editor want is not ready while calculating shadows.", '{"type":"object","properties":{"want":{"type":"string"}},"additionalProperties":false}'));
@@ -1377,7 +1404,8 @@ namespace TmMcp {
         tools.Add(MakeTool("GetResult", "Poll for async tool result. input: {requestId}. Returns {request_id, status:'pending'|'done'|'error', result?/error?}. Used after DispatchAsync (in-process only).", '{"type":"object","properties":{"requestId":{"type":"string"},"request_id":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ListToolPacks", "List registered MCP tool packs and the bridge's cached update status. Packs include id, plugin, toolCount, enabled, installedVersion, latestReleaseUrl, latestVersion, updateAvailable, updateStatus, updateStale, timestamps and warnings. output.bridge has the bridge's own version status. Reads never wait for HTTP; false updateAvailable can mean unknown, so inspect updateStatus and updateStale.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetTypeInfo", "Openplanet Reflection dump for a class and all its members (default). Pass className (e.g. CGameCtnChallenge); optional classId (int or 0x hex) or from=app|editor|challenge|cursor|pluginMap (TypeOf a live nod). Default includes inherited members (declaredOn); ownOnly:true keeps only this class. Optional member (one name), query (case-insensitive substring), limit. Each member has name, offset/offsetHex, isField (false when offset is 0xFFFF, typically a method), declaredOn. MwMemberInfo has no member type name.", '{"type":"object","properties":{"className":{"type":"string"},"classId":{"type":["string","integer"]},"from":{"type":"string"},"member":{"type":"string"},"ownOnly":{"type":"boolean"},"query":{"type":"string"},"limit":{"type":"integer"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("ControlFids", "Openplanet Fids:: — browse and operate on the five file drives (game|user|fake|resource|programData). action: drives (list roots), get (file or folder metadata; kind=file|folder|auto), list (one-level children; query/limit/offset/kind), preload (Fids::Preload — loads the nod; check nod.className / nod.ptr), updateTree (rescan disk; refuses empty game path unless force:true), extract (Fids::Extract to disk, or dest=relative name via CopyToFileRelative; writes files), getFullPath, fromNod (GetFidFromNod of from_ptr — hex or int nod pointer from preload/get includeNod or another tool; not from=app|editor). Paths are drive-relative (e.g. GameData/Stadium/GameCtnDecoration). list default limit 80 max 400. Guide: GetGuide {topic:fids}.", '{"type":"object","properties":{"action":{"type":"string"},"drive":{"type":"string"},"path":{"type":"string"},"kind":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer"},"offset":{"type":"integer"},"includeNod":{"type":"boolean"},"withFiles":{"type":"boolean"},"force":{"type":"boolean"},"hookMethod":{"type":"boolean"},"dest":{"type":"string"},"failIfExists":{"type":"boolean"},"from_ptr":{"type":["string","integer"]},"fromPtr":{"type":["string","integer"]},"updateTree":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
+        tools.Add(MakeTool("ControlFids", "Openplanet Fids:: — browse and operate on the five file drives (game|user|fake|resource|programData). action: drives (list roots), get (file or folder metadata; kind=file|folder|auto), list (one-level children; query/limit/offset/kind), preload (Fids::Preload — loads the nod; check nod.className / nod.ptr), updateTree (rescan disk; refuses empty game path unless force:true), extract (Fids::Extract to disk, or dest=relative name via CopyToFileRelative; writes files), getFullPath, fromNod (GetFidFromNod of from_ptr — hex or int nod pointer from preload/get includeNod or another tool; not from=app|editor). getText reads CPlugFileTextScript.Text (find+context grep or offset+length slice, max 65536). Paths are drive-relative (e.g. GameData/Stadium/GameCtnDecoration). list default limit 80 max 400. Guide: GetGuide {topic:fids}.", '{"type":"object","properties":{"action":{"type":"string"},"drive":{"type":"string"},"path":{"type":"string"},"kind":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer"},"offset":{"type":"integer"},"includeNod":{"type":"boolean"},"withFiles":{"type":"boolean"},"force":{"type":"boolean"},"hookMethod":{"type":"boolean"},"dest":{"type":"string"},"failIfExists":{"type":"boolean"},"from_ptr":{"type":["string","integer"]},"fromPtr":{"type":["string","integer"]},"updateTree":{"type":"boolean"},"find":{"type":"string"},"context":{"type":"integer"},"maxHits":{"type":"integer"},"caseInsensitive":{"type":"boolean"},"length":{"type":"integer"}},"required":["action"],"additionalProperties":false}'));
+        tools.Add(MakeTool("ScanKinematicItems", "Read-only scan of .Item.Gbx files in a fid folder (default game:GameData/Stadium/Items): preload each item, walk EntityModel CPlugPrefab.Ents for NPlugDyna_SKinematicConstraint models, and report per KC the ShaderTcType, ShaderTcAnimFunc keys {durationMs,value} (step-evaluated sub-texture index over time), ShaderTcData.TransSub {NbSubTexture,PerLine,PerCol}, and the Trans/Rot anim-func summaries. Params: drive (default game), path, query (filename substring), limit (default 200 max 1000), offset, includeWithoutKc (also list items without a KC).", '{"type":"object","properties":{"drive":{"type":"string"},"path":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer"},"offset":{"type":"integer"},"includeWithoutKc":{"type":"boolean"},"includeEnts":{"type":"boolean"}},"additionalProperties":false}'));
         AppendPackTools(tools);
         return tools;
     }
@@ -1385,7 +1413,9 @@ namespace TmMcp {
     Json::Value MakeTool(const string &in name, const string &in description, const string &in inputSchemaJson) {
         Json::Value tool = Json::Object();
         tool["name"] = name;
-        tool["description"] = description;
+        tool["description"] = description + (ShouldObserveDialogAfterTool(name)
+            ? " After one rendered frame, successful public socket calls also return output.dialogAfter (the full GetDialog snapshot) and output.dialogAfterFrameDelay=1."
+            : "");
         tool["input_schema"] = Json::Parse(inputSchemaJson);
         return tool;
     }
@@ -1412,6 +1442,13 @@ namespace TmMcp {
         output["curGameModeStr"] = GetCurGameModeStr();
         output["calculatingShadows"] = DetectCalculatingShadows();
         return MakeSuccess(output);
+    }
+
+    Json::Value@ ShutdownGame(Json::Value &in input) {
+        if (!input.HasKey("confirm") || !bool(input["confirm"])) {
+            return MakeError("shutdown requires confirm:true", "CONFIRM_REQUIRED", false, "", "This starts a countdown and may terminate Trackmania when it expires.");
+        }
+        return RequestShutdownGame();
     }
 
     Json::Value@ BackToMainMenu(Json::Value &in input) {
@@ -1835,7 +1872,14 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
-    void OpenMapInEditorCoroutine(const string &in path) {
+    void OpenMapInEditorCoroutine(const string &in packed) {
+        auto spec = Json::Parse(packed);
+        if (spec is null || !spec.HasKey("path")) {
+            warn("TM Control MCP OpenMapInEditor: bad coroutine payload");
+            return;
+        }
+        string path = string(spec["path"]);
+        string decoration = spec.HasKey("decoration") ? string(spec["decoration"]) : "";
         if (!Permissions::OpenAdvancedMapEditor()) {
             warn("TM Control MCP OpenMapInEditor: missing advanced map editor permission");
             return;
@@ -1866,7 +1910,11 @@ namespace TmMcp {
             yield();
         }
         yield();
-        app.ManiaTitleControlScriptAPI.EditMap(path, "", "");
+        // plain EditMap silently no-ops back to the menu on current game builds
+        // (the proc runs but never loads); the UI flow uses EditMap4/5
+        MwFastBuffer<wstring> pluginScripts;
+        MwFastBuffer<wstring> pluginArgs;
+        app.ManiaTitleControlScriptAPI.EditMap4(path, decoration, "", "", pluginScripts, pluginArgs, true);
     }
 
     Json::Value@ OpenMapInEditor(Json::Value &in input) {
@@ -1875,7 +1923,10 @@ namespace TmMcp {
         if (path.Length == 0) return MakeError("path is empty");
         if (!Permissions::OpenAdvancedMapEditor()) return MakeError("advanced map editor permission unavailable");
 
-        startnew(CoroutineFuncUserdataString(OpenMapInEditorCoroutine), path);
+        auto spec = Json::Object();
+        spec["path"] = path;
+        if (input.HasKey("decoration")) spec["decoration"] = string(input["decoration"]);
+        startnew(CoroutineFuncUserdataString(OpenMapInEditorCoroutine), Json::Write(spec));
 
         Json::Value output = Json::Object();
         output["queued"] = true;
@@ -2144,12 +2195,16 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         return arr;
     }
 
-    Json::Value@ GetDialog(Json::Value &in input) {
+    Json::Value BuildDialogSummary() {
         auto summary = BasicDialogSummary();
         summary["editorFrames"] = EditorInterfaceFramesSummary();
         summary["tempMessage"] = _GetEditorTempMessage();
         summary["activeMenus"] = ActiveMenusFramesSummary();
-        return MakeSuccess(summary);
+        return summary;
+    }
+
+    Json::Value@ GetDialog(Json::Value &in input) {
+        return MakeSuccess(BuildDialogSummary());
     }
 
     Json::Value@ RespondDialog(Json::Value &in input) {
@@ -2448,6 +2503,8 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
     Json::Value@ SetEditorCamera(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.PluginMapType is null) return MakeError("editor not available", "NOT_IN_EDITOR", true, "Editor");
+        auto modeError = EditorCameraModeError(editor);
+        if (modeError !is null) return modeError;
         bool hasTarget = input.HasKey("x") && input.HasKey("y") && input.HasKey("z");
         bool hasDistance = input.HasKey("distance");
         bool hasH = input.HasKey("hAngle") || input.HasKey("hAngleRad");
@@ -2507,6 +2564,10 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         auto pmt = editor.PluginMapType;
         auto camera = pmt.Camera;
         string action = input.HasKey("action") ? string(input["action"]) : "status";
+        if (action != "status") {
+            auto modeError = EditorCameraModeError(editor);
+            if (modeError !is null) return modeError;
+        }
         bool smooth = input.HasKey("smooth") ? bool(input["smooth"]) : true;
 
         Json::Value before = CameraToJson(editor);
@@ -2906,15 +2967,23 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         vec3 center = hasCenter ? PositionInput(input) : vec3();
         float radius = input.HasKey("radius") ? float(input["radius"]) : 50.0;
         int limit = input.HasKey("limit") ? int(input["limit"]) : 100;
+        int offset = input.HasKey("offset") ? int(input["offset"]) : 0;
+        string query = input.HasKey("query") ? string(input["query"]).ToLower() : "";
         if (limit < 1) limit = 1;
         if (limit > 500) limit = 500;
+        if (offset < 0) offset = 0;
         float radiusSq = radius * radius;
 
         Json::Value items = Json::Array();
+        int matched = 0;
         for (uint i = 0; i < map.AnchoredObjects.Length && items.Length < uint(limit); i++) {
             auto item = map.AnchoredObjects[i];
             if (item is null) continue;
             if (hasCenter && (item.AbsolutePositionInMap - center).LengthSquared() > radiusSq) continue;
+            auto model = item.ItemModel;
+            string itemName = model is null ? "" : model.IdName;
+            if (query.Length > 0 && itemName.ToLower().IndexOf(query) < 0) continue;
+            if (matched++ < offset) continue;
             auto obj = ItemToJson(item);
             obj["index"] = int(i);
             items.Add(obj);
@@ -2924,6 +2993,8 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["items"] = items;
         output["count"] = int(items.Length);
         output["total"] = int(map.AnchoredObjects.Length);
+        output["offset"] = offset;
+        output["query"] = query;
         output["hasCenter"] = hasCenter;
         if (hasCenter) {
             output["center"] = Vec3ToJson(center);

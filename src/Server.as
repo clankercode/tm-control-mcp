@@ -15,8 +15,9 @@ bool S_TmMcpEnableSocket = true;
 
 namespace TmMcp {
     const uint MAX_ACTIVE_CLIENTS = 8;
-    const uint CLIENT_READ_TIMEOUT_MS = 2000;
-    const uint CLIENT_QUIET_FRAMES_AFTER_BYTES = 3;
+    const uint CLIENT_READ_TIMEOUT_MS = 10000;
+    const uint CLIENT_MAX_REQUEST_BYTES = 16 * 1024 * 1024;
+    const uint CLIENT_READ_CHUNK_BYTES = 1024;
 
     Net::Socket@ g_socket = null;
     bool g_running = false;
@@ -239,8 +240,9 @@ namespace TmMcp {
         Net::Socket@ client = cast<Net::Socket@>(userdata);
         if (client is null) return;
 
-        string payload = ReadRequestPayload(client);
-        Json::Value@ response = HandlePayload(payload);
+        string readError;
+        string payload = ReadRequestPayload(client, readError);
+        Json::Value@ response = readError.Length == 0 ? HandlePayload(payload) : MakeResponse("", "", null, readError);
         string responseText = Json::Write(response);
 
         if (S_TmMcpTraceRequests) {
@@ -263,33 +265,36 @@ namespace TmMcp {
         } catch {}
     }
 
-    string ReadRequestPayload(Net::Socket@ client) {
+    string ReadRequestPayload(Net::Socket@ client, string &out error) {
         string payload = "";
-        bool sawBytes = false;
-        uint quietFrames = 0;
-        uint timeoutAt = Time::Now + CLIENT_READ_TIMEOUT_MS;
-
-        while (Time::Now <= timeoutAt) {
-            int available = 0;
-            try {
-                available = client.Available();
-            } catch {
-                warn("TM Control MCP failed checking client bytes: " + getExceptionInfo());
-                break;
+        error = "";
+        uint started = Time::Now;
+        while (Time::Now - started <= CLIENT_READ_TIMEOUT_MS) {
+            // ReadRaw has a small native receive buffer. Asking for Available()
+            // wholesale silently lost bytes in a 24 KB request (only 3840 read).
+            // Bound each read; drain a bounded batch before yielding a frame.
+            for (uint batch = 0; batch < 64; batch++) {
+                int available = client.Available();
+                if (available <= 0) {
+                    if (client.IsHungUp()) return payload; // legacy EOF framing
+                    break;
+                }
+                uint amount = Math::Min(uint(available), CLIENT_READ_CHUNK_BYTES);
+                string chunk = client.ReadRaw(amount);
+                if (chunk.Length == 0) break;
+                if (uint(payload.Length) + uint(chunk.Length) > CLIENT_MAX_REQUEST_BYTES) {
+                    error = "request exceeds 16 MiB limit";
+                    return "";
+                }
+                payload += chunk;
+                if (payload.EndsWith("\n")) return payload;
             }
-            if (available > 0) {
-                payload += client.ReadRaw(available);
-                if (payload.EndsWith("\n")) break;
-                sawBytes = true;
-                quietFrames = 0;
-            } else if (sawBytes) {
-                quietFrames++;
-                if (quietFrames >= CLIENT_QUIET_FRAMES_AFTER_BYTES) break;
-            }
+            // A quiet socket is not an EOF. TCP fragments can arrive after any
+            // number of rendered frames; keep waiting for newline or real close.
             yield();
         }
-
-        return payload;
+        error = "timed out waiting for complete request (newline or EOF)";
+        return "";
     }
 }
 

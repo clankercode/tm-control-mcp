@@ -19,6 +19,7 @@ namespace TmMcp {
         if (a == "stat") return "get";
         if (a == "ls") return "list";
         if (a == "load") return "preload";
+        if (a == "gettext" || a == "readtext") return "getText";
         return a;
     }
 
@@ -613,6 +614,101 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
+    const int FIDS_TEXT_SLICE_DEFAULT = 2048;
+    const int FIDS_TEXT_SLICE_MAX = 65536;
+    const int FIDS_TEXT_FIND_CTX_DEFAULT = 120;
+    const int FIDS_TEXT_FIND_MAX_HITS = 20;
+
+    CPlugFileTextScript@ FidsNeedTextScript(CSystemFidFile@ file, string &out err) {
+        err = "";
+        if (file is null) { err = "fid is null"; return null; }
+        CMwNod@ nod = file.Nod;
+        if (nod is null) {
+            try { @nod = Fids::Preload(file); } catch {
+                err = "Preload threw: " + getExceptionInfo();
+                return null;
+            }
+        }
+        if (nod is null) { err = "preload returned null"; return null; }
+        auto script = cast<CPlugFileTextScript>(nod);
+        if (script is null) {
+            auto ty = Reflection::TypeOf(nod);
+            err = "nod is not CPlugFileTextScript (got " + (ty is null ? "?" : string(ty.Name)) + ")";
+            return null;
+        }
+        return script;
+    }
+
+    Json::Value FidsTextGrep(const string &in src, const string &in needle, int ctx, int maxHits, bool caseInsensitive) {
+        Json::Value hits = Json::Array();
+        if (needle.Length == 0) return hits;
+        string hay = caseInsensitive ? src.ToLower() : src;
+        string need = caseInsensitive ? needle.ToLower() : needle;
+        int pos = 0;
+        int count = 0;
+        while (count < maxHits) {
+            string tail = hay.SubStr(uint(pos));
+            int rel = tail.IndexOf(need);
+            if (rel < 0) break;
+            int abs = pos + rel;
+            int start = abs - ctx; if (start < 0) start = 0;
+            int endRaw = abs + int(needle.Length) + ctx;
+            if (endRaw > int(src.Length)) endRaw = int(src.Length);
+            Json::Value h = Json::Object();
+            h["offset"] = abs;
+            h["snippet"] = src.SubStr(uint(start), uint(endRaw - start));
+            hits.Add(h);
+            pos = abs + int(needle.Length);
+            count++;
+        }
+        return hits;
+    }
+
+    Json::Value@ FidsActionGetText(Json::Value &in input) {
+        CSystemFidFile@ file;
+        Json::Value@ miss = FidsNeedFile(input, "getText", file);
+        if (miss !is null) return miss;
+        string err;
+        auto script = FidsNeedTextScript(file, err);
+        if (script is null) return MakeError(err, "NOT_TEXT_SCRIPT");
+        string src = "";
+        try { src = script.Text; } catch {
+            return MakeError("CPlugFileTextScript.Text threw: " + getExceptionInfo(), "TEXT_READ_FAILED", true);
+        }
+        Json::Value output = Json::Object();
+        output["action"] = "getText";
+        output["fid"] = FidsFileJson(file, true);
+        output["textLength"] = int(src.Length);
+
+        if (input.HasKey("find")) {
+            string needle = string(input["find"]);
+            int ctx = input.HasKey("context") ? int(input["context"]) : FIDS_TEXT_FIND_CTX_DEFAULT;
+            if (ctx < 0) ctx = 0;
+            if (ctx > 1024) ctx = 1024;
+            int maxHits = input.HasKey("maxHits") ? int(input["maxHits"]) : FIDS_TEXT_FIND_MAX_HITS;
+            if (maxHits < 1) maxHits = 1;
+            if (maxHits > 64) maxHits = 64;
+            bool caseInsensitive = input.HasKey("caseInsensitive") && bool(input["caseInsensitive"]);
+            auto hits = FidsTextGrep(src, needle, ctx, maxHits, caseInsensitive);
+            output["find"] = needle;
+            output["hits"] = hits;
+            output["count"] = int(hits.Length);
+            return MakeSuccess(output);
+        }
+
+        int offset = input.HasKey("offset") ? int(input["offset"]) : 0;
+        int length = input.HasKey("length") ? int(input["length"]) : FIDS_TEXT_SLICE_DEFAULT;
+        if (offset < 0) offset = 0;
+        if (offset > int(src.Length)) offset = int(src.Length);
+        if (length < 0) length = 0;
+        if (length > FIDS_TEXT_SLICE_MAX) length = FIDS_TEXT_SLICE_MAX;
+        int endRaw = offset + length;
+        if (endRaw > int(src.Length)) endRaw = int(src.Length);
+        output["offset"] = offset;
+        output["slice"] = src.SubStr(uint(offset), uint(endRaw - offset));
+        return MakeSuccess(output);
+    }
+
     Json::Value@ ControlFids(Json::Value &in input) {
         string raw = input.HasKey("action") ? string(input["action"]) : "";
         if (raw.Length == 0) {
@@ -621,7 +717,7 @@ namespace TmMcp {
                 "BAD_ACTION",
                 false,
                 "",
-                "drives|get|list|preload|updateTree|extract|getFullPath|fromNod"
+                "drives|get|list|preload|updateTree|extract|getFullPath|fromNod|getText"
             );
         }
         string action = FidsNormAction(raw);
@@ -633,9 +729,176 @@ namespace TmMcp {
         if (action == "extract") return FidsActionExtract(input);
         if (action == "getFullPath") return FidsActionGetFullPath(input);
         if (action == "fromNod") return FidsActionFromNod(input);
+        if (action == "getText") return FidsActionGetText(input);
         return MakeError(
-            "unknown action '" + raw + "' (expected drives|get|list|preload|updateTree|extract|getFullPath|fromNod)",
+            "unknown action '" + raw + "' (expected drives|get|list|preload|updateTree|extract|getFullPath|fromNod|getText)",
             "BAD_ACTION"
         );
+    }
+    // Member offset by reflection (E++ Dev.as pattern).
+    uint16 FidsMemberOffset(CMwNod@ obj, const string &in memberName) {
+        if (obj is null) throw("null nod for member " + memberName);
+        auto ty = Reflection::TypeOf(obj);
+        if (ty is null) throw("could not find a type for object");
+        auto memberTy = ty.GetMember(memberName);
+        if (memberTy is null) throw(ty.Name + " does not have a member called " + memberName);
+        if (memberTy.Offset == 0xFFFF) throw("invalid offset for " + memberName);
+        return memberTy.Offset;
+    }
+
+    // Scan .Item.Gbx leaves of a fid folder for prefab ents whose Model is an
+    // NPlugDyna_SKinematicConstraint, and dump each KC's Trans/Rot anim funcs
+    // plus the ShaderTc (TransSubTexture) state. Read-only; Fids::Preload
+    // resolves pack-backed items (default GameData/Stadium/Items).
+    Json::Value@ ScanKinematicItems(Json::Value &in input) {
+        string rawDrive = input.HasKey("drive") ? string(input["drive"]) : "game";
+        string drive = "";
+        string err = "";
+        if (!FidsNeedDrive(rawDrive, drive, err)) return MakeError(err, "BAD_DRIVE");
+        string path = FidsNormPath(input.HasKey("path") ? string(input["path"]) : "GameData/Stadium/Items");
+        string query = input.HasKey("query") ? string(input["query"]).ToLower() : "";
+        int limit = input.HasKey("limit") ? int(input["limit"]) : 200;
+        if (limit < 1) limit = 1;
+        if (limit > 1000) limit = 1000;
+        int offset = input.HasKey("offset") ? int(input["offset"]) : 0;
+        if (offset < 0) offset = 0;
+        bool includeWithoutKc = input.HasKey("includeWithoutKc") && bool(input["includeWithoutKc"]);
+        bool includeEnts = input.HasKey("includeEnts") && bool(input["includeEnts"]);
+
+        auto folder = FidsGetFolder(drive, path);
+        if (folder is null) return MakeError("folder not found: " + path, "NOT_FOUND");
+        Json::Value output = Json::Object();
+        output["path"] = path;
+        Json::Value items = Json::Array();
+        int scanned = 0;
+        int withKc = 0;
+        int skipped = 0;
+        int failures = 0;
+        for (uint i = 0; i < folder.Leaves.Length; i++) {
+            auto leaf = folder.Leaves[i];
+            if (leaf is null) continue;
+            string fn = leaf.FileName;
+            if (!fn.ToLower().EndsWith(".item.gbx")) continue;
+            if (query.Length > 0 && fn.ToLower().IndexOf(query) < 0) continue;
+            if (offset > 0) { offset--; continue; }
+            if (scanned >= limit) break;
+            scanned++;
+            Json::Value itemEntry = Json::Object();
+            itemEntry["fileName"] = fn;
+            auto itemModel = cast<CGameItemModel>(Fids::Preload(leaf));
+            if (itemModel is null) {
+                failures++;
+                itemEntry["error"] = "preload failed or not a CGameItemModel";
+                items.Add(itemEntry);
+                continue;
+            }
+            itemEntry["idName"] = string(itemModel.IdName);
+            auto prefab = cast<CPlugPrefab>(itemModel.EntityModel);
+            if (includeEnts && prefab !is null) {
+                Json::Value ents = Json::Array();
+                for (uint e = 0; e < prefab.Ents.Length; e++) {
+                    auto model = prefab.Ents[e].Model;
+                    Json::Value ent = Json::Object();
+                    ent["modelClass"] = model is null ? "(null)" : Reflection::TypeOf(model).Name;
+                    auto dyna = cast<CPlugDynaObjectModel>(model);
+                    if (dyna !is null) {
+                        Json::Value la = Json::Object();
+                        la["isStatic"] = dyna.IsStatic;
+                        la["dynamizeOnSpawn"] = dyna.DynamizeOnSpawn;
+                        la["locAnimIsPhysical"] = dyna.LocAnimIsPhysical;
+                        auto anim = dyna.LocAnim;
+                        if (anim !is null) {
+                            la["axis"] = anim.Axis;
+                            la["rotPeriod"] = anim.RotPeriod;
+                            la["rotPeriodMax"] = anim.RotPeriodMax;
+                            la["rotAngle"] = anim.RotAngle;
+                            la["rotFunc"] = tostring(anim.RotFunc);
+                            la["transPeriod"] = anim.TransPeriod;
+                            la["transPeriodMax"] = anim.TransPeriodMax;
+                            la["transY"] = anim.TransY;
+                            la["nightOnly"] = anim.NightOnly;
+                        }
+                        ent["dynaLocAnim"] = la;
+                    }
+                    ents.Add(ent);
+                }
+                itemEntry["entModelClasses"] = ents;
+            }
+            Json::Value kcs = Json::Array();
+            if (prefab !is null) {
+                for (uint e = 0; e < prefab.Ents.Length; e++) {
+                    auto kc = cast<NPlugDyna_SKinematicConstraint>(prefab.Ents[e].Model);
+                    if (kc is null) continue;
+                    kcs.Add(KinematicConstraintToJson(kc));
+                }
+            }
+            if (kcs.Length > 0) withKc++;
+            else if (!includeWithoutKc) { skipped++; continue; }
+            itemEntry["kcCount"] = int(kcs.Length);
+            itemEntry["kcs"] = kcs;
+            items.Add(itemEntry);
+        }
+        output["scanned"] = scanned;
+        output["withKc"] = withKc;
+        output["skippedNoKc"] = skipped;
+        output["failures"] = failures;
+        output["items"] = items;
+        return MakeSuccess(output);
+    }
+
+    Json::Value KinematicConstraintToJson(NPlugDyna_SKinematicConstraint@ kc) {
+        Json::Value o = Json::Object();
+        uint64 ptr = FidsPointerOfNod(kc);
+        if (ptr != 0) o["ptr"] = PtrToHex(ptr);
+        o["shaderTcType"] = tostring(kc.ShaderTcType);
+        o["shaderTcTypeInt"] = int(kc.ShaderTcType);
+        Json::Value nat = Json::Object();
+        uint16 natOff = FidsMemberOffset(kc, "ShaderTcAnimFunc");
+        uint natLen = Dev::GetOffsetUint32(kc, natOff);
+        nat["subFuncCount"] = natLen;
+        Json::Value natKeys = Json::Array();
+        uint natTotal = 0;
+        for (uint k = 0; k < natLen && k < 12; k++) {
+            uint sf = natOff + 0x4 + k * 0x8;
+            uint dur = Dev::GetOffsetUint32(kc, sf);
+            uint val = Dev::GetOffsetUint32(kc, sf + 0x4);
+            natTotal += dur;
+            Json::Value key = Json::Object();
+            key["durationMs"] = dur;
+            key["value"] = val;
+            natKeys.Add(key);
+        }
+        nat["totalDurationMs"] = natTotal;
+        nat["subFuncs"] = natKeys;
+        o["shaderTcAnimFunc"] = nat;
+        Json::Value transSub = Json::Object();
+        uint16 tsOff = FidsMemberOffset(kc, "ShaderTcData_TransSub");
+        transSub["nbSubTexture"] = Dev::GetOffsetUint32(kc, tsOff);
+        transSub["nbSubTexturePerLine"] = Dev::GetOffsetUint32(kc, tsOff + 0x4);
+        transSub["nbSubTexturePerColumn"] = Dev::GetOffsetUint32(kc, tsOff + 0x8);
+        o["shaderTcDataTransSub"] = transSub;
+        Json::Value trans = Json::Object();
+        trans["axis"] = tostring(kc.TransAxis);
+        trans["minM"] = kc.TransMin;
+        trans["maxM"] = kc.TransMax;
+        uint16 tOff = FidsMemberOffset(kc, "TransAnimFunc");
+        uint tLen = Dev::GetOffsetUint32(kc, tOff);
+        uint tTotal = 0;
+        for (uint k = 0; k < tLen && k < 4; k++) tTotal += Dev::GetOffsetUint32(kc, tOff + 0x4 + k * 0x8 + 0x4);
+        trans["subFuncCount"] = tLen;
+        trans["totalDurationMs"] = tTotal;
+        o["trans"] = trans;
+        Json::Value rot = Json::Object();
+        rot["axis"] = tostring(kc.RotAxis);
+        rot["minDeg"] = kc.AngleMinDeg;
+        rot["maxDeg"] = kc.AngleMaxDeg;
+        uint16 rOff = FidsMemberOffset(kc, "RotAnimFunc");
+        uint rLen = Dev::GetOffsetUint32(kc, rOff);
+        uint rTotal = 0;
+        for (uint k = 0; k < rLen && k < 4; k++) rTotal += Dev::GetOffsetUint32(kc, rOff + 0x4 + k * 0x8 + 0x4);
+        rot["subFuncCount"] = rLen;
+        rot["totalDurationMs"] = rTotal;
+        o["rot"] = rot;
+        return o;
     }
 }
