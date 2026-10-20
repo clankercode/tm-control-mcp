@@ -9,6 +9,10 @@ Versions follow `info.toml` `[meta] version`.
 
 ### Added
 
+- Generic editor-script status/reload, offline pending-value recovery, and preloaded user-pack inspection/mounting. Preserved local tooling is ported with public-only interfaces.
+- Confirmed, bounded text replacements for user editor scripts and menu pages, with readback verification.
+- DEV native-auth availability diagnostics without credential acquisition or values.
+
 - Read-only `GetManiaScriptDiagnostics`, `ControlFids getText`, item animation metadata scanning with `ScanKinematicItems`, and a tool-pack schema settings tab.
 - Successful dialog-prone socket actions include a dialog snapshot after one frame. Script result collection reports unconfirmed execution when no event arrives and preserves observed crash diagnostics.
 - `ShutdownGame` requires explicit confirmation and presents a cancellable 30-second countdown.
@@ -36,6 +40,8 @@ Versions follow `info.toml` `[meta] version`.
 - Map-load waits: idle budget is **20s** (was 12–15s). Once a loading screen is up (`WaitMessage` / `LoadProgress`), `WaitUntil`, `EditNewMap`, and `CreateMapViaMenu` keep waiting until the map finishes (hard cap 30 min). `call.py` socket timeout follows.
 
 ### Changed
+
+- Request traces record sizes only; raw arguments/responses are never logged. Metadata lines are bounded to 512 characters plus marker.
 
 - `GetMode` and `GetServerInfo` now include `curGameModeStr` from `app.Network.ServerInfo` (`TM_PlayMap_Local`, hotseat, matchmaking, …). Empty when ServerInfo is null (typical outside a map).
 - Map-summary reads (`GetMapInfo`, `GetItems`, `GetRecentItems`, `GetBlocks`, `GetRecentBlocks`, `GetWaypoints`, `GetMapEnvironment`) use `app.RootMap` (the same map nod in MapEditor and Race/play). Missing-map errors are `NO_MAP`. Mutators still require the editor (`NOT_IN_EDITOR`); `editor.Challenge` is an editor-presence check, not a different map.

@@ -159,7 +159,7 @@ normal settings UI **and** via MCP tools (`ListPluginSettings` / `SetPluginSetti
    - **Socket Host** — default `127.0.0.1` (keep localhost-only)
    - **Socket Port** — default `30006`
    - **Startup Delay (ms)** — delay before the listener binds
-   - **Trace Requests** — append request/response payloads to plugin storage (`request-trace.log`), not Openplanet.log
+   - **Trace Requests** — append request/response byte counts to plugin storage (`request-trace.log`); payload values are never logged
    - **Socket tab** — live status, start/stop (the enable flag is hidden)
 
 Host/port/enable **apply live** (no reload). Bind host is **127.0.0.1 only**.
@@ -650,3 +650,5 @@ No warranty. Trackmania and Nadeo assets remain subject to their own terms; this
 ## Credits
 
 Author: **XertroV** (`info.toml`). Maintained under **[clankercode](https://github.com/clankercode)**.
+
+Preserved development tools: [editor script control and recovery](docs/editor-script-plugins.md), [confirmed text replacement](docs/text-mutation.md), [user pack operations](docs/fid-packs.md), and the [publication decisions](docs/preserved-work-decisions.md).

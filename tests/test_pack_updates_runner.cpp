@@ -19,6 +19,14 @@ static std::string Trim(const std::string& s) {
 static std::string SubStr(unsigned start, unsigned count, const std::string& s) {
     return start >= s.size() ? "" : s.substr(start, count);
 }
+static std::string Replace(const std::string& needle, const std::string& replacement, const std::string& s) {
+    if (needle.empty()) return s;
+    std::string result; size_t pos = 0, at;
+    while ((at = s.find(needle, pos)) != std::string::npos) {
+        result.append(s, pos, at - pos); result += replacement; pos = at + needle.size();
+    }
+    result.append(s, pos, std::string::npos); return result;
+}
 static bool StartsWith(const std::string& prefix, const std::string& s) { return s.rfind(prefix, 0) == 0; }
 static int IndexOf(const std::string& needle, const std::string& s) {
     auto i = s.find(needle); return i == std::string::npos ? -1 : int(i);
@@ -50,6 +58,7 @@ int main(int argc, char** argv) {
     assert(e->RegisterObjectMethod("string", "uint get_Length() const property", asFUNCTION(Length), asCALL_CDECL_OBJLAST) >= 0);
     assert(e->RegisterObjectMethod("string", "string Trim() const", asFUNCTION(Trim), asCALL_CDECL_OBJLAST) >= 0);
     assert(e->RegisterObjectMethod("string", "string SubStr(uint, uint = 0xffffffff) const", asFUNCTION(SubStr), asCALL_CDECL_OBJLAST) >= 0);
+    assert(e->RegisterObjectMethod("string", "string Replace(const string &in, const string &in) const", asFUNCTION(Replace), asCALL_CDECL_OBJLAST) >= 0);
     assert(e->RegisterObjectMethod("string", "bool StartsWith(const string &in) const", asFUNCTION(StartsWith), asCALL_CDECL_OBJLAST) >= 0);
     assert(e->RegisterObjectMethod("string", "int IndexOf(const string &in) const", asFUNCTION(IndexOf), asCALL_CDECL_OBJLAST) >= 0);
     assert(e->RegisterObjectMethod("string", "array<string>@ Split(const string &in) const", asFUNCTION(Split), asCALL_CDECL_OBJLAST) >= 0);

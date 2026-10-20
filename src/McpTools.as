@@ -982,7 +982,7 @@ namespace TmMcp {
 
     bool IsToolName(const string &in name) {
 #if DEV
-        if (name == "DevCallGuardProbe") return true;
+        if (name == "DevCallGuardProbe" || name == "DevNativeAuthProbe") return true;
 #endif
         return name == "GetMode"
             || name == "OpenMapInEditor"
@@ -1088,22 +1088,18 @@ namespace TmMcp {
             || name == "GetResult"
             || name == "ListToolPacks"
             || name == "GetTypeInfo"
+            || name == "PatchLayerXml"
+            || name == "ControlEditorScriptPlugins"
             || name == "ControlFids"
             || name == "ScanKinematicItems"
             || IsPackToolName(name)
             || IsMovedEppTool(name);
     }
 
-    string CompactJsonForTrace(Json::Value &in value) {
-        string s = "{}";
-        try { s = Json::Write(value); } catch {}
-        if (s.Length > 180) s = s.SubStr(0, 180) + "...";
-        return s;
-    }
-
     Json::Value@ DispatchTool(const string &in name, Json::Value &in input) {
 #if DEV
         if (name == "DevCallGuardProbe") return DevCallGuardProbe(input);
+        if (name == "DevNativeAuthProbe") return RunDevNativeAuthProbe(input);
 #endif
         if (ToolRequiresEditorPlusPlus(name) && !IsEditorPlusPlusAvailable()) {
             return EditorPlusPlusMissingError();
@@ -1245,6 +1241,8 @@ namespace TmMcp {
         if (name == "GetResult") return GetResult(input);
         if (name == "ListToolPacks") return ListToolPacks(input);
         if (name == "GetTypeInfo") return GetTypeInfo(input);
+        if (name == "PatchLayerXml") return PatchLayerXml(input);
+        if (name == "ControlEditorScriptPlugins") return ControlEditorScriptPlugins(input);
         if (name == "ControlFids") return ControlFids(input);
         if (name == "ScanKinematicItems") return ScanKinematicItems(input);
         Json::Value@ packResult = DispatchPackTool(name, input);
@@ -1386,8 +1384,13 @@ namespace TmMcp {
         tools.Add(MakeTool("GetResult", "Poll for async tool result. input: {requestId}. Returns {request_id, status:'pending'|'done'|'error', result?/error?}. Used after DispatchAsync (in-process only).", '{"type":"object","properties":{"requestId":{"type":"string"},"request_id":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ListToolPacks", "List registered MCP tool packs and the bridge's cached update status. Packs include id, plugin, toolCount, enabled, installedVersion, latestReleaseUrl, latestVersion, updateAvailable, updateStatus, updateStale, timestamps and warnings. output.bridge has the bridge's own version status. Reads never wait for HTTP; false updateAvailable can mean unknown, so inspect updateStatus and updateStale.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetTypeInfo", "Openplanet Reflection dump for a class and all its members (default). Pass className (e.g. CGameCtnChallenge); optional classId (int or 0x hex) or from=app|editor|challenge|cursor|pluginMap (TypeOf a live nod). Default includes inherited members (declaredOn); ownOnly:true keeps only this class. Optional member (one name), query (case-insensitive substring), limit. Each member has name, offset/offsetHex, isField (false when offset is 0xFFFF, typically a method), declaredOn. MwMemberInfo has no member type name.", '{"type":"object","properties":{"className":{"type":"string"},"classId":{"type":["string","integer"]},"from":{"type":"string"},"member":{"type":"string"},"ownOnly":{"type":"boolean"},"query":{"type":"string"},"limit":{"type":"integer"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("ControlFids", "Openplanet Fids:: — browse and operate on the five file drives (game|user|fake|resource|programData). action: drives (list roots), get (file or folder metadata; kind=file|folder|auto), list (one-level children; query/limit/offset/kind), preload (Fids::Preload — loads the nod; check nod.className / nod.ptr), updateTree (rescan disk; refuses empty game path unless force:true), extract (Fids::Extract to disk, or dest=relative name via CopyToFileRelative; writes files), getFullPath, fromNod (GetFidFromNod of from_ptr — hex or int nod pointer from preload/get includeNod or another tool; not from=app|editor). getText reads CPlugFileTextScript.Text (find+context grep or offset+length slice, max 65536). Paths are drive-relative (e.g. GameData/Stadium/GameCtnDecoration). list default limit 80 max 400. Guide: GetGuide {topic:fids}.", '{"type":"object","properties":{"action":{"type":"string"},"drive":{"type":"string"},"path":{"type":"string"},"kind":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer"},"offset":{"type":"integer"},"includeNod":{"type":"boolean"},"withFiles":{"type":"boolean"},"force":{"type":"boolean"},"hookMethod":{"type":"boolean"},"dest":{"type":"string"},"failIfExists":{"type":"boolean"},"from_ptr":{"type":["string","integer"]},"fromPtr":{"type":["string","integer"]},"updateTree":{"type":"boolean"},"find":{"type":"string"},"context":{"type":"integer"},"maxHits":{"type":"integer"},"caseInsensitive":{"type":"boolean"},"length":{"type":"integer"}},"required":["action"],"additionalProperties":false}'));
+        tools.Add(MakeTool("ControlFids", "Openplanet Fids:: — browse and operate on the five file drives (game|user|fake|resource|programData). action: drives (list roots), get (file or folder metadata; kind=file|folder|auto), list (one-level children; query/limit/offset/kind), preload (Fids::Preload — loads the nod; check nod.className / nod.ptr), updateTree (rescan disk; refuses empty game path unless force:true), extract (Fids::Extract to disk, or dest=relative name via CopyToFileRelative; writes files), getFullPath, fromNod (GetFidFromNod of from_ptr — hex or int nod pointer from preload/get includeNod or another tool; not from=app|editor). packStatus/mountPack/unmountPack inspect or confirm preloaded USER-pack mounts using owned identities (mutations Menu only). setText confirms bounded find/replace of user editor scripts only in the idle map editor (confirm:true); getText reads CPlugFileTextScript.Text (find+context grep or offset+length slice, max 65536). Paths are drive-relative (e.g. GameData/Stadium/GameCtnDecoration). list default limit 80 max 400. Guide: GetGuide {topic:fids}.", '{"type":"object","properties":{"action":{"type":"string"},"drive":{"type":"string"},"path":{"type":"string"},"kind":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer"},"offset":{"type":"integer"},"includeNod":{"type":"boolean"},"withFiles":{"type":"boolean"},"force":{"type":"boolean"},"hookMethod":{"type":"boolean"},"dest":{"type":"string"},"failIfExists":{"type":"boolean"},"from_ptr":{"type":["string","integer"]},"fromPtr":{"type":["string","integer"]},"updateTree":{"type":"boolean"},"find":{"type":"string"},"context":{"type":"integer"},"maxHits":{"type":"integer"},"replace":{"type":"string"},"replaceAll":{"type":"boolean"},"confirm":{"type":"boolean"},"caseInsensitive":{"type":"boolean"},"length":{"type":"integer"}},"required":["action"],"additionalProperties":false}'));
         tools.Add(MakeTool("ScanKinematicItems", "Read-only scan of .Item.Gbx files in a fid folder (default game:GameData/Stadium/Items): preload each item, walk EntityModel CPlugPrefab.Ents for NPlugDyna_SKinematicConstraint models, and report per KC the ShaderTcType, ShaderTcAnimFunc keys {durationMs,value} (step-evaluated sub-texture index over time), ShaderTcData.TransSub {NbSubTexture,PerLine,PerCol}, and the Trans/Rot anim-func summaries. Params: drive (default game), path, query (filename substring), limit (default 200 max 1000), offset, includeWithoutKc (also list items without a KC).", '{"type":"object","properties":{"drive":{"type":"string"},"path":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer"},"offset":{"type":"integer"},"includeWithoutKc":{"type":"boolean"},"includeEnts":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("PatchLayerXml", "Confirmed bounded find/replace in a menu page. Menu only; no driving or editor testing. Reports assignment readback, not script compilation.", '{"type":"object","properties":{"find":{"type":"string"},"replace":{"type":"string"},"replaceAll":{"type":"boolean"},"confirm":{"type":"boolean"},"layerIndex":{"type":"integer"}},"required":["layerIndex","find","replace","confirm"],"additionalProperties":false}'));
+        tools.Add(MakeTool("ControlEditorScriptPlugins", "Inspect forced editor script names or confirm a native reload in the idle map editor. No source/version confirmation or private script transport.", '{"type":"object","properties":{"action":{"type":"string","enum":["status","reload"]},"confirm":{"type":"boolean"}},"additionalProperties":false}'));
+#if DEV
+        tools.Add(MakeTool("DevNativeAuthProbe", "Availability-only native auth diagnostics. No credential values are read or requested.", '{"type":"object","properties":{"mode":{"type":"string","enum":["status"]}},"additionalProperties":false}'));
+#endif
         AppendPackTools(tools);
         return tools;
     }

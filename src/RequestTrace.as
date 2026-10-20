@@ -1,5 +1,5 @@
-// Request/response payload trace — plugin-storage file, not Openplanet.log.
-// Openplanet.log stays short: one line with route/tool + byte counts.
+// Bounded lifecycle and exchange metadata; payload values never enter traces.
+// 512-character metadata lines; zero raw argument/response characters.
 
 const uint TM_MCP_TRACE_ROTATE_BYTES = 2000000;
 
@@ -13,8 +13,8 @@ string TmMcpRequestTracePrevPath() {
 
 string TmMcpTraceOneLine(const string &in raw) {
     string s = raw.Replace("\r\n", "\\n").Replace("\n", "\\n").Replace("\r", "\\n");
-    if (s.Length > 16000) {
-        return s.SubStr(0, 16000) + "...[" + s.Length + " bytes]";
+    if (s.Length > 512) {
+        return s.SubStr(0, 512) + "...[" + s.Length + " bytes]";
     }
     return s;
 }
@@ -43,6 +43,5 @@ void TmMcpAppendRequestTrace(const string &in kind, const string &in payload) {
 
 void TmMcpTraceExchange(const string &in payload, const string &in responseText) {
     if (!S_TmMcpTraceRequests) return;
-    TmMcpAppendRequestTrace("request", payload);
-    TmMcpAppendRequestTrace("response", responseText);
+    TmMcpAppendRequestTrace("exchange", "requestBytes=" + payload.Length + " responseBytes=" + responseText.Length);
 }

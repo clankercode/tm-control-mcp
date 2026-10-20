@@ -192,7 +192,7 @@ void RenderSocketSettingsBody() {
         UI::SetTooltip("Wait this many milliseconds after plugin start before binding the TCP listener,\nso Openplanet and other plugins can finish loading. Does not apply to live rebind.");
     }
     UI::Dummy(vec2(0, 4));
-    S_TmMcpTraceRequests = UI::Checkbox("Trace request payloads to plugin storage", S_TmMcpTraceRequests);
+    S_TmMcpTraceRequests = UI::Checkbox("Trace exchange sizes to plugin storage", S_TmMcpTraceRequests);
     if (S_TmMcpTraceRequests) {
         UI::TextWrapped("\\$888" + TmMcpRequestTracePath());
     }
