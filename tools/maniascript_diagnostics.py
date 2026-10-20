@@ -10,15 +10,26 @@ import sys
 def collect(call, screenshot=False):
     diagnostics = call("GetManiaScriptDiagnostics", {})
     report = {"diagnostics": diagnostics}
-    result = diagnostics.get("data", {}).get("result", {})
-    output = result.get("output", {})
-    report["diagnosticsConfirmed"] = diagnostics.get("ok") is True and result.get("success") is True
-    report["crashDialogDetected"] = output.get("crashDialogDetected") if report["diagnosticsConfirmed"] else None
+    envelope = diagnostics if isinstance(diagnostics, dict) else {}
+    data = envelope.get("data")
+    result = data.get("result") if isinstance(data, dict) else None
+    output = result.get("output") if isinstance(result, dict) else None
+    report["diagnosticsConfirmed"] = (
+        envelope.get("ok") is True
+        and isinstance(result, dict)
+        and result.get("success") is True
+        and isinstance(output, dict)
+    )
+    crash = output.get("crashDialogDetected") if report["diagnosticsConfirmed"] else None
+    report["crashDialogDetected"] = crash if isinstance(crash, bool) else None
     # No native log getter exists. Never call missing text an empty/clean log.
     report["logAvailable"] = False
     report["nextStep"] = "Read the native Script debugger Log tab in the captured image before recovery. A dismissed prompt is not proof of script health."
     if screenshot:
-        report["screenshot"] = call("TakeScreenshot", {"currentView": True, "hideOverlay": False})
+        try:
+            report["screenshot"] = call("TakeScreenshot", {"currentView": True, "hideOverlay": False})
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            report["screenshotError"] = str(exc)
     return report
 
 
@@ -43,7 +54,8 @@ def main():
     if args.output:
         args.output.write_text(encoded + "\n")
     print(encoded)
-    return 0 if report.get("diagnosticsConfirmed") else 1
+    # A requested capture failure signals incomplete evidence without demoting diagnostics.
+    return 0 if report.get("diagnosticsConfirmed") and "screenshotError" not in report else 1
 
 
 if __name__ == "__main__":
