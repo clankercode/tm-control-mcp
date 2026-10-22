@@ -1,0 +1,10 @@
+# Example launcher configuration for a wrapper script. The binary accepts the
+# equivalent flags directly; this file is documentation rather than a runtime
+# parser input.
+mode = "stdio"
+native_host = "127.0.0.1"
+native_port = 30006
+http_listen = "127.0.0.1:30007"
+catalog_poll_ms = 2000
+events_jsonl = "/tmp/tm-control-events.jsonl"
+allowed_origins = []
