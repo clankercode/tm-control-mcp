@@ -129,7 +129,13 @@ namespace TmMcp {
             return MakeResponse(id, route, null, "invalid input for " + tool + ": " + validationErr);
         }
 
-        Json::Value@ result = CallTool(tool, input);
+        Json::Value@ expect = null;
+        if (request.HasKey("expect")) {
+            @expect = request["expect"];
+            if (expect is null || expect.GetType() == Json::Type::Null)
+                return MakeResponse(id, route, null, "expect must be a JSON object");
+        }
+        Json::Value@ result = CallToolExpected(tool, input, expect);
         if (result is null) {
             return MakeResponse(id, route, null, "unknown tool: " + tool);
         }

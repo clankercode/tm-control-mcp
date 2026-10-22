@@ -140,6 +140,8 @@ namespace TmMcp {
     // Returns empty string on success, or an error description.
     // Only validates top-level input keys (not nested object sub-properties).
     string ValidateToolInput(const string &in toolName, Json::Value@ input) {
+        if (input is null || input.GetType() != Json::Type::Object)
+            return "input must be a JSON object";
         int idx = FindSchema(toolName);
         if (idx < 0) {
             // Unknown tool — let dispatch emit the unknown-tool error.
@@ -185,14 +187,16 @@ namespace TmMcp {
             if (typeStr.Length == 0) continue;
 
             Json::Value@ val = input[k];
-            if (val is null) continue;
+            if (val is null) return "parameter '" + k + "' must be " + typeStr + ", got null";
             Json::Type actualType = val.GetType();
 
             bool ok = false;
             if (typeStr == "string") {
                 ok = (actualType == Json::Type::String);
-            } else if (typeStr == "integer" || typeStr == "number") {
-                // AS JSON parser doesn't distinguish int vs float; both come as Number.
+            } else if (typeStr == "integer") {
+                double number = actualType == Json::Type::Number ? double(val) : 0.0;
+                ok = actualType == Json::Type::Number && number == Math::Floor(number);
+            } else if (typeStr == "number") {
                 ok = (actualType == Json::Type::Number);
             } else if (typeStr == "boolean") {
                 ok = (actualType == Json::Type::Boolean);

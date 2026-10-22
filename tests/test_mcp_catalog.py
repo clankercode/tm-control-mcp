@@ -35,3 +35,23 @@ def test_catalog_sort_is_explicit_and_legacy_tool_route_survives():
     assert "CompareCanonicalToolNames" in MCP
     assert 'if (route == "tools")' in PROTOCOL
     assert "GetToolList()" in PROTOCOL
+
+
+def test_pack_generation_and_call_expectation_are_host_side():
+    calls = (ROOT / "src" / "ToolCalls.as").read_text()
+    async_dispatch = (ROOT / "src" / "AsyncDispatchLocal.as").read_text()
+    assert "string generation;" in PACKS
+    assert "GetPackToolGeneration" in PACKS
+    assert "pack.generation = \"\" + (++g_NextPackGeneration);" in PACKS
+    assert "CallToolExpected" in calls
+    assert "stale_instance" in calls and "stale_generation" in calls
+    assert "ValidateToolInput(name, input)" in calls
+    assert "ValidateToolInput(toolName, input)" in async_dispatch
+
+
+def test_owner_id_cleanup_precedes_exact_pack_lookup():
+    unregister = PACKS[PACKS.index("Json::Value@ UnregisterToolPack(") :]
+    owner = unregister.index("if (caller !is null && packId == caller.ID)")
+    lookup = unregister.index("int idx = FindPackIndex(packId)")
+    assert owner < lookup
+    assert "InvalidateToolList();" in PACKS[PACKS.index("Json::Value@ UnregisterOwnedPacks(") :]

@@ -9,11 +9,13 @@ namespace TmMcp {
         array<string> descriptions;
         array<Json::Value@> schemas;
         ToolPackDispatch@ dispatch;
+        string generation;
 
         RegisteredPack() {}
     }
 
     array<RegisteredPack@> g_Packs;
+    uint64 g_NextPackGeneration = 0;
 
     bool IsReservedPackId(const string &in id) {
         return id == "core" || id == "tm-control-mcp" || id == "TmMcp";
@@ -77,6 +79,23 @@ namespace TmMcp {
         auto pack = g_Packs[uint(idx)];
         for (uint i = 0; i < pack.toolNames.Length; i++) {
             if (pack.toolNames[i] == local) return true;
+        }
+        return false;
+    }
+
+    bool GetPackToolGeneration(const string &in name, string &out generation) {
+        generation = "";
+        string packId;
+        string local;
+        if (!SplitPackToolName(name, packId, local)) return false;
+        int idx = FindPackIndex(packId);
+        if (idx < 0) return false;
+        auto pack = g_Packs[uint(idx)];
+        for (uint i = 0; i < pack.toolNames.Length; i++) {
+            if (pack.toolNames[i] == local) {
+                generation = pack.generation;
+                return generation.Length > 0;
+            }
         }
         return false;
     }
@@ -163,12 +182,14 @@ namespace TmMcp {
 
         string updateWarning = PackUpdateUrlError(pack.latestReleaseUrl);
         if (updateWarning.Length > 0) warn("TM Control MCP pack '" + packId + "': " + updateWarning);
+        pack.generation = "" + (++g_NextPackGeneration);
         g_Packs.InsertLast(pack);
         InvalidateToolList();
         trace("TM Control MCP pack registered " + packId + " tools=" + pack.toolNames.Length);
         auto output = Json::Object();
         output["pack"] = packId;
         output["plugin"] = plugin.ID;
+        output["generation"] = pack.generation;
         output["toolCount"] = int(pack.toolNames.Length);
         AppendPackUpdateStatus(output, pack.pluginId, pack.latestReleaseUrl);
         return MakeSuccess(output);
@@ -184,6 +205,7 @@ namespace TmMcp {
         if (dropped.Length == 0) {
             return MakeError("pack not registered: " + pluginId, "pack_not_found", false);
         }
+        InvalidateToolList();
         auto output = Json::Object();
         output["pack"] = pluginId;
         output["packs"] = dropped;
@@ -196,13 +218,14 @@ namespace TmMcp {
         auto caller = Meta::ExecutingPlugin();
         auto self = SelfPlugin();
         bool host = self !is null && caller !is null && caller.ID == self.ID;
+        // A plugin ID is the explicit remove-all-owned form. Resolve it
+        // before exact pack lookup so a custom prefix collision cannot make
+        // cleanup depend on which interpretation happened to win first.
+        if (caller !is null && packId == caller.ID) {
+            return UnregisterOwnedPacks(caller.ID);
+        }
         int idx = FindPackIndex(packId);
         if (idx < 0) {
-            // UnregisterToolPack(plugin.ID) drops every pack this plugin registered
-            // (covers SetPackId prefixes without forcing authors to store the custom id).
-            if (caller !is null && packId == caller.ID) {
-                return UnregisterOwnedPacks(caller.ID);
-            }
             return MakeError("pack not registered: " + packId, "pack_not_found", false);
         }
         bool owner = caller !is null && caller.ID == g_Packs[uint(idx)].pluginId;
@@ -210,6 +233,7 @@ namespace TmMcp {
             return MakeError("only the owning plugin can unregister pack " + packId, "pack_not_owner", false);
         }
         DropPackAt(uint(idx));
+        InvalidateToolList();
         auto output = Json::Object();
         output["pack"] = packId;
         output["unregistered"] = true;
@@ -274,6 +298,7 @@ namespace TmMcp {
             auto o = Json::Object();
             o["id"] = pack.packId;
             o["plugin"] = pack.pluginId;
+            o["generation"] = pack.generation;
             o["toolCount"] = int(pack.toolNames.Length);
             auto p = Meta::GetPluginFromID(pack.pluginId);
             o["enabled"] = p !is null && p.Enabled;

@@ -13,6 +13,7 @@ namespace TmMcp {
         Json::Value@ input;
         Json::Value@ result;
         string instance;
+        string packGeneration;
     }
     ToolCallRegistry g_ToolCalls;
     array<ToolInvocation@> g_UnfinishedWorkers;
@@ -92,8 +93,45 @@ namespace TmMcp {
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
+        return CallToolExpected(name, input, null);
+    }
+
+    // Host-only entry point: keep the existing imported CallTool ABI intact.
+    Json::Value@ ValidateToolExpectation(const string &in name, Json::Value@ expect) {
+        SweepDeadPacks();
+        if (expect is null) return null;
+        if (expect.GetType() != Json::Type::Object || !expect.HasKey("instance")
+            || expect["instance"].GetType() != Json::Type::String
+            || string(expect["instance"]).Length == 0) {
+            return MakeError("expect requires a nonempty instance string", "invalid_expect");
+        }
+        auto keys = expect.GetKeys();
+        for (uint i = 0; i < keys.Length; i++) {
+            if (keys[i] != "instance" && keys[i] != "generation")
+                return MakeError("expect supports only instance and generation", "invalid_expect");
+        }
+        if (expect.HasKey("generation") && (expect["generation"].GetType() != Json::Type::String
+            || string(expect["generation"]).Length == 0)) {
+            return MakeError("expect.generation must be a nonempty string", "invalid_expect");
+        }
+        if (string(expect["instance"]) != g_ToolCallInstance)
+            return MakeError("catalog instance is stale", "stale_instance");
+        if (expect.HasKey("generation")) {
+            string generation;
+            if (!GetPackToolGeneration(name, generation) || generation != string(expect["generation"]))
+                return MakeError("pack generation is stale", "stale_generation");
+        }
+        return null;
+    }
+
+    Json::Value@ CallToolExpected(const string &in name, Json::Value &in input, Json::Value@ expect) {
+        auto stale = ValidateToolExpectation(name, expect);
+        if (stale !is null) return stale;
         auto invalidName = ValidateToolCallName(name);
         if (invalidName !is null) return invalidName;
+        string validationError = ValidateToolInput(name, input);
+        if (validationError.Length > 0)
+            return MakeError("invalid input: " + validationError, "invalid_input");
         SweepToolCalls();
         if (!g_MonitorToolCalls) return MakeError("dispatch not running", "tool_shutdown", true);
         if (g_UnfinishedWorkers.Length > 0) {
@@ -127,6 +165,7 @@ namespace TmMcp {
         if (name == "DevCallGuardProbe") call.budget = 150;
 #endif
         call.instance = g_ToolCallInstance;
+        GetPackToolGeneration(name, call.packGeneration);
         auto owner = CoroutineCallOwner();
         @call.owner = owner;
         if (!g_ToolCalls.Admit(call)) {
@@ -150,6 +189,16 @@ namespace TmMcp {
 
     void RunToolCall(ToolInvocation@ call) {
         if (call is null || call.finished || call.instance != g_ToolCallInstance) return;
+        // startnew is a yield boundary: never send an admitted old-generation
+        // call into a newly registered implementation of the same public name.
+        SweepDeadPacks();
+        if (call.packGeneration.Length > 0) {
+            string generation;
+            if (!GetPackToolGeneration(call.name, generation) || generation != call.packGeneration) {
+                FinishToolCall(call, MakeError("pack generation changed before dispatch", "stale_generation"), "stale_generation");
+                return;
+            }
+        }
 #if DEV
         // Deliberately outside the catch: emulate a VM-killed worker without
         // hanging the game for the script execution timeout.

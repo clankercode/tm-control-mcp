@@ -1346,6 +1346,11 @@ namespace TmMcp {
                 auto tool = CloneJsonValue(source[uint(best)]);
                 if (tool is null) continue;
                 if (!tool.HasKey("pack")) tool["pack"] = "";
+                string generation = "";
+                if (string(tool["pack"]).Length > 0
+                    && GetPackToolGeneration(string(tool["name"]), generation)) {
+                    tool["generation"] = generation;
+                }
                 tools.Add(tool);
             }
         }

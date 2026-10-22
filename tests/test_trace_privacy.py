@@ -81,7 +81,8 @@ def test_unknown_tool_names_cannot_reach_either_log_sink(as_runner, tmp_path):
     production = (ROOT / 'src/ToolCalls.as').read_text()
     admission = _function(production, 'Json::Value@ ValidateToolCallName(')
     event = _function(production, 'void ToolCallEvent(')
-    call = _function(production, 'Json::Value@ CallTool(')
+    call = _function(production, 'Json::Value@ CallToolExpected(')
+    assert 'CallToolExpected(name, input, null)' in _function(production, 'Json::Value@ CallTool(')
     assert call.index('ValidateToolCallName(name)') < call.index('SweepToolCalls()')
     mocks = tmp_path / 'mocks.as'
     mocks.write_text(JSON_MOCKS + r'''
