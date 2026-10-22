@@ -15,8 +15,9 @@ use rmcp::{
     model::{
         CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
         Implementation, ListResourcesResult, ListToolsResult, ReadResourceRequestParams,
-        ReadResourceResponse, ReadResourceResult, Resource, ResourceContents, ServerCapabilities,
-        ServerConfig, SubscriptionFilter, Tool,
+        ReadResourceResponse, ReadResourceResult, Resource, ResourceContents, ResourcesCapability,
+        ServerCapabilities, ServerConfig, SubscribeRequestParams, SubscriptionFilter, Tool,
+        UnsubscribeRequestParams,
     },
     service::{RequestContext, SubscriptionContext},
 };
@@ -25,7 +26,7 @@ use serde_json::{Value, json};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::{RwLock as AsyncRwLock, broadcast, mpsc},
+    sync::{broadcast, mpsc},
     time::timeout,
 };
 use tokio_util::sync::CancellationToken;
@@ -34,7 +35,7 @@ pub const DEFAULT_NATIVE_HOST: &str = "127.0.0.1";
 pub const DEFAULT_NATIVE_PORT: u16 = 30006;
 pub const DEFAULT_HTTP_ADDR: &str = "127.0.0.1:30007";
 pub const MAX_NATIVE_FRAME: usize = 16 * 1024 * 1024;
-pub const NATIVE_TIMEOUT: Duration = Duration::from_secs(10);
+pub const NATIVE_TIMEOUT: Duration = Duration::from_secs(30);
 pub const MAX_EVENT_COPY: usize = 2048;
 pub const MAX_EVENTS: usize = 256;
 
@@ -60,6 +61,8 @@ pub struct NativeTool {
     pub input_schema: Value,
     #[serde(default)]
     pub pack: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -77,6 +80,13 @@ pub struct NativeCatalog {
     pub instance: String,
     pub revision: String,
     pub tools: Vec<NativeTool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NativeExpect {
+    pub instance: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -187,13 +197,20 @@ async fn append_jsonl(path: &PathBuf, event: &Event) -> Result<()> {
 pub trait NativeBackend: Send + Sync {
     fn status(&self) -> BoxFuture<'static, Result<NativeResponse>>;
     fn catalog(&self) -> BoxFuture<'static, Result<NativeResponse>>;
-    fn call(&self, tool: String, input: Value) -> BoxFuture<'static, Result<NativeResponse>>;
+    fn call(
+        &self,
+        tool: String,
+        input: Value,
+        expect: NativeExpect,
+    ) -> BoxFuture<'static, Result<NativeResponse>>;
 }
 
 #[derive(Clone)]
 pub struct NativeTcpClient {
     host: String,
     port: u16,
+    timeout: Duration,
+    slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl NativeTcpClient {
@@ -201,46 +218,78 @@ impl NativeTcpClient {
         Self {
             host: host.into(),
             port,
+            timeout: NATIVE_TIMEOUT,
+            slots: Arc::new(tokio::sync::Semaphore::new(4)),
         }
     }
 
-    async fn request(&self, request: Value) -> Result<NativeResponse> {
-        let mut stream = timeout(NATIVE_TIMEOUT, TcpStream::connect((&*self.host, self.port)))
-            .await
-            .context("native connect timed out")??;
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout.max(Duration::from_secs(30));
+        self
+    }
+
+    async fn request(&self, mut request: Value, budget: Duration) -> Result<NativeResponse> {
+        let id = uuid::Uuid::new_v4().to_string();
+        request["id"] = json!(id);
+        let route = request["route"].as_str().unwrap_or_default().to_owned();
         let bytes = serde_json::to_vec(&request)?;
-        if bytes.len() > MAX_NATIVE_FRAME - 1 {
+        if bytes.len() >= MAX_NATIVE_FRAME {
             return Err(anyhow!(
-                "native request exceeds {} byte bound",
-                MAX_NATIVE_FRAME
+                "native request exceeds {MAX_NATIVE_FRAME} byte bound"
             ));
         }
-        stream.write_all(&bytes).await?;
-        stream.write_all(b"\n").await?;
-        stream.flush().await?;
-        let frame = timeout(NATIVE_TIMEOUT, read_frame(&mut stream, MAX_NATIVE_FRAME))
-            .await
-            .context("native response timed out")??;
-        serde_json::from_slice(&frame).context("decode native response")
+        timeout(budget, async {
+            let _slot = self.slots.acquire().await?;
+            let mut stream = TcpStream::connect((self.host.as_str(), self.port)).await?;
+            stream.set_nodelay(true)?;
+            stream.write_all(&bytes).await?;
+            stream.write_all(b"\n").await?;
+            stream.flush().await?;
+            let frame = read_frame(&mut stream, MAX_NATIVE_FRAME).await?;
+            let response: NativeResponse =
+                serde_json::from_slice(&frame).context("decode native response")?;
+            if response.id != json!(id) || response.route != route {
+                return Err(anyhow!("native response id or route mismatch"));
+            }
+            Ok(response)
+        })
+        .await
+        .context("native deadline exceeded; outcome unknown; request was not replayed")?
     }
 }
 
 impl NativeBackend for NativeTcpClient {
     fn status(&self) -> BoxFuture<'static, Result<NativeResponse>> {
         let client = self.clone();
-        Box::pin(async move { client.request(json!({"route":"status"})).await })
+        Box::pin(async move {
+            client
+                .request(json!({"route":"status"}), client.timeout)
+                .await
+        })
     }
 
     fn catalog(&self) -> BoxFuture<'static, Result<NativeResponse>> {
         let client = self.clone();
-        Box::pin(async move { client.request(json!({"route":"catalog"})).await })
+        Box::pin(async move {
+            client
+                .request(json!({"route":"catalog"}), client.timeout)
+                .await
+        })
     }
 
-    fn call(&self, tool: String, input: Value) -> BoxFuture<'static, Result<NativeResponse>> {
+    fn call(
+        &self,
+        tool: String,
+        input: Value,
+        expect: NativeExpect,
+    ) -> BoxFuture<'static, Result<NativeResponse>> {
         let client = self.clone();
         Box::pin(async move {
             client
-                .request(json!({"route":"call","tool":tool,"input":input}))
+                .request(
+                    json!({"route":"call","tool":tool,"input":input,"expect":expect}),
+                    client.timeout,
+                )
                 .await
         })
     }
@@ -272,23 +321,55 @@ pub async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R, max: usize) -> Res
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CatalogSnapshot {
     pub identity: CatalogIdentity,
     pub tools: BTreeMap<String, NativeTool>,
+    validators: BTreeMap<String, Arc<Validator>>,
 }
 
 impl CatalogSnapshot {
-    fn from_response(response: NativeResponse) -> Result<Self> {
-        if !response.ok {
-            return Err(anyhow!("native catalog failed: {}", response.error));
-        }
+    fn decode(response: NativeResponse) -> Result<NativeCatalog> {
+        anyhow::ensure!(response.ok, "native catalog failed: {}", response.error);
         let catalog: NativeCatalog = serde_json::from_value(response.data)?;
-        let tools = catalog
-            .tools
-            .into_iter()
-            .map(|tool| (tool.name.clone(), tool))
-            .collect();
+        anyhow::ensure!(
+            catalog.schema_version == 1,
+            "unsupported catalog schemaVersion"
+        );
+        anyhow::ensure!(
+            !catalog.instance.is_empty() && !catalog.revision.is_empty(),
+            "empty catalog identity"
+        );
+        anyhow::ensure!(
+            catalog.tools.len() <= 8192,
+            "too many native tool descriptors"
+        );
+        Ok(catalog)
+    }
+
+    fn compile(catalog: NativeCatalog) -> Result<Self> {
+        let mut tools = BTreeMap::new();
+        let mut validators = BTreeMap::new();
+        for tool in catalog.tools {
+            anyhow::ensure!(
+                !tool.name.is_empty() && tool.name.len() <= 256,
+                "invalid tool name"
+            );
+            anyhow::ensure!(
+                !tools.contains_key(&tool.name),
+                "duplicate native tool name"
+            );
+            anyhow::ensure!(
+                tool.generation
+                    .as_ref()
+                    .is_none_or(|generation| !generation.is_empty()),
+                "empty pack generation"
+            );
+            let validator = compile_schema(&tool.input_schema)
+                .with_context(|| format!("schema for {}", tool.name))?;
+            validators.insert(tool.name.clone(), Arc::new(validator));
+            tools.insert(tool.name.clone(), tool);
+        }
         Ok(Self {
             identity: CatalogIdentity {
                 schema_version: catalog.schema_version,
@@ -296,24 +377,42 @@ impl CatalogSnapshot {
                 revision: catalog.revision,
             },
             tools,
+            validators,
         })
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum CallError {
+    #[error("unknown tool: {0}")]
+    UnknownTool(String),
+    #[error("invalid tool input: {0}")]
+    InvalidArguments(String),
+    #[error("native catalog unavailable: {0}")]
+    CatalogUnavailable(String),
+    #[error("native transport failed; outcome unknown; request was not replayed: {0}")]
+    NativeTransport(String),
+    #[error("invalid native tool response: {0}")]
+    NativeProtocol(String),
+}
+
 pub struct Core {
     backend: Arc<dyn NativeBackend>,
-    catalog: AsyncRwLock<Option<CatalogSnapshot>>,
+    catalog: std::sync::RwLock<Option<CatalogSnapshot>>,
+    refresh_lock: tokio::sync::Mutex<()>,
+    catalog_changes: tokio::sync::watch::Sender<Option<CatalogIdentity>>,
     monitor: Arc<MonitorStore>,
-    guide_text: BTreeMap<String, String>,
 }
 
 impl Core {
     pub fn new(backend: Arc<dyn NativeBackend>, monitor: Arc<MonitorStore>) -> Arc<Self> {
+        let (catalog_changes, _) = tokio::sync::watch::channel(None);
         Arc::new(Self {
             backend,
-            catalog: AsyncRwLock::new(None),
+            catalog: std::sync::RwLock::new(None),
+            refresh_lock: tokio::sync::Mutex::new(()),
+            catalog_changes,
             monitor,
-            guide_text: guide_text(),
         })
     }
 
@@ -321,25 +420,70 @@ impl Core {
         self.monitor.clone()
     }
 
-    pub async fn refresh_catalog(&self) -> Result<CatalogSnapshot> {
-        let snapshot = CatalogSnapshot::from_response(self.backend.catalog().await?)?;
-        let changed = self
-            .catalog
-            .read()
-            .await
-            .as_ref()
-            .map(|old| old.identity != snapshot.identity)
-            .unwrap_or(true);
-        *self.catalog.write().await = Some(snapshot.clone());
-        if changed {
-            self.monitor
-                .catalog_changed(snapshot.identity.revision.clone());
+    fn cached_catalog(&self) -> Option<CatalogSnapshot> {
+        self.catalog.read().expect("catalog lock poisoned").clone()
+    }
+
+    pub fn catalog_updates(&self) -> tokio::sync::watch::Receiver<Option<CatalogIdentity>> {
+        self.catalog_changes.subscribe()
+    }
+
+    // Caller holds refresh_lock. Compilation is atomic and never occupies an
+    // async runtime thread; an invalid new schema preserves the previous cache.
+    async fn install_catalog(&self, response: NativeResponse) -> Result<CatalogSnapshot> {
+        let catalog = CatalogSnapshot::decode(response)?;
+        let identity = CatalogIdentity {
+            schema_version: catalog.schema_version,
+            instance: catalog.instance.clone(),
+            revision: catalog.revision.clone(),
+        };
+        if let Some(old) = self.cached_catalog() {
+            if old.identity == identity {
+                return Ok(old);
+            }
         }
+        let snapshot =
+            tokio::task::spawn_blocking(move || CatalogSnapshot::compile(catalog)).await??;
+        *self.catalog.write().expect("catalog lock poisoned") = Some(snapshot.clone());
+        self.catalog_changes.send_replace(Some(identity));
+        self.monitor
+            .catalog_changed(snapshot.identity.revision.clone());
         Ok(snapshot)
     }
 
+    pub async fn refresh_catalog(&self) -> Result<CatalogSnapshot> {
+        let _guard = self.refresh_lock.lock().await;
+        self.install_catalog(self.backend.catalog().await?).await
+    }
+
+    /// Cheap status probes fetch the full catalog only on an instance/revision
+    /// change. A failed probe leaves discovery cached but never admits a call.
+    pub async fn poll_catalog(&self) -> Result<CatalogSnapshot> {
+        let _guard = self.refresh_lock.lock().await;
+        let response = self.backend.status().await?;
+        anyhow::ensure!(response.ok, "native status failed: {}", response.error);
+        let identity: CatalogIdentity = serde_json::from_value(
+            response
+                .data
+                .get("catalog")
+                .cloned()
+                .context("status has no catalog identity")?,
+        )?;
+        anyhow::ensure!(
+            identity.schema_version == 1,
+            "unsupported catalog schemaVersion"
+        );
+        if let Some(old) = self.cached_catalog() {
+            if old.identity == identity {
+                return Ok(old);
+            }
+        }
+        self.install_catalog(self.backend.catalog().await?).await
+    }
+
+    /// Discovery can retain its last detached snapshot during a native outage.
     pub async fn catalog(&self) -> Result<CatalogSnapshot> {
-        if let Some(catalog) = self.catalog.read().await.clone() {
+        if let Some(catalog) = self.cached_catalog() {
             return Ok(catalog);
         }
         self.refresh_catalog().await
@@ -351,14 +495,25 @@ impl Core {
         cancellation: CancellationToken,
     ) {
         let core = self.clone();
+        // Keep the old constructor surface for launchers; polling is at most 1s.
+        let normal_delay = interval.clamp(Duration::from_millis(100), Duration::from_secs(1));
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(interval);
+            let mut delay = normal_delay;
             loop {
+                let result = tokio::select! {
+                    _ = cancellation.cancelled() => break,
+                    result = core.poll_catalog() => result,
+                };
+                delay = match result {
+                    Ok(_) => normal_delay,
+                    Err(error) => {
+                        tracing::debug!(%error, "catalog status probe failed");
+                        delay.saturating_mul(2).min(Duration::from_secs(5))
+                    }
+                };
                 tokio::select! {
                     _ = cancellation.cancelled() => break,
-                    _ = tick.tick() => {
-                        if let Err(error) = core.refresh_catalog().await { tracing::debug!(%error, "catalog poll failed"); }
-                    }
+                    _ = tokio::time::sleep(delay) => {}
                 }
             }
         });
@@ -368,55 +523,152 @@ impl Core {
         self.backend.status().await
     }
 
+    async fn call_inner(
+        &self,
+        tool: &str,
+        input: Value,
+    ) -> std::result::Result<NativeResponse, CallError> {
+        let catalog = self
+            .poll_catalog()
+            .await
+            .map_err(|error| CallError::CatalogUnavailable(format!("{error:#}")))?;
+        let descriptor = catalog
+            .tools
+            .get(tool)
+            .ok_or_else(|| CallError::UnknownTool(tool.to_owned()))?;
+        let validator = catalog
+            .validators
+            .get(tool)
+            .expect("validated descriptor lacks validator")
+            .clone();
+        let expect = NativeExpect {
+            instance: catalog.identity.instance.clone(),
+            generation: descriptor.generation.clone(),
+        };
+        let validation_input = input.clone();
+        tokio::task::spawn_blocking(move || {
+            validator
+                .validate(&validation_input)
+                .map_err(|error| CallError::InvalidArguments(error.to_string()))
+        })
+        .await
+        .map_err(|error| CallError::InvalidArguments(error.to_string()))??;
+        let response = self
+            .backend
+            .call(tool.to_owned(), input, expect)
+            .await
+            .map_err(|error| CallError::NativeTransport(format!("{error:#}")))?;
+        if response.ok
+            && !response
+                .data
+                .pointer("/result/success")
+                .is_some_and(Value::is_boolean)
+        {
+            return Err(CallError::NativeProtocol(
+                "missing data.result.success boolean".into(),
+            ));
+        }
+        Ok(response)
+    }
+
     pub async fn call(
         &self,
         tool: &str,
         input: Value,
         connection_id: &str,
         request_id: &str,
-    ) -> Result<NativeResponse> {
-        let catalog = self.catalog().await?;
-        let descriptor = catalog
-            .tools
-            .get(tool)
-            .ok_or_else(|| anyhow!("unknown tool: {tool}"))?;
-        validate_input(&descriptor.input_schema, &input)?;
-        let started = now_ms();
-        let result = self.backend.call(tool.to_owned(), input.clone()).await;
-        let ended = now_ms();
-        let (status, result_value, error) = match &result {
-            Ok(response) if response.ok => ("ok", response.data.clone(), None),
-            Ok(response) => (
-                "tool_error",
-                response.data.clone(),
-                Some(response.error.clone()),
-            ),
-            Err(error) => ("transport_error", Value::Null, Some(error.to_string())),
-        };
-        let safe_input = sanitize_value(&input);
-        let safe_result = sanitize_value(&json!({"data": result_value, "error": error}));
-        self.monitor.record(Event {
+    ) -> std::result::Result<NativeResponse, CallError> {
+        let mut event = Event {
             invocation_id: self.monitor.next_id(),
             connection_id: bounded(connection_id),
             request_id: bounded(request_id),
-            method: "tools/call".to_owned(),
+            method: "tools/call".into(),
             tool: Some(bounded(tool)),
-            started_ms: started,
-            ended_ms: ended,
-            status: status.to_owned(),
+            started_ms: now_ms(),
+            ended_ms: 0,
+            status: "started".into(),
             argument_bytes: serde_json::to_vec(&input).map(|v| v.len()).unwrap_or(0),
-            result_bytes: serde_json::to_vec(&result_value)
-                .map(|v| v.len())
-                .unwrap_or(0),
-            arguments: bounded_json(&safe_input),
-            result: bounded_json(&safe_result),
-        });
+            result_bytes: 0,
+            arguments: bounded_json(&sanitize_value(&input)),
+            result: String::new(),
+        };
+        self.monitor.record(event.clone());
+        let result = self.call_inner(tool, input).await;
+        event.ended_ms = now_ms();
+        event.status = match &result {
+            Ok(response) if !native_failed(response) => "ok",
+            Ok(_) => "tool_error",
+            Err(CallError::InvalidArguments(_)) => "invalid_arguments",
+            Err(CallError::UnknownTool(_)) => "unknown_tool",
+            Err(CallError::CatalogUnavailable(_)) => "catalog_unavailable",
+            Err(_) => "transport_error",
+        }
+        .into();
+        let data = match &result {
+            Ok(response) => serde_json::to_value(response).unwrap_or(Value::Null),
+            Err(error) => json!({"error":error.to_string()}),
+        };
+        event.result_bytes = serde_json::to_vec(&data).map(|v| v.len()).unwrap_or(0);
+        event.result = bounded_json(&sanitize_value(&data));
+        self.monitor.record(event);
         result
     }
 
-    pub fn guides(&self) -> &BTreeMap<String, String> {
-        &self.guide_text
+    /// Real native documentation; resource handlers never manufacture content.
+    pub async fn list_guides(
+        &self,
+        connection_id: &str,
+        request_id: &str,
+    ) -> Result<Vec<NativeGuide>> {
+        let response = self
+            .call("ListGuides", json!({}), connection_id, request_id)
+            .await?;
+        anyhow::ensure!(!native_failed(&response), "native ListGuides failed");
+        serde_json::from_value(
+            response
+                .data
+                .pointer("/result/output/guides")
+                .cloned()
+                .context("ListGuides has no guides array")?,
+        )
+        .context("decode native guides")
     }
+
+    pub async fn get_guide(
+        &self,
+        topic: &str,
+        connection_id: &str,
+        request_id: &str,
+    ) -> Result<Value> {
+        let response = self
+            .call(
+                "GetGuide",
+                json!({"topic":topic}),
+                connection_id,
+                request_id,
+            )
+            .await?;
+        anyhow::ensure!(
+            !native_failed(&response),
+            "native GetGuide failed: {}",
+            response.data
+        );
+        response
+            .data
+            .pointer("/result/output")
+            .cloned()
+            .context("GetGuide has no output")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativeGuide {
+    pub topic: String,
+    pub title: String,
+}
+
+fn native_failed(response: &NativeResponse) -> bool {
+    !response.ok || response.data.pointer("/result/success") == Some(&Value::Bool(false))
 }
 
 fn now_ms() -> u128 {
@@ -465,42 +717,6 @@ fn sanitize_value(value: &Value) -> Value {
     }
 }
 
-fn normalize_screenshot_output(value: Value) -> Value {
-    match value {
-        Value::Object(mut map) => {
-            if let Some(screenshot) = map.remove("detectedScreenshot") {
-                let path = screenshot
-                    .get("linuxPath")
-                    .or_else(|| screenshot.get("path"))
-                    .and_then(Value::as_str)
-                    .map(bounded)
-                    .unwrap_or_default();
-                map.insert(
-                    "screenshot".into(),
-                    json!({
-                        "kind": "path",
-                        "path": path,
-                        "verified": false,
-                        "note": "The adapter exposes the native path and does not read image bytes."
-                    }),
-                );
-            }
-            Value::Object(
-                map.into_iter()
-                    .map(|(key, value)| (key, normalize_screenshot_output(value)))
-                    .collect(),
-            )
-        }
-        Value::Array(values) => Value::Array(
-            values
-                .into_iter()
-                .map(normalize_screenshot_output)
-                .collect(),
-        ),
-        other => other,
-    }
-}
-
 struct DenyExternalReferences;
 
 impl jsonschema::Retrieve for DenyExternalReferences {
@@ -512,19 +728,19 @@ impl jsonschema::Retrieve for DenyExternalReferences {
     }
 }
 
-pub fn validate_input(schema: &Value, input: &Value) -> Result<()> {
-    if !schema.is_object() {
-        return Err(anyhow!("tool schema must be a JSON object"));
-    }
-    let validator: Validator = jsonschema::options()
+fn compile_schema(schema: &Value) -> Result<Validator> {
+    anyhow::ensure!(schema.is_object(), "tool schema must be a JSON object");
+    jsonschema::options()
         .with_draft(Draft::Draft202012)
         .with_retriever(DenyExternalReferences)
         .build(schema)
-        .context("compile tool input schema")?;
-    if let Err(error) = validator.validate(input) {
-        return Err(anyhow!("invalid tool input: {error}"));
-    }
-    Ok(())
+        .context("compile tool input schema")
+}
+
+pub fn validate_input(schema: &Value, input: &Value) -> Result<()> {
+    compile_schema(schema)?
+        .validate(input)
+        .map_err(|error| anyhow!("invalid tool input: {error}"))
 }
 
 #[derive(Clone)]
@@ -547,23 +763,14 @@ impl McpAdapter {
             })
             .collect()
     }
-
-    fn resources(&self) -> Vec<Resource> {
-        self.core
-            .guides()
-            .keys()
-            .map(|key| {
-                Resource::new(format!("tm-control://guide/{key}"), key.clone())
-                    .with_mime_type("text/markdown")
-                    .with_description("Built-in tm-control-mcp guide")
-            })
-            .collect()
-    }
 }
 
 impl ServerHandler for McpAdapter {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().enable_tool_list_changed().enable_resources_list_changed().build())
+        let mut resources = ResourcesCapability::default();
+        resources.subscribe = Some(true);
+        resources.list_changed = Some(true);
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources_with(resources).enable_tool_list_changed().build())
             .with_server_info(Implementation::new("tm-control-mcp", env!("CARGO_PKG_VERSION")))
             .with_instructions("Tools are forwarded to the local Openplanet tm-control-mcp bridge. Native failures are returned as tool-level errors.")
     }
@@ -576,6 +783,19 @@ impl ServerHandler for McpAdapter {
             rmcp::model::ProtocolVersion::V_2025_11_25,
             rmcp::model::ProtocolVersion::V_2025_06_18,
         ])
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        self.core.cached_catalog().and_then(|catalog| {
+            catalog.tools.get(name).map(|tool| {
+                let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
+                Tool::new_with_raw(
+                    tool.name.clone(),
+                    Some(tool.description.clone().into()),
+                    Arc::new(schema),
+                )
+            })
+        })
     }
 
     async fn list_tools(
@@ -601,24 +821,20 @@ impl ServerHandler for McpAdapter {
             .call(&tool, input, "mcp", &request_id(&context.id))
             .await;
         match result {
-            Ok(response) if response.ok => Ok(native_result(response.data, false).into()),
-            Ok(response) => Ok(native_result(
-                json!({"success":false,"error":response.error,"data":response.data}),
-                true,
-            )
-            .into()),
-            Err(error) if error.to_string().starts_with("unknown tool:") => {
-                Err(McpError::invalid_params(error.to_string(), None))
+            Ok(response) => {
+                let failed = native_failed(&response);
+                Ok(native_result(response, failed).into())
             }
-            Err(error)
-                if error.to_string().starts_with("invalid tool input:")
-                    || error.to_string().contains("schema") =>
-            {
-                Err(McpError::invalid_params(error.to_string(), None))
+            Err(CallError::UnknownTool(error)) => Err(McpError::invalid_params(error, None)),
+            Err(CallError::InvalidArguments(error)) => {
+                Ok(CallToolResult::structured_error(json!({
+                    "ok": false, "error": error, "code": "invalid_input"
+                }))
+                .into())
             }
-            Err(error) => Ok(CallToolResult::structured_error(
-                json!({"code":"native_transport","message":error.to_string()}),
-            )
+            Err(error) => Ok(CallToolResult::structured_error(json!({
+                "ok": false, "error": error.to_string(), "code": "native_transport"
+            }))
             .into()),
         }
     }
@@ -628,7 +844,21 @@ impl ServerHandler for McpAdapter {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
-        Ok(ListResourcesResult::with_all_items(self.resources())
+        let guides = self
+            .core
+            .list_guides("mcp", "resources/list")
+            .await
+            .map_err(internal_error)?;
+        let resources = guides
+            .into_iter()
+            .map(|guide| {
+                Resource::new(format!("tm-control://guide/{}", guide.topic), guide.topic)
+                    .with_title(guide.title)
+                    .with_mime_type("text/markdown")
+                    .with_description("Native tm-control-mcp guide")
+            })
+            .collect();
+        Ok(ListResourcesResult::with_all_items(resources)
             .with_ttl_ms(0)
             .with_cache_scope(CacheScope::Private))
     }
@@ -643,13 +873,17 @@ impl ServerHandler for McpAdapter {
             .uri
             .strip_prefix(prefix)
             .ok_or_else(|| McpError::resource_not_found(request.uri.clone(), None))?;
-        let text = self
+        let output = self
             .core
-            .guides()
-            .get(key)
-            .ok_or_else(|| McpError::resource_not_found(request.uri.clone(), None))?;
+            .get_guide(key, "mcp", &request.uri)
+            .await
+            .map_err(|error| McpError::resource_not_found(error.to_string(), None))?;
+        let body = output
+            .get("body")
+            .and_then(Value::as_str)
+            .ok_or_else(|| McpError::resource_not_found("native guide has no body", None))?;
         Ok(
-            ReadResourceResult::new(vec![ResourceContents::text(text.clone(), request.uri)])
+            ReadResourceResult::new(vec![ResourceContents::text(body.to_owned(), request.uri)])
                 .with_ttl_ms(0)
                 .with_cache_scope(CacheScope::Private)
                 .into(),
@@ -677,6 +911,7 @@ impl ServerHandler for McpAdapter {
                 event = events.recv() => match event {
                     Ok(CoreEvent::CatalogChanged(_)) => {
                         let _ = context.sink().notify_tool_list_changed().await;
+                        let _ = context.sink().notify_resource_list_changed().await;
                     }
                     Ok(CoreEvent::Invocation(_)) => {}
                     Err(broadcast::error::RecvError::Lagged(_)) => {}
@@ -684,6 +919,65 @@ impl ServerHandler for McpAdapter {
                 }
             }
         }
+    }
+
+    async fn on_initialized(&self, context: rmcp::service::NotificationContext<RoleServer>) {
+        let legacy = context
+            .peer
+            .peer_info()
+            .map(|info| info.protocol_version != rmcp::model::ProtocolVersion::V_2026_07_28)
+            .unwrap_or(true);
+        if !legacy {
+            return;
+        }
+        let mut changes = self.core.catalog_updates();
+        let peer = context.peer;
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    changed = changes.changed() => {
+                        if changed.is_err() || peer.is_transport_closed() { break; }
+                        let _ = peer.notify_tool_list_changed().await;
+                        let _ = peer.notify_resource_list_changed().await;
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                        if peer.is_transport_closed() { break; }
+                    }
+                }
+            }
+        });
+    }
+
+    #[allow(deprecated)]
+    async fn subscribe(
+        &self,
+        request: SubscribeRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<(), McpError> {
+        request
+            .uri
+            .strip_prefix("tm-control://guide/")
+            .filter(|topic| !topic.is_empty())
+            .ok_or_else(|| {
+                McpError::invalid_params("legacy subscribe requires a tm-control guide URI", None)
+            })?;
+        Ok(())
+    }
+
+    #[allow(deprecated)]
+    async fn unsubscribe(
+        &self,
+        request: UnsubscribeRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<(), McpError> {
+        request
+            .uri
+            .strip_prefix("tm-control://guide/")
+            .filter(|topic| !topic.is_empty())
+            .ok_or_else(|| {
+                McpError::invalid_params("legacy unsubscribe requires a tm-control guide URI", None)
+            })?;
+        Ok(())
     }
 }
 
@@ -694,13 +988,8 @@ fn internal_error(error: anyhow::Error) -> McpError {
     McpError::internal_error(error.to_string(), None)
 }
 
-fn native_result(data: Value, error: bool) -> CallToolResult {
-    let output = data
-        .get("result")
-        .and_then(|result| result.get("output"))
-        .cloned()
-        .unwrap_or(data);
-    let output = normalize_screenshot_output(output);
+fn native_result(response: NativeResponse, error: bool) -> CallToolResult {
+    let output = serde_json::to_value(response).unwrap_or(Value::Null);
     let mut result = if error {
         CallToolResult::structured_error(output)
     } else {
@@ -710,15 +999,6 @@ fn native_result(data: Value, error: bool) -> CallToolResult {
         result.content.push(ContentBlock::text("{}"));
     }
     result
-}
-
-fn guide_text() -> BTreeMap<String, String> {
-    BTreeMap::from([
-        ("index".into(), "tm-control-mcp guides: readiness, placement, and screenshot handling.\n".into()),
-        ("readiness".into(), "Call GetReadiness before mutations. Use WaitUntil for editor/menu transitions and shadowsClear before plugin reloads during a lightmap bake.\n".into()),
-        ("placement".into(), "Prefer E++ free placement and named macroblocks. SetAgentTag before smoke placement and RemoveByTag for cleanup.\n".into()),
-        ("screenshots".into(), "The adapter does not read native screenshot paths as image bytes. Native screenshot output is returned as bounded structured path metadata, so clients can decide how to open it.\n".into()),
-    ])
 }
 
 #[cfg(test)]
@@ -734,7 +1014,7 @@ mod tests {
                     id: Value::Null,
                     route: "status".into(),
                     error: String::new(),
-                    data: json!({"alive":true}),
+                    data: json!({"alive":true,"catalog":{"schemaVersion":1,"instance":"fake","revision":"1"}}),
                 })
             })
         }
@@ -745,12 +1025,18 @@ mod tests {
                     id: Value::Null,
                     route: "catalog".into(),
                     error: String::new(),
-                    data: json!({"schemaVersion":1,"instance":"fake","revision":"1","tools":[{"name":"Echo","description":"echo","input_schema":{"type":"object","properties":{"message":{"type":"string"}},"required":["message"],"additionalProperties":false},"pack":""}]}),
+                    data: json!({"schemaVersion":1,"instance":"fake","revision":"1","tools":[{"name":"Echo","description":"echo","input_schema":{"type":"object","properties":{"message":{"type":"string"}},"required":["message"],"additionalProperties":false},"pack":"","generation":null}]}),
                 })
             })
         }
-        fn call(&self, _tool: String, input: Value) -> BoxFuture<'static, Result<NativeResponse>> {
+        fn call(
+            &self,
+            _tool: String,
+            input: Value,
+            expect: NativeExpect,
+        ) -> BoxFuture<'static, Result<NativeResponse>> {
             Box::pin(async move {
+                assert_eq!(expect.instance, "fake");
                 Ok(NativeResponse {
                     ok: true,
                     id: Value::Null,
@@ -785,6 +1071,23 @@ mod tests {
             .is_err()
         );
         assert!(validate_input(&json!({"type":"object","required":["x"]}), &json!({})).is_err());
+    }
+
+    #[test]
+    fn native_failure_is_tool_error_and_structured_content_keeps_envelope() {
+        let response = NativeResponse {
+            ok: true,
+            id: json!("call-1"),
+            route: "call".into(),
+            error: String::new(),
+            data: json!({"tool":"Echo","result":{"success":false,"error":"native failure","code":"failed"}}),
+        };
+        let result = native_result(response, true);
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(
+            result.structured_content.unwrap()["data"]["result"]["success"],
+            false
+        );
     }
 
     #[tokio::test]
@@ -826,11 +1129,18 @@ mod tests {
         });
         assert!(!monitor.snapshot()[0].arguments.contains("secret"));
         let output = native_result(
-            json!({"result":{"output":{"detectedScreenshot":{"linuxPath":"/tmp/a.png"}}}}),
-            false,
+            NativeResponse {
+                ok: false,
+                id: Value::Null,
+                route: "call".into(),
+                error: "unknown tool".into(),
+                data: json!({"result":{"success":false,"output":{"fullName":"GameData/ScreenShot01.jpg"}}}),
+            },
+            true,
         );
+        assert_eq!(output.is_error, Some(true));
         assert_eq!(
-            output.structured_content.unwrap()["screenshot"]["verified"],
+            output.structured_content.unwrap()["data"]["result"]["success"],
             false
         );
     }
