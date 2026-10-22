@@ -13,9 +13,6 @@
     "bin",
     "README.md"
   ],
-  "bin": {
-    "tm-control-mcp": "bin/tm-control-mcp.exe"
-  },
   "exports": {
     "./bin/tm-control-mcp.exe": "./bin/tm-control-mcp.exe"
   }

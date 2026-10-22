@@ -4,6 +4,7 @@
 
 [Website](https://clankercode.github.io/tm-control-mcp/) ·
 [Latest version](https://clankercode.github.io/tm-control-mcp/latest-version.txt) ·
+[MCP CLI entrypoint](mcp-cli/npm/tm-control-mcp/README.md) ·
 [Pack authoring](docs/tool-packs.md) · [Pack updates](docs/pack-updates.md)
 
 `tm-control-mcp` is an Openplanet plugin that exposes Trackmania’s **map editor**,
@@ -137,6 +138,10 @@ Override with `OPENPLANET_DIR` / `PLUGINS_DIR`.
 ```bash
 ./build.sh release   # → tm-control-mcp-<version>.op
 ```
+
+**MCP adapter CLI:** the [CLI entrypoint](mcp-cli/npm/tm-control-mcp/README.md)
+explains the npm launcher for Linux x64 and Windows x64. Build and test Rust
+only on [SSH or hosted CI build machines](packaging/mcp-cli-release.md).
 
 Enable the plugin in Openplanet’s UI. Confirm the socket:
 

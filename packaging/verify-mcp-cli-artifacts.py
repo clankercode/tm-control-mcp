@@ -145,16 +145,18 @@ def artifact_packages(artifact_root: Path) -> dict[str, PackageView]:
     return packages
 
 
-def verify_artifacts(artifact_root: Path, version: str | None) -> None:
+def verify_artifacts(artifact_root: Path, version: str | None, platform: str | None = None,
+                     binary_root: Path | None = None) -> None:
     packages = artifact_packages(artifact_root)
-    expected_names = {ROOT_PACKAGE, *(descriptor["package"] for descriptor in PLATFORMS.values())}
+    selected = PLATFORMS if platform is None else {platform: PLATFORMS[platform]}
+    expected_names = {ROOT_PACKAGE, *(descriptor["package"] for descriptor in selected.values())}
     missing = sorted(expected_names.difference(packages))
     if missing:
         fail(f"artifact root is missing: {', '.join(missing)}")
     for name, package in packages.items():
         if name not in expected_names:
             continue
-        if version is not None and package.metadata.get("version") != version:
+        if package.metadata.get("version") != (version or packages[ROOT_PACKAGE].metadata.get("version")):
             fail(f"{name} has version {package.metadata.get('version')!r}, expected {version!r}")
         check_no_lifecycle_scripts(package.metadata, name)
 
@@ -162,11 +164,15 @@ def verify_artifacts(artifact_root: Path, version: str | None) -> None:
     launcher = root.files.get("bin/tm-control-mcp.js")
     if launcher is None:
         fail("root artifact is missing bin/tm-control-mcp.js")
+    if not launcher[1] or not launcher[1].startswith(b"#!/usr/bin/env node\n"):
+        fail("root launcher artifact is missing the Node shebang")
+    if root.metadata.get("bin") != {"tm-control-mcp": "bin/tm-control-mcp.js"}:
+        fail("root artifact has incorrect CLI entrypoint metadata")
     optional_dependencies = root.metadata.get("optionalDependencies", {})
     expected_optional = {descriptor["package"]: root.metadata.get("version") for descriptor in PLATFORMS.values()}
     if optional_dependencies != expected_optional:
         fail("root artifact optionalDependencies do not match its platform package versions")
-    for platform, descriptor in PLATFORMS.items():
+    for platform_name, descriptor in selected.items():
         package = packages[descriptor["package"]]
         if package.metadata.get("os") != descriptor["os"] or package.metadata.get("cpu") != descriptor["cpu"]:
             fail(f"{descriptor['package']} artifact has incorrect platform metadata")
@@ -175,7 +181,15 @@ def verify_artifacts(artifact_root: Path, version: str | None) -> None:
         binary = package.files.get(descriptor["binary"])
         if binary is None:
             fail(f"{descriptor['package']} is missing {descriptor['binary']}")
-        if platform == "linux-x64" and not binary[0] & stat.S_IXUSR:
+        if not binary[1]:
+            fail(f"{descriptor['package']} contains an empty binary")
+        if binary_root is not None:
+            built_binary = binary_root / f"mcp-cli-binary-{platform_name}" / Path(descriptor["binary"]).name
+            if not built_binary.is_file() or built_binary.read_bytes() != binary[1]:
+                fail(f"{descriptor['package']} does not match downloaded build output {built_binary}")
+        if package.metadata.get("bin"):
+            fail("platform packages must not compete with the launcher CLI entrypoint")
+        if platform_name == "linux-x64" and not binary[0] & stat.S_IXUSR:
             fail("Linux x64 binary is not executable")
 
 
@@ -183,14 +197,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", type=Path, default=Path("mcp-cli/npm"))
     parser.add_argument("--artifact-root", type=Path)
+    parser.add_argument("--binary-root", type=Path, help="compare tarball bytes with downloaded CI binaries")
     parser.add_argument("--version")
+    parser.add_argument("--platform", choices=sorted(PLATFORMS))
     parser.add_argument("--source-only", action="store_true")
     args = parser.parse_args(argv)
     verify_source(args.source_root)
     if not args.source_only:
         if args.artifact_root is None:
             parser.error("--artifact-root is required unless --source-only is used")
-        verify_artifacts(args.artifact_root, args.version)
+        verify_artifacts(args.artifact_root, args.version, args.platform, args.binary_root)
     print("mcp-cli package metadata and artifacts verified")
     return 0
 

@@ -1,21 +1,53 @@
-name: MCP CLI manual release verification
+name: MCP CLI
 
 on:
-  workflow_dispatch:
   pull_request:
     paths:
       - "mcp-cli/**"
       - "packaging/**"
       - "tools/mcp-cli-remote.sh"
       - ".github/workflows/mcp-cli.yml"
+      - "README.md"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: npm version to prepare (must match the root package)
+        required: false
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: mcp-cli-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  source-verification:
-    name: Verify launcher and package metadata
-    runs-on: ubuntu-latest
+  build-test-package:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64 musl
+            os: ubuntu-latest
+            platform: linux-x64
+            target: x86_64-unknown-linux-musl
+            binary: mcp-cli/target/x86_64-unknown-linux-musl/release/tm-control-mcp
+          - name: Windows x64 MSVC static CRT
+            os: windows-latest
+            platform: win32-x64
+            target: x86_64-pc-windows-msvc
+            binary: mcp-cli/target/x86_64-pc-windows-msvc/release/tm-control-mcp.exe
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_TERM_COLOR: always
+      CARGO_TARGET_DIR: ${{ github.workspace }}/mcp-cli/target
+      REQUESTED_VERSION: ${{ inputs.version || '' }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -23,52 +55,145 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Verify npm package metadata
-        run: python3 packaging/verify-mcp-cli-artifacts.py --source-only
-      - name: Test launcher logic
-        run: node --test mcp-cli/npm/test/*.test.mjs
-
-  rust-linux:
-    name: Build and test Linux x64 on remote runner
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          targets: x86_64-unknown-linux-musl
-      - name: Install musl linker
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - name: Check and test
-        run: |
-          cargo fmt --manifest-path mcp-cli/Cargo.toml --all -- --check
-          cargo test --manifest-path mcp-cli/Cargo.toml --locked
-      - name: Build release binary
-        run: cargo build --manifest-path mcp-cli/Cargo.toml --release --locked --target x86_64-unknown-linux-musl
-      - name: Verify package metadata
-        run: python3 packaging/verify-mcp-cli-artifacts.py --source-only
-
-  rust-windows:
-    name: Build Windows x64 binary on remote runner
-    runs-on: windows-2025
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-      - name: Check and test
-        shell: bash
-        run: |
-          cargo fmt --manifest-path mcp-cli/Cargo.toml --all -- --check
-          cargo test --manifest-path mcp-cli/Cargo.toml --locked
-          cargo build --manifest-path mcp-cli/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
-
-  package-contract:
-    name: Verify package contract
-    runs-on: ubuntu-latest
-    needs: [source-verification, rust-linux, rust-windows]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Verify package metadata and launch tests
+          python-version: "3.12"
+      - name: Verify packaging and launcher
         run: |
           python3 packaging/verify-mcp-cli-artifacts.py --source-only
+          python3 -m unittest discover -s packaging/tests -v
           node --test mcp-cli/npm/test/*.test.mjs
+      - name: Install Linux musl tools
+        if: matrix.platform == 'linux-x64'
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
+      - name: Install Rust target
+        run: rustup target add "${{ matrix.target }}"
+      - name: Resolve and validate package version
+        id: version
+        run: |
+          version="$(node -p "require('./mcp-cli/npm/tm-control-mcp/package.json').version")"
+          if [[ -n "$REQUESTED_VERSION" && "$REQUESTED_VERSION" != "$version" ]]; then
+            echo "requested version $REQUESTED_VERSION does not match package version $version" >&2
+            exit 1
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+      - name: Check Rust formatting
+        working-directory: mcp-cli
+        run: cargo fmt --all -- --check
+      - name: Cargo check
+        working-directory: mcp-cli
+        run: cargo check --all-targets --locked --jobs 2 --target "${{ matrix.target }}"
+      - name: Cargo test
+        working-directory: mcp-cli
+        run: cargo test --all-targets --locked --jobs 2 --target "${{ matrix.target }}"
+      - name: Cargo build
+        working-directory: mcp-cli
+        run: cargo build --bin tm-control-mcp --release --locked --jobs 2 --target "${{ matrix.target }}"
+      - name: Verify Linux static linkage
+        if: matrix.platform == 'linux-x64'
+        run: |
+          file "${{ matrix.binary }}"
+          if readelf --program-headers "${{ matrix.binary }}" | grep -q INTERP; then
+            echo 'musl binary must not require a dynamic interpreter' >&2
+            exit 1
+          fi
+      - name: Enable MSVC inspection tools
+        if: matrix.platform == 'win32-x64'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Verify Windows static CRT
+        if: matrix.platform == 'win32-x64'
+        shell: pwsh
+        run: |
+          $deps = & dumpbin.exe /DEPENDENTS '${{ matrix.binary }}'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $deps
+          if ($deps -match '(?i)(vcruntime|msvcp|msvcr|ucrtbase|api-ms-win-crt)[^\s]*\.dll') {
+            throw 'binary depends on a dynamic Visual C++ runtime'
+          }
+      - name: Stage and pack platform artifact
+        run: |
+          python3 packaging/mcp-cli-package.py \
+            --platform "${{ matrix.platform }}" \
+            --binary "${{ matrix.binary }}" \
+            --version "${{ steps.version.outputs.value }}" \
+            --output dist/mcp-cli \
+            --pack-output dist/packages
+          python3 packaging/verify-mcp-cli-artifacts.py \
+            --artifact-root dist/packages \
+            --platform "${{ matrix.platform }}" \
+            --version "${{ steps.version.outputs.value }}"
+          python3 packaging/smoke-mcp-cli-package.py \
+            --artifact-root dist/packages \
+            --binary "${{ matrix.binary }}" \
+            --platform "${{ matrix.platform }}"
+      - name: Upload actual binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-cli-binary-${{ matrix.platform }}
+          if-no-files-found: error
+          path: ${{ matrix.binary }}
+      - name: Upload platform packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-cli-packages-${{ matrix.platform }}
+          if-no-files-found: error
+          path: dist/packages/*-${{ matrix.platform }}-*.tgz
+      - name: Upload root launcher package once
+        if: matrix.platform == 'linux-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-cli-package-root
+          if-no-files-found: error
+          path: dist/packages/clankercode-tm-control-mcp-${{ steps.version.outputs.value }}.tgz
+
+  prepare-release-artifact:
+    name: Verify combined release artifacts (no publish)
+    needs: build-test-package
+    runs-on: ubuntu-latest
+    env:
+      REQUESTED_VERSION: ${{ inputs.version || '' }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Resolve package version
+        id: version
+        run: |
+          version="$(node -p "require('./mcp-cli/npm/tm-control-mcp/package.json').version")"
+          if [[ -n "$REQUESTED_VERSION" && "$REQUESTED_VERSION" != "$version" ]]; then
+            echo "requested version $REQUESTED_VERSION does not match package version $version" >&2
+            exit 1
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+      - name: Download both platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mcp-cli-package-*
+          path: dist/download
+          merge-multiple: true
+      - name: Download actual binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mcp-cli-binary-*
+          path: dist/binaries
+      - name: Verify combined package set
+        run: |
+          python3 packaging/verify-mcp-cli-artifacts.py \
+            --artifact-root dist/download \
+            --version "${{ steps.version.outputs.value }}"
+          python3 packaging/verify-mcp-cli-artifacts.py \
+            --artifact-root dist/download \
+            --binary-root dist/binaries \
+            --version "${{ steps.version.outputs.value }}"
+      - name: Upload release preparation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-cli-release-preparation-${{ steps.version.outputs.value }}
+          if-no-files-found: error
+          path: dist/download/*.tgz

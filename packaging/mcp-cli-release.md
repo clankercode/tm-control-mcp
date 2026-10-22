@@ -19,43 +19,52 @@ The Rust lane must provide this stable boundary:
 
 * Cargo manifest: `mcp-cli/Cargo.toml`
 * release binary target: `tm-control-mcp`
-* Linux x64 output: `target/release/tm-control-mcp`
-* Windows x64 output: `target/release/tm-control-mcp.exe`
+* Linux x64 output: `mcp-cli/target/x86_64-unknown-linux-musl/release/tm-control-mcp`
+* Windows x64 output: `mcp-cli/target/x86_64-pc-windows-msvc/release/tm-control-mcp.exe`
 
 If the Rust lane chooses another binary target or output layout, it must update
 the package metadata, staging script, and launcher together before release.
 
 ## Build and stage
 
-Linux x64 is built on x-p35 through the orchestration helper. The helper makes
-an isolated remote checkout, checks that Cargo, Python, and npm are available
-there, and runs fmt, check, test, build, and package through SSH. It never
-invokes local Cargo:
+The remote helper is an optional build-box path. It creates an isolated
+checkout under the build machine's `~/.cache/tm-control-mcp/builds/`, uses
+`~/tmp/tcm-mcp-cli` for temporary files, caps Cargo at two jobs, and runs all
+Rust commands remotely. It never falls back to local Cargo:
 
 ```bash
 ./tools/mcp-cli-remote.sh all
 ```
 
-Use `MCP_CLI_REMOTE_DIR=/tmp/my-build` when a stable remote path is useful for
-inspection. The generated packages are under the remote `dist/packages`
-directory. Use `sync`, `check`, `test`, `build`, or `package` separately when
-debugging a build-box failure.
+Use `MCP_CLI_REMOTE_DIR` only for another isolated directory below the printed
+remote build root. `MCP_CLI_TARGET` selects a target-specific
+`mcp-cli/target/<triple>` output. The helper's `package` action stages an
+already-built binary and runs `npm pack`; it does not run `cargo package`.
 
-Windows x64 remains a manual build-box step until a trusted Windows runner is
-available. On that box, run the Rust lane's normal locked fmt/check/test/build
-commands, then stage its executable without running Cargo from this checkout:
+The GitHub Actions workflow `.github/workflows/mcp-cli.yml` is the canonical
+build and test path. Its matrix builds Linux x64 musl and Windows x64 MSVC on
+hosted runners, runs fmt/check/test/build with two Cargo jobs, stages and packs
+both platform packages, uploads raw binaries and npm tarballs, then downloads
+and verifies the combined artifact set. Windows uses the target-scoped
+`.cargo/config.toml` static CRT setting and rejects dynamic CRT DLLs. The
+workflow runs on pull requests and is manually dispatchable for release
+preparation; it never publishes npm packages.
+
+For a manual Windows build box, use the same target and output layout, then
+stage its executable without running Cargo from this checkout:
 
 ```bash
 python3 packaging/mcp-cli-package.py \
   --platform win32-x64 \
-  --binary target/release/tm-control-mcp.exe \
+  --binary mcp-cli/target/x86_64-pc-windows-msvc/release/tm-control-mcp.exe \
   --version 0.1.0 \
   --output dist/mcp-cli
 ```
 
-The version is the version being published; the example only documents the
-initial package metadata. Staging both platforms into the same output root
-keeps the root launcher metadata and optional dependency versions identical.
+The version is the version being prepared; the example only documents the
+initial package metadata. The CI smoke installs packed packages offline,
+compares installed executable bytes with the raw build artifact, and compares
+`tm-control-mcp --version` output.
 
 ## Verify and publish
 
@@ -79,13 +88,6 @@ The verifier accepts staged package directories or the `.tgz` files produced by
 that Linux has an executable bit, and that no install or download hook has
 appeared.
 
-The GitHub Actions workflow `.github/workflows/mcp-cli.yml` is manual by
-design. Its hosted runner verifies source metadata and launcher behavior, then
-prints the build-box procedure. It does not label a hosted runner as x-p35 and
-does not run Cargo. Publish the verified packages from the build box:
-
-```bash
-npm publish --access public dist/mcp-cli/tm-control-mcp
-npm publish --access public dist/mcp-cli/tm-control-mcp-linux-x64
-npm publish --access public dist/mcp-cli/tm-control-mcp-win32-x64
-```
+The release preparation artifact is intentionally not published. A later
+release action or human release step may publish the three verified tarballs
+after the normal version and release approval process.

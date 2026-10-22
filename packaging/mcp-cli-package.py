@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 
 
@@ -28,7 +30,19 @@ PLATFORMS = {
         "binary": "tm-control-mcp.exe",
     },
 }
-VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
+VERSION_RE = re.compile(
+    r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+    r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+)
+
+
+def valid_version(version: str) -> bool:
+    match = VERSION_RE.fullmatch(version)
+    return bool(match) and all(
+        not (part.isdigit() and len(part) > 1 and part.startswith("0"))
+        for part in (match.group(4) or "").split(".")
+    )
 
 
 def read_json(path: Path) -> dict:
@@ -45,7 +59,14 @@ def write_json(path: Path, value: dict) -> None:
 def copy_package(source: Path, destination: Path) -> None:
     if destination.exists():
         shutil.rmtree(destination)
-    shutil.copytree(source, destination)
+    destination.mkdir(parents=True)
+    for filename in ("package.json", "README.md"):
+        shutil.copy2(source / filename, destination / filename)
+    if source.name == ROOT_PACKAGE_DIR:
+        (destination / "bin").mkdir()
+        launcher = destination / "bin" / "tm-control-mcp.js"
+        shutil.copy2(source / "bin" / "tm-control-mcp.js", launcher)
+        launcher.chmod(0o755)
 
 
 def stage(source_root: Path, output_root: Path, platform: str, binary: Path, version: str) -> None:
@@ -56,8 +77,20 @@ def stage(source_root: Path, output_root: Path, platform: str, binary: Path, ver
         raise SystemExit(f"npm package source is incomplete under {source_root}")
     if not binary.is_file():
         raise SystemExit(f"built binary does not exist: {binary}")
-    if not VERSION_RE.fullmatch(version):
+    if not valid_version(version):
         raise SystemExit(f"invalid npm package version: {version!r}")
+
+    source_root = source_root.resolve()
+    output_root = output_root.resolve()
+    binary = binary.resolve()
+    if (source_root.is_relative_to(output_root) or output_root.is_relative_to(source_root)
+            or binary.is_relative_to(output_root)):
+        raise SystemExit("output must be separate from the source packages and input binary")
+    # Never silently combine binaries from different releases.
+    for item in PLATFORMS.values():
+        metadata_path = output_root / item["directory"] / "package.json"
+        if metadata_path.is_file() and read_json(metadata_path).get("version") != version:
+            raise SystemExit("output contains another package version; use a fresh output directory")
 
     output_root.mkdir(parents=True, exist_ok=True)
     root_destination = output_root / ROOT_PACKAGE_DIR
@@ -85,6 +118,19 @@ def stage(source_root: Path, output_root: Path, platform: str, binary: Path, ver
     print(f"staged {descriptor['package']} {version} at {platform_destination}")
 
 
+def pack(output_root: Path, pack_output: Path, platform: str) -> None:
+    npm = shutil.which("npm.cmd" if os.name == "nt" else "npm")
+    if npm is None:
+        raise SystemExit("npm is required to pack the staged packages")
+    pack_output.mkdir(parents=True, exist_ok=True)
+    for directory in (ROOT_PACKAGE_DIR, PLATFORMS[platform]["directory"]):
+        subprocess.run(
+            [npm, "pack", "--ignore-scripts", "--pack-destination", str(pack_output.resolve()),
+             str((output_root / directory).resolve())],
+            check=True, shell=False,
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", type=Path, default=Path("mcp-cli/npm"))
@@ -92,8 +138,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--platform", choices=sorted(PLATFORMS), required=True)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--version", required=True)
+    parser.add_argument("--pack-output", type=Path, help="also create npm tarballs here (no Cargo)")
     args = parser.parse_args(argv)
     stage(args.source_root, args.output, args.platform, args.binary, args.version)
+    if args.pack_output is not None:
+        pack(args.output, args.pack_output, args.platform)
     return 0
 
 

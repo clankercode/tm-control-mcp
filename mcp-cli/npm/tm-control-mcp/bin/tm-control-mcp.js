@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 "use strict";
 
 const { spawn } = require("node:child_process");
@@ -114,7 +115,7 @@ function launch({
   }
 
   const forwardSignal = (signal) => {
-    if (settled || child.killed || child.exitCode !== null) return;
+    if (settled || child.exitCode !== null) return;
     try {
       child.kill(signal);
     } catch (error) {
