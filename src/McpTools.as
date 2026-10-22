@@ -1255,18 +1255,38 @@ namespace TmMcp {
     // (~2.3–3.4ms/frame — most of the render budget). The built-in tools are
     // static; only the appended pack tools vary with g_Packs. We cache the
     // fully-built array and rebuild only when the pack registry mutates
-    // (g_ToolListVersion is bumped on register/unregister/sweep).
+    // (g_ToolListVersion is bumped on register/unregister/sweep). The cache is
+    // never returned directly: imported callers and socket responses receive a
+    // JSON round-trip clone because AngelScript JSON assignment may retain
+    // nested references.
     Json::Value@ g_ToolListCache = null;
-    uint g_ToolListBuiltVersion = 0;
-    uint g_ToolListVersion = 1;
+    uint64 g_ToolListBuiltVersion = 0;
+    uint64 g_ToolListVersion = 1;
+    uint64 g_ToolRegistryRevision = 1;
     // Diagnostics: confirm the cache is actually hit at runtime (vs. the
     // version being bumped unexpectedly). Exposed via the MCP GetResult-free
     // debug path / readable in the log.
     uint g_ToolListHits = 0;
     uint g_ToolListMisses = 0;
-    void InvalidateToolList() { g_ToolListVersion++; }
+    void InvalidateToolList() {
+        g_ToolListVersion++;
+        g_ToolRegistryRevision++;
+    }
 
-    Json::Value@ GetToolList() {
+    Json::Value@ CloneJsonValue(Json::Value@ value) {
+        if (value is null) return null;
+        try {
+            return Json::Parse(Json::Write(value));
+        } catch {
+            warn("TM Control MCP: failed to detach JSON value: " + getExceptionInfo());
+            return null;
+        }
+    }
+
+    Json::Value@ GetToolListCached() {
+        // A dead pack must not survive behind a warm cache. Sweep before the
+        // hit check so removal also advances the registry revision.
+        SweepDeadPacks();
         if (g_ToolListCache !is null && g_ToolListBuiltVersion == g_ToolListVersion) {
             g_ToolListHits++;
             return g_ToolListCache;
@@ -1276,6 +1296,62 @@ namespace TmMcp {
         @g_ToolListCache = tools;
         g_ToolListBuiltVersion = g_ToolListVersion;
         return g_ToolListCache;
+    }
+
+    Json::Value@ GetToolList() {
+        return CloneJsonValue(GetToolListCached());
+    }
+
+    int CompareCanonicalToolNames(const string &in left, const string &in right) {
+        uint common = Math::Min(uint(left.Length), uint(right.Length));
+        for (uint i = 0; i < common; i++) {
+            if (left[i] == right[i]) continue;
+            return left[i] < right[i] ? -1 : 1;
+        }
+        if (left.Length == right.Length) return 0;
+        return left.Length < right.Length ? -1 : 1;
+    }
+
+    Json::Value@ ToolCatalogIdentity() {
+        SweepDeadPacks();
+        auto output = Json::Object();
+        output["schemaVersion"] = 1;
+        output["instance"] = g_ToolCallInstance;
+        output["revision"] = "" + g_ToolRegistryRevision;
+        return output;
+    }
+
+    Json::Value@ BuildToolCatalog() {
+        auto source = GetToolListCached();
+        auto catalog = Json::Object();
+        catalog["schemaVersion"] = 1;
+        catalog["instance"] = g_ToolCallInstance;
+        catalog["revision"] = "" + g_ToolRegistryRevision;
+
+        auto tools = Json::Array();
+        if (source !is null && source.GetType() == Json::Type::Array) {
+            array<bool> selected;
+            selected.Resize(source.Length);
+            for (uint count = 0; count < source.Length; count++) {
+                int best = -1;
+                for (uint i = 0; i < source.Length; i++) {
+                    if (selected[i]) continue;
+                    if (best < 0 || CompareCanonicalToolNames(
+                        string(source[i]["name"]), string(source[uint(best)]["name"])) < 0) {
+                        best = int(i);
+                    }
+                }
+                if (best < 0) break;
+                selected[uint(best)] = true;
+                auto tool = CloneJsonValue(source[uint(best)]);
+                if (tool is null) continue;
+                if (!tool.HasKey("pack")) tool["pack"] = "";
+                tools.Add(tool);
+            }
+        }
+        catalog["tools"] = tools;
+        // Detach the catalog and every nested descriptor from the cache.
+        return CloneJsonValue(catalog);
     }
 
     Json::Value@ BuildToolList() {

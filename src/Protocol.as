@@ -65,12 +65,14 @@ namespace TmMcp {
         if (route.Length == 0 && request.HasKey("tool")) route = "call";
 
         if (route == "status") {
+            SweepDeadPacks();
             Json::Value data = Json::Object();
             data["alive"] = true;
             data["port"] = S_TmMcpPort;
             data["host"] = S_TmMcpHost;
             data["socket"] = GetSocketStatus();
             data["calls"] = ToolCallStatus();
+            data["catalog"] = ToolCatalogIdentity();
             auto self = Meta::ExecutingPlugin();
             if (self !is null) {
                 data["plugin"] = self.Name;
@@ -89,6 +91,10 @@ namespace TmMcp {
 
         if (route == "tools") {
             return MakeResponse(id, route, GetToolList(), "");
+        }
+
+        if (route == "catalog") {
+            return MakeResponse(id, route, BuildToolCatalog(), "");
         }
 
         if (route == "call") {

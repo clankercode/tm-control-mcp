@@ -53,16 +53,18 @@ namespace TmMcp {
         }
         trace("TM Control MCP pack dropped " + pack.packId);
         g_Packs.RemoveAt(i);
-        InvalidateToolList();
     }
 
     void SweepDeadPacks() {
+        bool changed = false;
         for (int i = int(g_Packs.Length) - 1; i >= 0; i--) {
             auto p = Meta::GetPluginFromID(g_Packs[i].pluginId);
             if (p is null || !p.Enabled) {
                 DropPackAt(uint(i));
+                changed = true;
             }
         }
+        if (changed) InvalidateToolList();
     }
 
     bool IsPackToolName(const string &in name) {
