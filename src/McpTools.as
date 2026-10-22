@@ -1263,6 +1263,9 @@ namespace TmMcp {
     uint64 g_ToolListBuiltVersion = 0;
     uint64 g_ToolListVersion = 1;
     uint64 g_ToolRegistryRevision = 1;
+    string g_ToolListSerialized = "";
+    string g_ToolCatalogSerialized = "";
+    uint64 g_ToolCatalogSerializedRevision = 0;
     // Diagnostics: confirm the cache is actually hit at runtime (vs. the
     // version being bumped unexpectedly). Exposed via the MCP GetResult-free
     // debug path / readable in the log.
@@ -1283,6 +1286,16 @@ namespace TmMcp {
         }
     }
 
+    Json::Value@ ParseCachedJson(const string &in serialized) {
+        if (serialized.Length == 0) return null;
+        try {
+            return Json::Parse(serialized);
+        } catch {
+            warn("TM Control MCP: failed to parse cached JSON: " + getExceptionInfo());
+            return null;
+        }
+    }
+
     Json::Value@ GetToolListCached() {
         // A dead pack must not survive behind a warm cache. Sweep before the
         // hit check so removal also advances the registry revision.
@@ -1295,11 +1308,13 @@ namespace TmMcp {
         Json::Value tools = BuildToolList();
         @g_ToolListCache = tools;
         g_ToolListBuiltVersion = g_ToolListVersion;
+        g_ToolListSerialized = Json::Write(tools);
         return g_ToolListCache;
     }
 
     Json::Value@ GetToolList() {
-        return CloneJsonValue(GetToolListCached());
+        GetToolListCached();
+        return ParseCachedJson(g_ToolListSerialized);
     }
 
     int CompareCanonicalToolNames(const string &in left, const string &in right) {
@@ -1312,6 +1327,23 @@ namespace TmMcp {
         return left.Length < right.Length ? -1 : 1;
     }
 
+    // Stable merge sort of descriptor indices: O(n log n), once per revision.
+    void SortToolCatalogIndices(array<string> &in names, array<uint> &inout order,
+                                array<uint> &inout scratch, uint begin, uint end) {
+        if (end - begin < 2) return;
+        uint middle = begin + (end - begin) / 2;
+        SortToolCatalogIndices(names, order, scratch, begin, middle);
+        SortToolCatalogIndices(names, order, scratch, middle, end);
+        uint left = begin, right = middle;
+        for (uint outIndex = begin; outIndex < end; outIndex++) {
+            if (left < middle && (right >= end
+                || CompareCanonicalToolNames(names[order[left]], names[order[right]]) <= 0)) {
+                scratch[outIndex] = order[left++];
+            } else scratch[outIndex] = order[right++];
+        }
+        for (uint i = begin; i < end; i++) order[i] = scratch[i];
+    }
+
     Json::Value@ ToolCatalogIdentity() {
         SweepDeadPacks();
         auto output = Json::Object();
@@ -1322,7 +1354,17 @@ namespace TmMcp {
     }
 
     Json::Value@ BuildToolCatalog() {
-        auto source = GetToolListCached();
+        SweepDeadPacks();
+        GetToolListCached();
+        if (g_ToolCatalogSerializedRevision == g_ToolRegistryRevision
+            && g_ToolCatalogSerialized.Length > 0) {
+            return ParseCachedJson(g_ToolCatalogSerialized);
+        }
+
+        // Parse the serialized list once. The detached working tree is sorted
+        // and annotated without touching the internal cache; the published
+        // catalog is then serialized once for all subsequent callers.
+        auto source = ParseCachedJson(g_ToolListSerialized);
         auto catalog = Json::Object();
         catalog["schemaVersion"] = 1;
         catalog["instance"] = g_ToolCallInstance;
@@ -1330,20 +1372,15 @@ namespace TmMcp {
 
         auto tools = Json::Array();
         if (source !is null && source.GetType() == Json::Type::Array) {
-            array<bool> selected;
-            selected.Resize(source.Length);
-            for (uint count = 0; count < source.Length; count++) {
-                int best = -1;
-                for (uint i = 0; i < source.Length; i++) {
-                    if (selected[i]) continue;
-                    if (best < 0 || CompareCanonicalToolNames(
-                        string(source[i]["name"]), string(source[uint(best)]["name"])) < 0) {
-                        best = int(i);
-                    }
-                }
-                if (best < 0) break;
-                selected[uint(best)] = true;
-                auto tool = CloneJsonValue(source[uint(best)]);
+            array<string> names;
+            array<uint> order, scratch;
+            scratch.Resize(source.Length);
+            for (uint i = 0; i < source.Length; i++) {
+                names.InsertLast(string(source[i]["name"])); order.InsertLast(i);
+            }
+            SortToolCatalogIndices(names, order, scratch, 0, order.Length);
+            for (uint i = 0; i < order.Length; i++) {
+                auto tool = source[order[i]];
                 if (tool is null) continue;
                 if (!tool.HasKey("pack")) tool["pack"] = "";
                 string generation = "";
@@ -1355,9 +1392,12 @@ namespace TmMcp {
             }
         }
         catalog["tools"] = tools;
-        // Detach the catalog and every nested descriptor from the cache.
-        return CloneJsonValue(catalog);
+        g_ToolCatalogSerialized = Json::Write(catalog);
+        g_ToolCatalogSerializedRevision = g_ToolRegistryRevision;
+        return ParseCachedJson(g_ToolCatalogSerialized);
     }
+
+    Json::Value@ GetToolCatalog() { return BuildToolCatalog(); }
 
     Json::Value@ BuildToolList() {
         Json::Value tools = Json::Array();

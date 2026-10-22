@@ -1,11 +1,6 @@
 //! Shared core for the `mcp-cli` binary.
 
-use std::{
-    collections::{BTreeMap, VecDeque},
-    path::PathBuf,
-    sync::{Arc, Mutex},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use futures::future::BoxFuture;
@@ -17,7 +12,7 @@ use rmcp::{
         Implementation, ListResourcesResult, ListToolsResult, ReadResourceRequestParams,
         ReadResourceResponse, ReadResourceResult, Resource, ResourceContents, ResourcesCapability,
         ServerCapabilities, ServerConfig, SubscribeRequestParams, SubscriptionFilter, Tool,
-        UnsubscribeRequestParams,
+        ToolAnnotations, UnsubscribeRequestParams,
     },
     service::{RequestContext, SubscriptionContext},
 };
@@ -26,7 +21,7 @@ use serde_json::{Value, json};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::{broadcast, mpsc},
+    sync::broadcast,
     time::timeout,
 };
 use tokio_util::sync::CancellationToken;
@@ -36,8 +31,10 @@ pub const DEFAULT_NATIVE_PORT: u16 = 30006;
 pub const DEFAULT_HTTP_ADDR: &str = "127.0.0.1:30007";
 pub const MAX_NATIVE_FRAME: usize = 16 * 1024 * 1024;
 pub const NATIVE_TIMEOUT: Duration = Duration::from_secs(30);
-pub const MAX_EVENT_COPY: usize = 2048;
-pub const MAX_EVENTS: usize = 256;
+pub mod media;
+pub mod monitor;
+pub use monitor::{CoreEvent, Event, MAX_EVENT_COPY, MAX_EVENTS, MonitorStats, MonitorStore};
+use monitor::{bounded, bounded_json, now_ms, sanitize_value};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NativeResponse {
@@ -63,6 +60,10 @@ pub struct NativeTool {
     pub pack: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation: Option<String>,
+    #[serde(default)]
+    pub annotations: Option<ToolAnnotations>,
+    #[serde(default)]
+    pub output_schema: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -87,111 +88,6 @@ pub struct NativeExpect {
     pub instance: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Event {
-    pub invocation_id: String,
-    pub connection_id: String,
-    pub request_id: String,
-    pub method: String,
-    pub tool: Option<String>,
-    pub started_ms: u128,
-    pub ended_ms: u128,
-    pub status: String,
-    pub argument_bytes: usize,
-    pub result_bytes: usize,
-    pub arguments: String,
-    pub result: String,
-}
-
-#[derive(Debug, Clone)]
-pub enum CoreEvent {
-    Invocation(Event),
-    CatalogChanged(String),
-}
-
-#[derive(Debug)]
-pub struct MonitorStore {
-    events: Mutex<VecDeque<Event>>,
-    sequence: std::sync::atomic::AtomicU64,
-    events_tx: broadcast::Sender<CoreEvent>,
-    jsonl_tx: Option<mpsc::Sender<Event>>,
-}
-
-impl MonitorStore {
-    pub fn new(jsonl_path: Option<PathBuf>) -> Arc<Self> {
-        let (events_tx, _) = broadcast::channel(128);
-        let jsonl_tx = jsonl_path.map(|path| {
-            let (tx, mut rx) = mpsc::channel::<Event>(128);
-            tokio::spawn(async move {
-                while let Some(event) = rx.recv().await {
-                    if let Err(error) = append_jsonl(&path, &event).await {
-                        tracing::warn!(%error, "metadata JSONL write failed");
-                    }
-                }
-            });
-            tx
-        });
-        Arc::new(Self {
-            events: Mutex::new(VecDeque::with_capacity(MAX_EVENTS)),
-            sequence: std::sync::atomic::AtomicU64::new(1),
-            events_tx,
-            jsonl_tx,
-        })
-    }
-
-    pub fn subscribe(&self) -> broadcast::Receiver<CoreEvent> {
-        self.events_tx.subscribe()
-    }
-
-    pub fn snapshot(&self) -> Vec<Event> {
-        self.events
-            .lock()
-            .expect("monitor mutex poisoned")
-            .iter()
-            .cloned()
-            .collect()
-    }
-
-    pub fn next_id(&self) -> String {
-        format!(
-            "inv-{}",
-            self.sequence
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        )
-    }
-
-    pub fn record(&self, event: Event) {
-        {
-            let mut events = self.events.lock().expect("monitor mutex poisoned");
-            if events.len() == MAX_EVENTS {
-                events.pop_front();
-            }
-            events.push_back(event.clone());
-        }
-        if let Some(tx) = &self.jsonl_tx {
-            let _ = tx.try_send(event.clone());
-        }
-        let _ = self.events_tx.send(CoreEvent::Invocation(event));
-    }
-
-    pub fn catalog_changed(&self, revision: String) {
-        let _ = self.events_tx.send(CoreEvent::CatalogChanged(revision));
-    }
-}
-
-async fn append_jsonl(path: &PathBuf, event: &Event) -> Result<()> {
-    let line = serde_json::to_vec(event)?;
-    let mut file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .await
-        .with_context(|| format!("open metadata JSONL {}", path.display()))?;
-    file.write_all(&line).await?;
-    file.write_all(b"\n").await?;
-    Ok(())
 }
 
 pub trait NativeBackend: Send + Sync {
@@ -285,12 +181,9 @@ impl NativeBackend for NativeTcpClient {
     ) -> BoxFuture<'static, Result<NativeResponse>> {
         let client = self.clone();
         Box::pin(async move {
-            client
-                .request(
-                    json!({"route":"call","tool":tool,"input":input,"expect":expect}),
-                    client.timeout,
-                )
-                .await
+            let mut request = json!({"route":"call","tool":tool,"input":input});
+            request["expect"] = serde_json::to_value(expect)?;
+            client.request(request, client.timeout).await
         })
     }
 }
@@ -418,6 +311,10 @@ impl Core {
 
     pub fn monitor(&self) -> Arc<MonitorStore> {
         self.monitor.clone()
+    }
+
+    pub fn backend(&self) -> Arc<dyn NativeBackend> {
+        self.backend.clone()
     }
 
     fn cached_catalog(&self) -> Option<CatalogSnapshot> {
@@ -671,52 +568,6 @@ fn native_failed(response: &NativeResponse) -> bool {
     !response.ok || response.data.pointer("/result/success") == Some(&Value::Bool(false))
 }
 
-fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-}
-fn bounded(value: &str) -> String {
-    value.chars().take(MAX_EVENT_COPY).collect()
-}
-fn bounded_json(value: &Value) -> String {
-    bounded(&serde_json::to_string(value).unwrap_or_else(|_| "<unserializable>".into()))
-}
-
-fn sanitize_value(value: &Value) -> Value {
-    match value {
-        Value::Object(map) => Value::Object(
-            map.iter()
-                .map(|(key, value)| {
-                    let lower = key.to_ascii_lowercase();
-                    let redacted = [
-                        "token",
-                        "password",
-                        "secret",
-                        "authorization",
-                        "accesskey",
-                        "privatekey",
-                    ]
-                    .iter()
-                    .any(|needle| lower.contains(needle));
-                    (
-                        bounded(key),
-                        if redacted {
-                            Value::String("[redacted]".into())
-                        } else {
-                            sanitize_value(value)
-                        },
-                    )
-                })
-                .collect(),
-        ),
-        Value::Array(values) => Value::Array(values.iter().map(sanitize_value).collect()),
-        Value::String(string) => Value::String(bounded(string)),
-        other => other.clone(),
-    }
-}
-
 struct DenyExternalReferences;
 
 impl jsonschema::Retrieve for DenyExternalReferences {
@@ -743,25 +594,45 @@ pub fn validate_input(schema: &Value, input: &Value) -> Result<()> {
         .map_err(|error| anyhow!("invalid tool input: {error}"))
 }
 
-#[derive(Clone)]
 pub struct McpAdapter {
     pub core: Arc<Core>,
+    media: Option<Arc<media::MediaService>>,
+}
+
+impl Clone for McpAdapter {
+    fn clone(&self) -> Self {
+        Self {
+            core: self.core.clone(),
+            media: self.media.clone(),
+        }
+    }
 }
 
 impl McpAdapter {
     pub fn new(core: Arc<Core>) -> Self {
-        Self { core }
+        Self::with_media_root(core, None)
+            .unwrap_or_else(|_| unreachable!("optional media construction cannot fail"))
+    }
+
+    pub fn with_media_root(core: Arc<Core>, root: Option<std::path::PathBuf>) -> Result<Self> {
+        let media = match root {
+            Some(root) => Some(media::MediaService::new(
+                core.backend(),
+                media::ScreenshotConfig::new(root)?,
+            )),
+            None => match media::MediaService::from_environment(core.backend()) {
+                Ok(media) => Some(media),
+                Err(error) => {
+                    tracing::debug!(%error, "screenshot media disabled; configure TM_USER_GAME_FOLDER");
+                    None
+                }
+            },
+        };
+        Ok(Self { core, media })
     }
 
     fn tools(&self, catalog: CatalogSnapshot) -> Vec<Tool> {
-        catalog
-            .tools
-            .into_values()
-            .map(|tool| {
-                let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
-                Tool::new_with_raw(tool.name, Some(tool.description.into()), Arc::new(schema))
-            })
-            .collect()
+        catalog.tools.into_values().map(mcp_tool).collect()
     }
 }
 
@@ -786,16 +657,9 @@ impl ServerHandler for McpAdapter {
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        self.core.cached_catalog().and_then(|catalog| {
-            catalog.tools.get(name).map(|tool| {
-                let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
-                Tool::new_with_raw(
-                    tool.name.clone(),
-                    Some(tool.description.clone().into()),
-                    Arc::new(schema),
-                )
-            })
-        })
+        self.core
+            .cached_catalog()
+            .and_then(|catalog| catalog.tools.get(name).cloned().map(mcp_tool))
     }
 
     async fn list_tools(
@@ -816,14 +680,36 @@ impl ServerHandler for McpAdapter {
     ) -> Result<CallToolResponse, McpError> {
         let input = Value::Object(request.arguments.unwrap_or_default());
         let tool = request.name.to_string();
+        let capture = if tool == "TakeScreenshot" {
+            match &self.media {
+                Some(media) => Some(media.prepare().await.map_err(internal_error)?),
+                None => None,
+            }
+        } else {
+            None
+        };
         let result = self
             .core
             .call(&tool, input, "mcp", &request_id(&context.id))
             .await;
         match result {
             Ok(response) => {
+                let artifact = if let (Some(media), Some(capture)) = (&self.media, capture) {
+                    if native_failed(&response) {
+                        None
+                    } else {
+                        Some(
+                            media
+                                .finish(capture, &response)
+                                .await
+                                .map_err(internal_error)?,
+                        )
+                    }
+                } else {
+                    None
+                };
                 let failed = native_failed(&response);
-                Ok(native_result(response, failed).into())
+                Ok(native_result(response, failed, artifact).into())
             }
             Err(CallError::UnknownTool(error)) => Err(McpError::invalid_params(error, None)),
             Err(CallError::InvalidArguments(error)) => {
@@ -849,7 +735,7 @@ impl ServerHandler for McpAdapter {
             .list_guides("mcp", "resources/list")
             .await
             .map_err(internal_error)?;
-        let resources = guides
+        let mut resources = guides
             .into_iter()
             .map(|guide| {
                 Resource::new(format!("tm-control://guide/{}", guide.topic), guide.topic)
@@ -857,7 +743,10 @@ impl ServerHandler for McpAdapter {
                     .with_mime_type("text/markdown")
                     .with_description("Native tm-control-mcp guide")
             })
-            .collect();
+            .collect::<Vec<_>>();
+        if let Some(media) = &self.media {
+            resources.extend(media.list_image_resources());
+        }
         Ok(ListResourcesResult::with_all_items(resources)
             .with_ttl_ms(0)
             .with_cache_scope(CacheScope::Private))
@@ -868,6 +757,19 @@ impl ServerHandler for McpAdapter {
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, McpError> {
+        if request.uri.starts_with(media::SCREENSHOT_URI_PREFIX) {
+            let media = self
+                .media
+                .as_ref()
+                .ok_or_else(|| McpError::resource_not_found(request.uri.clone(), None))?;
+            let content = media
+                .read_image_resource(&request.uri)
+                .map_err(internal_error)?;
+            return Ok(ReadResourceResult::new(vec![content])
+                .with_ttl_ms(0)
+                .with_cache_scope(CacheScope::Private)
+                .into());
+        }
         let prefix = "tm-control://guide/";
         let key = request
             .uri
@@ -981,6 +883,19 @@ impl ServerHandler for McpAdapter {
     }
 }
 
+fn mcp_tool(tool: NativeTool) -> Tool {
+    let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
+    let mut result = Tool::new_with_raw(tool.name, Some(tool.description.into()), Arc::new(schema));
+    if let Some(output) = tool
+        .output_schema
+        .and_then(|value| value.as_object().cloned())
+    {
+        result.output_schema = Some(Arc::new(output));
+    }
+    result.annotations = tool.annotations;
+    result
+}
+
 fn request_id(id: &rmcp::model::RequestId) -> String {
     serde_json::to_string(id).unwrap_or_else(|_| "unknown".into())
 }
@@ -988,8 +903,29 @@ fn internal_error(error: anyhow::Error) -> McpError {
     McpError::internal_error(error.to_string(), None)
 }
 
-fn native_result(response: NativeResponse, error: bool) -> CallToolResult {
-    let output = serde_json::to_value(response).unwrap_or(Value::Null);
+fn native_result(
+    response: NativeResponse,
+    error: bool,
+    artifact: Option<media::ImageArtifact>,
+) -> CallToolResult {
+    let mut output = serde_json::to_value(response).unwrap_or(Value::Null);
+    let artifact_for_content = artifact.clone();
+    if let Some(artifact) = artifact {
+        if let Some(native_output) = output
+            .pointer_mut("/data/result/output")
+            .and_then(Value::as_object_mut)
+        {
+            native_output.insert(
+                "screenshot".into(),
+                json!({
+                    "uri": artifact.uri(),
+                    "mimeType": artifact.mime_type(),
+                    "size": artifact.size_bytes(),
+                    "immutable": true
+                }),
+            );
+        }
+    }
     let mut result = if error {
         CallToolResult::structured_error(output)
     } else {
@@ -997,6 +933,9 @@ fn native_result(response: NativeResponse, error: bool) -> CallToolResult {
     };
     if result.content.is_empty() {
         result.content.push(ContentBlock::text("{}"));
+    }
+    if let Some(artifact) = artifact_for_content {
+        result.content.push(artifact.image_block());
     }
     result
 }
@@ -1082,7 +1021,7 @@ mod tests {
             error: String::new(),
             data: json!({"tool":"Echo","result":{"success":false,"error":"native failure","code":"failed"}}),
         };
-        let result = native_result(response, true);
+        let result = native_result(response, true, None);
         assert_eq!(result.is_error, Some(true));
         assert_eq!(
             result.structured_content.unwrap()["data"]["result"]["success"],
@@ -1137,6 +1076,7 @@ mod tests {
                 data: json!({"result":{"success":false,"output":{"fullName":"GameData/ScreenShot01.jpg"}}}),
             },
             true,
+            None,
         );
         assert_eq!(output.is_error, Some(true));
         assert_eq!(

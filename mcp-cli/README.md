@@ -30,10 +30,11 @@ transport handles both the modern stateless protocol and the legacy initialize
 session lifecycle. Supported protocol versions are `2026-07-28`, `2025-11-25`,
 and `2025-06-18`.
 
-The built-in resources are `tm-control://guide/index`, `readiness`,
-`placement`, and `screenshots`. Screenshot calls expose bounded native path
-metadata with `verified: false`; this binary does not read or claim to decode
-image bytes.
+Guide resources are discovered from the native `ListGuides` tool and read
+through `GetGuide`. `TakeScreenshot` can publish fresh, magic-verified JPEG,
+PNG, or WebP bytes as an MCP image plus an immutable
+`tm-control://screenshot/<opaque-id>` resource. Configure the approved capture
+root with `--screenshots-dir` or `TM_USER_GAME_FOLDER`.
 
 ## Configuration
 
@@ -48,11 +49,13 @@ serve --transport stdio|http | monitor | doctor
 --poll-ms 2000
 --events-jsonl /path/to/events.jsonl
 --origin http://localhost:30007
+--screenshots-dir /path/to/Trackmania
 ```
 
-The monitor keeps at most 256 events. Event payloads are bounded and redact
-keys containing token, password, secret, authorization, access-key, or private
-key. JSONL writes use a bounded async queue and never hold up MCP dispatch.
+The monitor keeps at most 2,000 events within a bounded memory budget. Event
+payloads are redacted and bounded; persistent JSONL contains metadata only and
+rotates through five 10 MiB files. Payload export is explicit with
+`--export-dir`.
 
 Build and test this crate on `x-p35`; the repository lane intentionally does
 not run Cargo on the workstation.

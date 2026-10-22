@@ -11,11 +11,14 @@ namespace TmMcp {
         ToolPackDispatch@ dispatch;
         string generation;
         array<Json::Value@> metadata;
+        bool retired = false;
+        uint running = 0;
 
         RegisteredPack() {}
     }
 
     array<RegisteredPack@> g_Packs;
+    array<RegisteredPack@> g_RetiredPacks;
     uint64 g_NextPackGeneration = 0;
 
     bool IsReservedPackId(const string &in id) {
@@ -54,11 +57,17 @@ namespace TmMcp {
         for (uint t = 0; t < pack.toolNames.Length; t++) {
             UnregisterToolSchema(pack.packId + "." + pack.toolNames[t]);
         }
+        pack.retired = true;
+        if (pack.running > 0) g_RetiredPacks.InsertLast(pack);
         trace("TM Control MCP pack dropped " + pack.packId);
         g_Packs.RemoveAt(i);
     }
 
     void SweepDeadPacks() {
+        for (int i = int(g_RetiredPacks.Length) - 1; i >= 0; i--) {
+            auto pack = g_RetiredPacks[uint(i)];
+            if (!IsPackGenerationRunning(pack.generation)) g_RetiredPacks.RemoveAt(uint(i));
+        }
         bool changed = false;
         for (int i = int(g_Packs.Length) - 1; i >= 0; i--) {
             auto p = Meta::GetPluginFromID(g_Packs[i].pluginId);
@@ -113,6 +122,46 @@ namespace TmMcp {
         return true;
     }
 
+    bool ValidateToolMetadata(Json::Value@ supplied, string &out err) {
+        err = "";
+        if (supplied is null || supplied.GetType() != Json::Type::Object) {
+            err = "tool metadata must be an object"; return false;
+        }
+        auto keys = supplied.GetKeys();
+        for (uint i = 0; i < keys.Length; i++) {
+            string key = keys[i];
+            if (key != "annotations" && key != "output_schema") {
+                err = "metadata supports annotations/output_schema objects"; return false;
+            }
+            if (supplied[key].GetType() != Json::Type::Object) {
+                err = key + " must be an object"; return false;
+            }
+        }
+        if (supplied.HasKey("annotations")) {
+            auto annotations = supplied["annotations"];
+            auto annotationKeys = annotations.GetKeys();
+            for (uint i = 0; i < annotationKeys.Length; i++) {
+                string key = annotationKeys[i];
+                if (key != "title" && key != "readOnlyHint" && key != "destructiveHint"
+                    && key != "idempotentHint" && key != "openWorldHint") {
+                    err = "unknown tool annotation: " + key; return false;
+                }
+                auto value = annotations[key];
+                if (key == "title") {
+                    if (value.GetType() != Json::Type::String || string(value).Length > 256) {
+                        err = "annotation title must be a string of at most 256 characters"; return false;
+                    }
+                } else if (value.GetType() != Json::Type::Boolean) {
+                    err = "boolean tool annotations must be boolean"; return false;
+                }
+            }
+        }
+        if (supplied.HasKey("output_schema") && Json::Write(supplied["output_schema"]).Length > 262144) {
+            err = "output_schema exceeds 256 KiB"; return false;
+        }
+        return true;
+    }
+
     Json::Value@ RegisterToolPack(ToolPackBuilder@ builder) {
         auto options = Json::Object();
         return RegisterToolPackEx(builder, options);
@@ -146,11 +195,17 @@ namespace TmMcp {
         if (packId.Length == 0 || packId.IndexOf(".") >= 0) return MakeError("invalid packId", "pack_bad_id");
         if (IsReservedPackId(packId)) return MakeError("reserved packId", "pack_reserved_id");
         int existingIndex = FindPackIndex(packId);
+        for (uint i = 0; i < g_RetiredPacks.Length; i++) {
+            if (g_RetiredPacks[i].packId == packId)
+                return MakeError("retired pack generation is still running", "pack_busy", true);
+        }
         RegisteredPack@ existing = existingIndex < 0 ? null : g_Packs[uint(existingIndex)];
         if (existing !is null) {
             if (!replace) return MakeError("pack already registered; use owner replacement with expectedGeneration", "pack_already_registered");
             if (existing.pluginId != plugin.ID) return MakeError("only the owner can replace a pack", "pack_not_owner");
             if (expected.Length == 0 || expected != existing.generation) return MakeError("pack generation is stale", "stale_generation");
+            if (existing.running > 0 && IsPackGenerationRunning(existing.generation))
+                return MakeError("pack generation is still running", "pack_busy", true);
         } else if (replace || expected.Length > 0) return MakeError("replacement pack is no longer registered", "stale_generation");
         if (builder.dispatch is null) return MakeError("dispatch is null", "pack_null_dispatch");
         if (builder.tools.Length == 0 || builder.tools.Length > 512) return MakeError("pack needs 1..512 tools", "pack_empty");
@@ -177,12 +232,8 @@ namespace TmMcp {
             auto meta = Json::Object();
             if (options.HasKey("tools") && options["tools"].HasKey(t.name)) {
                 auto supplied = options["tools"][t.name];
-                if (supplied.GetType() != Json::Type::Object) return MakeError("tool metadata must be an object", "pack_bad_metadata");
-                auto keys = supplied.GetKeys();
-                for (uint k = 0; k < keys.Length; k++) {
-                    if ((keys[k] != "annotations" && keys[k] != "output_schema") || supplied[keys[k]].GetType() != Json::Type::Object)
-                        return MakeError("metadata supports annotations/output_schema objects", "pack_bad_metadata");
-                }
+                string metadataError;
+                if (!ValidateToolMetadata(supplied, metadataError)) return MakeError(metadataError, "pack_bad_metadata");
                 @meta = CloneJsonValue(supplied);
                 if (meta is null) return MakeError("could not detach metadata", "pack_bad_metadata");
             }
@@ -210,6 +261,7 @@ namespace TmMcp {
         else @packs[uint(existingIndex)] = pack;
         pack.generation = "" + (g_NextPackGeneration + 1);
         // No yields/callbacks between CAS validation and publication.
+        if (existing !is null) existing.retired = true;
         g_schemaToolNames = names; g_schemaRecords = schemas; g_Packs = packs;
         g_NextPackGeneration++;
         InvalidateToolList();
@@ -281,6 +333,7 @@ namespace TmMcp {
             if (pack.toolNames[i] == local) { found = true; break; }
         }
         if (!found) return null;
+        if (pack.retired) return MakeError("pack generation is retired", "stale_generation");
         if (pack.dispatch is null) {
             return MakeError("pack '" + packId + "' has no dispatch", "pack_null_dispatch", false);
         }
@@ -288,11 +341,14 @@ namespace TmMcp {
         // uint started = Time::Now;
         // trace("TM Control MCP pack start " + name);
         Json::Value@ result = null;
+        pack.running++;
         try {
             @result = pack.dispatch(local, input);
         } catch {
             @result = MakeError("pack tool threw: " + getExceptionInfo(), "pack_exception", true);
         }
+        pack.running--;
+        if (pack.retired) return MakeError("pack generation retired during dispatch", "stale_generation");
         // string status = "err";
         // if (result !is null && result.HasKey("success") && bool(result["success"])) status = "ok";
         // trace("TM Control MCP pack done " + name + " " + status + " " + (Time::Now - started) + "ms");

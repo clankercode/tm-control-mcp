@@ -27,8 +27,8 @@ def test_warm_reads_reconcile_liveness_and_detach_json():
     cache = MCP.index("Json::Value@ GetToolListCached()")
     assert "SweepDeadPacks();" in MCP[cache : cache + 700]
     assert "Json::Parse(Json::Write(value))" in MCP
-    assert "GetToolList()" in MCP and "CloneJsonValue(GetToolListCached())" in MCP
-    assert "if (changed) InvalidateToolList();" in PACKS[sweep : sweep + 500]
+    assert "GetToolList()" in MCP and "ParseCachedJson(g_ToolListSerialized)" in MCP
+    assert "if (changed) InvalidateToolList();" in PACKS[sweep : PACKS.index("    bool IsPackToolName(", sweep)]
 
 
 def test_catalog_sort_is_explicit_and_legacy_tool_route_survives():

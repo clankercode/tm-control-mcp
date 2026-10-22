@@ -56,7 +56,8 @@ class Handler(socketserver.StreamRequestHandler):
                 data = {"tool": request["tool"], "result": result}
             else:
                 raise AssertionError(route)
-        self.wfile.write((json.dumps({"ok": True, "route": route, "error": "", "data": data}) + "\n").encode())
+        self.wfile.write((json.dumps({"ok": True, "id": request.get("id"), "route": route,
+                                      "error": "", "data": data}) + "\n").encode())
 
 
 class Client:
@@ -150,7 +151,7 @@ def main():
             assert isinstance(listed["result"]["ttlMs"], (float, int))
             called = modern.request("tools/call", {"name": "Echo", "arguments": {"value": 7}})["result"]
             assert not called.get("isError", False), called
-            assert called["structuredContent"]["result"]["output"]["value"] == 7, called
+            assert called["structuredContent"]["data"]["result"]["output"]["value"] == 7, called
             with backend.lock:
                 assert backend.calls[-1]["expect"] == {"instance": "wire-fixture", "generation": "1"}, backend.calls
                 previous = len(backend.calls)

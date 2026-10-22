@@ -12,15 +12,17 @@ use tm_control_mcp_cli::{
     NativeTcpClient,
 };
 
+mod tui;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Stdio,
     Http,
-    Tui,
+    Monitor,
     Doctor,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Config {
     mode: Mode,
     native_host: String,
@@ -29,10 +31,26 @@ struct Config {
     poll_ms: u64,
     events_jsonl: Option<PathBuf>,
     allowed_origins: Vec<String>,
+    ascii: bool,
+    export_dir: Option<PathBuf>,
+    screenshots_dir: Option<PathBuf>,
+}
+
+enum ParseResult {
+    Config(Config),
+    Help,
+    Version,
 }
 
 impl Config {
-    fn parse() -> Result<Self> {
+    fn parse() -> Result<ParseResult> {
+        let args: Vec<String> = env::args().skip(1).collect();
+        if args.len() == 1 && matches!(args[0].as_str(), "--version" | "-V") {
+            return Ok(ParseResult::Version);
+        }
+        if args.len() == 1 && matches!(args[0].as_str(), "--help" | "-h") {
+            return Ok(ParseResult::Help);
+        }
         let mut config = Self {
             mode: Mode::Stdio,
             native_host: DEFAULT_NATIVE_HOST.into(),
@@ -40,31 +58,63 @@ impl Config {
             http_addr: DEFAULT_HTTP_ADDR.parse()?,
             poll_ms: 2000,
             events_jsonl: None,
-            allowed_origins: vec![],
+            allowed_origins: Vec::new(),
+            ascii: false,
+            export_dir: None,
+            screenshots_dir: None,
         };
-        let args: Vec<String> = env::args().skip(1).collect();
+        let mut command: Option<String> = None;
+        let mut transport: Option<String> = None;
         let mut index = 0;
         while index < args.len() {
-            match args[index].as_str() {
-                "serve" => config.mode = Mode::Stdio,
-                "monitor" => config.mode = Mode::Tui,
-                "doctor" => config.mode = Mode::Doctor,
+            let arg = &args[index];
+            if index == 0 && !arg.starts_with('-') {
+                anyhow::ensure!(
+                    matches!(arg.as_str(), "serve" | "monitor" | "doctor"),
+                    "unknown subcommand: {arg}"
+                );
+                command = Some(arg.clone());
+                config.mode = match arg.as_str() {
+                    "serve" => Mode::Stdio,
+                    "monitor" => Mode::Monitor,
+                    "doctor" => Mode::Doctor,
+                    _ => unreachable!(),
+                };
+                index += 1;
+                continue;
+            }
+            anyhow::ensure!(
+                !matches!(arg.as_str(), "serve" | "monitor" | "doctor"),
+                "subcommand must be first"
+            );
+            match arg.as_str() {
                 "--transport" => {
+                    anyhow::ensure!(
+                        command.as_deref() == Some("serve"),
+                        "--transport is only valid with serve"
+                    );
                     index += 1;
-                    config.mode = match args
-                        .get(index)
-                        .context("--transport needs stdio or http")?
-                        .as_str()
-                    {
-                        "stdio" => Mode::Stdio,
-                        "http" => Mode::Http,
-                        value => anyhow::bail!("unsupported transport: {value}"),
+                    let value = args.get(index).context("--transport needs stdio or http")?;
+                    anyhow::ensure!(
+                        transport.is_none(),
+                        "--transport may only be specified once"
+                    );
+                    anyhow::ensure!(
+                        matches!(value.as_str(), "stdio" | "http"),
+                        "unsupported transport: {value}"
+                    );
+                    transport = Some(value.clone());
+                    config.mode = if value == "http" {
+                        Mode::Http
+                    } else {
+                        Mode::Stdio
                     };
                 }
-                "--stdio" => config.mode = Mode::Stdio,
-                "--http" => config.mode = Mode::Http,
-                "--tui" => config.mode = Mode::Tui,
                 "--native-host" => {
+                    anyhow::ensure!(
+                        config.native_host == DEFAULT_NATIVE_HOST,
+                        "--native-host may only be specified once"
+                    );
                     index += 1;
                     config.native_host = args
                         .get(index)
@@ -72,96 +122,205 @@ impl Config {
                         .clone();
                 }
                 "--native-port" => {
+                    anyhow::ensure!(
+                        config.native_port == DEFAULT_NATIVE_PORT,
+                        "--native-port may only be specified once"
+                    );
                     index += 1;
                     config.native_port = args
                         .get(index)
                         .context("--native-port needs a value")?
-                        .parse()?;
+                        .parse()
+                        .context("invalid native port")?;
                 }
                 "--listen" => {
+                    anyhow::ensure!(
+                        command.as_deref() == Some("serve")
+                            || command.as_deref() == Some("monitor"),
+                        "--listen is only valid with serve or monitor"
+                    );
+                    anyhow::ensure!(
+                        config.http_addr == DEFAULT_HTTP_ADDR.parse()?,
+                        "--listen may only be specified once"
+                    );
                     index += 1;
-                    config.http_addr =
-                        args.get(index).context("--listen needs a value")?.parse()?;
+                    config.http_addr = args
+                        .get(index)
+                        .context("--listen needs an address")?
+                        .parse()
+                        .context("invalid listen address")?;
                 }
                 "--poll-ms" => {
+                    anyhow::ensure!(
+                        config.poll_ms == 2000,
+                        "--poll-ms may only be specified once"
+                    );
                     index += 1;
                     config.poll_ms = args
                         .get(index)
-                        .context("--poll-ms needs a value")?
-                        .parse()?;
+                        .context("--poll-ms needs milliseconds")?
+                        .parse()
+                        .context("invalid poll interval")?;
                 }
                 "--events-jsonl" => {
+                    anyhow::ensure!(
+                        command.as_deref() == Some("serve")
+                            || command.as_deref() == Some("monitor"),
+                        "--events-jsonl is only valid with serve or monitor"
+                    );
+                    anyhow::ensure!(
+                        config.events_jsonl.is_none(),
+                        "--events-jsonl may only be specified once"
+                    );
                     index += 1;
                     config.events_jsonl = Some(
                         args.get(index)
-                            .context("--events-jsonl needs a value")?
+                            .context("--events-jsonl needs a path")?
                             .into(),
                     );
                 }
                 "--origin" => {
+                    anyhow::ensure!(
+                        command.as_deref() == Some("serve")
+                            || command.as_deref() == Some("monitor"),
+                        "--origin is only valid with serve or monitor"
+                    );
                     index += 1;
                     config
                         .allowed_origins
                         .push(args.get(index).context("--origin needs a value")?.clone());
                 }
-                "--help" | "-h" => {
-                    eprintln!(
-                        "tm-control-mcp [serve --transport stdio|http | monitor | doctor] [--native-host HOST] [--native-port PORT] [--listen ADDR] [--events-jsonl PATH] [--origin ORIGIN]"
+                "--ascii" => {
+                    anyhow::ensure!(
+                        command.as_deref() == Some("monitor"),
+                        "--ascii is only valid with monitor"
                     );
-                    std::process::exit(0);
+                    anyhow::ensure!(!config.ascii, "--ascii may only be specified once");
+                    config.ascii = true;
                 }
+                "--export-dir" => {
+                    anyhow::ensure!(
+                        command.as_deref() == Some("monitor"),
+                        "--export-dir is only valid with monitor"
+                    );
+                    anyhow::ensure!(
+                        config.export_dir.is_none(),
+                        "--export-dir may only be specified once"
+                    );
+                    index += 1;
+                    config.export_dir =
+                        Some(args.get(index).context("--export-dir needs a path")?.into());
+                }
+                "--screenshots-dir" => {
+                    anyhow::ensure!(
+                        command.as_deref() == Some("serve")
+                            || command.as_deref() == Some("monitor"),
+                        "--screenshots-dir is only valid with serve or monitor"
+                    );
+                    anyhow::ensure!(
+                        config.screenshots_dir.is_none(),
+                        "--screenshots-dir may only be specified once"
+                    );
+                    index += 1;
+                    config.screenshots_dir = Some(
+                        args.get(index)
+                            .context("--screenshots-dir needs a path")?
+                            .into(),
+                    );
+                }
+                "--help" | "-h" => return Ok(ParseResult::Help),
+                "--version" | "-V" => return Ok(ParseResult::Version),
+                "--stdio" | "--http" | "--tui" => anyhow::bail!(
+                    "contradictory legacy flag {arg}; use a subcommand and --transport"
+                ),
                 value => anyhow::bail!("unknown argument: {value}"),
             }
             index += 1;
         }
-        Ok(config)
+        if command.is_none()
+            && (transport.is_some()
+                || config.events_jsonl.is_some()
+                || !config.allowed_origins.is_empty()
+                || config.export_dir.is_some()
+                || config.screenshots_dir.is_some()
+                || config.ascii)
+        {
+            anyhow::bail!("options requiring a subcommand were provided without serve or monitor");
+        }
+        if command.as_deref() == Some("doctor")
+            && (config.http_addr != DEFAULT_HTTP_ADDR.parse()? || config.poll_ms != 2000)
+        {
+            anyhow::bail!("doctor accepts native connection options only");
+        }
+        Ok(ParseResult::Config(config))
     }
+}
+
+fn usage() -> &'static str {
+    "tm-control-mcp [--version]\n\nCommands:\n  (default)                         MCP stdio\n  serve [--transport stdio|http]   MCP stdio or loopback Streamable HTTP\n  monitor                           HTTP plus terminal telemetry monitor\n  doctor                            check native bridge status and catalog\n\nOptions:\n  --native-host HOST --native-port PORT --poll-ms MS\n  --listen ADDR --origin ORIGIN --events-jsonl PATH\n  --ascii --export-dir PATH (monitor)\n  --screenshots-dir PATH (serve/monitor)\n"
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Never write tracing to stdout: stdout is the MCP stdio transport.
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
         .with_ansi(false)
         .init();
-    let config = Config::parse()?;
+    let parsed = Config::parse()?;
+    let config = match parsed {
+        ParseResult::Help => {
+            print!("{}", usage());
+            return Ok(());
+        }
+        ParseResult::Version => {
+            println!("tm-control-mcp {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        ParseResult::Config(config) => config,
+    };
     let cancellation = CancellationToken::new();
     let monitor = MonitorStore::new(config.events_jsonl.clone());
-    let backend = Arc::new(NativeTcpClient::new(config.native_host, config.native_port));
-    let core = Core::new(backend, monitor);
+    let backend = Arc::new(NativeTcpClient::new(
+        config.native_host.clone(),
+        config.native_port,
+    ));
+    let core = Core::new(backend, monitor.clone());
+    let adapter = McpAdapter::with_media_root(core.clone(), config.screenshots_dir.clone())?;
     core.start_catalog_poller(
         Duration::from_millis(config.poll_ms.max(100)),
         cancellation.clone(),
     );
-
-    match config.mode {
-        Mode::Doctor => {
-            let status = core.status().await.context("native bridge status failed")?;
-            anyhow::ensure!(status.ok, "native bridge status rejected: {}", status.error);
-            let catalog = core
-                .refresh_catalog()
-                .await
-                .context("native catalog failed")?;
-            println!(
-                "{}",
-                serde_json::json!({"ok":true,"status":status.data,"catalog":catalog.identity,"tools":catalog.tools.len()})
-            );
-            Ok(())
-        }
-        Mode::Stdio => run_stdio(McpAdapter::new(core)).await,
+    let result = match config.mode {
+        Mode::Doctor => run_doctor(&core).await,
+        Mode::Stdio => run_stdio(adapter).await,
         Mode::Http => {
             run_http(
-                McpAdapter::new(core),
+                adapter,
                 config.http_addr,
                 config.allowed_origins,
-                cancellation,
+                cancellation.clone(),
             )
             .await
         }
-        Mode::Tui => run_tui(core, config.http_addr, config.allowed_origins, cancellation).await,
-    }
+        Mode::Monitor => run_monitor(core, adapter, config, cancellation.clone()).await,
+    };
+    monitor.shutdown(Duration::from_secs(2)).await;
+    result
+}
+
+async fn run_doctor(core: &Arc<Core>) -> Result<()> {
+    let status = core.status().await.context("native bridge status failed")?;
+    anyhow::ensure!(status.ok, "native bridge status rejected: {}", status.error);
+    let catalog = core
+        .refresh_catalog()
+        .await
+        .context("native catalog failed")?;
+    println!(
+        "{}",
+        serde_json::json!({"ok":true,"status":status.data,"catalog":catalog.identity,"tools":catalog.tools.len()})
+    );
+    Ok(())
 }
 
 async fn run_stdio(adapter: McpAdapter) -> Result<()> {
@@ -174,16 +333,22 @@ async fn run_stdio(adapter: McpAdapter) -> Result<()> {
     Ok(())
 }
 
-async fn run_http(
-    adapter: McpAdapter,
-    address: SocketAddr,
-    origins: Vec<String>,
-    cancellation: CancellationToken,
-) -> Result<()> {
+async fn bind_http(address: SocketAddr) -> Result<TcpListener> {
     anyhow::ensure!(
         address.ip().is_loopback(),
         "HTTP server must bind to a loopback address"
     );
+    TcpListener::bind(address)
+        .await
+        .with_context(|| format!("bind HTTP {address}"))
+}
+
+fn http_router(
+    adapter: McpAdapter,
+    address: SocketAddr,
+    origins: Vec<String>,
+    cancellation: CancellationToken,
+) -> Router {
     let config = rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default()
         .with_allowed_hosts([
             address.ip().to_string(),
@@ -193,109 +358,109 @@ async fn run_http(
         .enforce_origin_validation()
         .with_legacy_session_mode(true)
         .with_json_response(true)
-        .with_cancellation_token(cancellation.clone());
+        .with_cancellation_token(cancellation);
     let service = rmcp::transport::streamable_http_server::StreamableHttpService::<
         McpAdapter,
         rmcp::transport::streamable_http_server::session::local::LocalSessionManager,
     >::new(move || Ok(adapter.clone()), Default::default(), config);
-    let router = Router::new().nest_service("/mcp", service);
-    let listener = TcpListener::bind(address)
-        .await
-        .with_context(|| format!("bind HTTP {address}"))?;
-    tracing::info!(%address, "MCP Streamable HTTP listening");
-    axum::serve(listener, router)
-        .with_graceful_shutdown(async move {
-            cancellation.cancelled().await;
-        })
-        .await?;
-    Ok(())
+    Router::new().nest_service("/mcp", service)
 }
 
-async fn run_tui(
-    core: Arc<Core>,
+async fn serve_http(
+    adapter: McpAdapter,
+    listener: TcpListener,
     address: SocketAddr,
     origins: Vec<String>,
     cancellation: CancellationToken,
 ) -> Result<()> {
-    let http_core = core.clone();
-    let http_cancel = cancellation.clone();
-    tokio::spawn(async move {
-        let _ = run_http(McpAdapter::new(http_core), address, origins, http_cancel).await;
-    });
-    tui::run(core, cancellation).await
+    tracing::info!(%address, "MCP Streamable HTTP listening");
+    axum::serve(
+        listener,
+        http_router(adapter, address, origins, cancellation.clone()),
+    )
+    .with_graceful_shutdown(async move {
+        cancellation.cancelled().await;
+    })
+    .await?;
+    Ok(())
 }
 
-mod tui {
-    use anyhow::Result;
-    use crossterm::{
-        event::{self, Event as CEvent, KeyCode, KeyEventKind},
-        execute,
-        terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
-    };
-    use ratatui::{
-        Terminal,
-        backend::CrosstermBackend,
-        layout::{Constraint, Direction, Layout},
-        style::{Color, Style},
-        text::{Line, Span},
-        widgets::{Block, Borders, List, ListItem, Paragraph},
-    };
-    use std::sync::Arc;
-    use tm_control_mcp_cli::{Core, Event};
-    use tokio_util::sync::CancellationToken;
+async fn run_http(
+    adapter: McpAdapter,
+    address: SocketAddr,
+    origins: Vec<String>,
+    cancellation: CancellationToken,
+) -> Result<()> {
+    let listener = bind_http(address).await?;
+    serve_http(adapter, listener, address, origins, cancellation).await
+}
 
-    pub async fn run(core: Arc<Core>, cancellation: CancellationToken) -> Result<()> {
-        enable_raw_mode()?;
-        let mut stdout = std::io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
-        let result = tokio::task::spawn_blocking(move || draw_loop(core, cancellation)).await?;
-        disable_raw_mode()?;
-        execute!(std::io::stdout(), LeaveAlternateScreen)?;
-        result
-    }
+async fn wait_headless(cancellation: CancellationToken) {
+    tokio::select! { _ = cancellation.cancelled() => {}, result = tokio::signal::ctrl_c() => { if let Err(error) = result { tracing::debug!(%error, "headless shutdown signal unavailable"); } } }
+}
 
-    fn draw_loop(core: Arc<Core>, cancellation: CancellationToken) -> Result<()> {
-        let backend = CrosstermBackend::new(std::io::stdout());
-        let mut terminal = Terminal::new(backend)?;
-        let mut selected = 0usize;
-        let mut filter = String::new();
-        let mut paused = false;
-        let mut follow = true;
-        loop {
-            let events = core.monitor().snapshot();
-            if follow && !events.is_empty() {
-                selected = events.len().saturating_sub(1);
-            }
-            terminal.draw(|frame| {
-                let areas = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(3), Constraint::Min(4), Constraint::Length(6)]).split(frame.area());
-                frame.render_widget(Paragraph::new(Line::from(vec![Span::styled("tm-control-mcp monitor", Style::default().fg(Color::Cyan)), Span::raw(format!("  events={} filter='{}' follow={} paused={}  q=quit p=pause f=follow /=filter", events.len(), filter, follow, paused))])).block(Block::default().borders(Borders::ALL)), areas[0]);
-                let visible: Vec<(usize, &Event)> = events.iter().enumerate().filter(|(_, event)| filter.is_empty() || event.method.contains(&filter) || event.tool.as_deref().is_some_and(|tool| tool.contains(&filter))).collect();
-                let items: Vec<ListItem> = visible.iter().map(|(_, event)| ListItem::new(format!("{} {} {} {}ms", event.status, event.tool.as_deref().unwrap_or("-"), event.request_id, event.ended_ms.saturating_sub(event.started_ms)))).collect();
-                frame.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title("calls")), areas[1]);
-                let detail = events.get(selected).map(|event| format!("id={}\\nmethod={}\\ntool={}\\nargs={}\\nresult={}", event.invocation_id, event.method, event.tool.as_deref().unwrap_or("-"), event.arguments, event.result)).unwrap_or_else(|| "No calls yet".into());
-                frame.render_widget(Paragraph::new(detail).block(Block::default().borders(Borders::ALL).title("detail")), areas[2]);
-            })?;
-            if event::poll(std::time::Duration::from_millis(150))? {
-                if let CEvent::Key(key) = event::read()? {
-                    if key.kind != KeyEventKind::Press {
-                        continue;
-                    }
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => {
-                            cancellation.cancel();
-                            break;
-                        }
-                        KeyCode::Char('p') => paused = !paused,
-                        KeyCode::Char('f') => follow = !follow,
-                        KeyCode::Char('/') => filter.clear(),
-                        KeyCode::Char(ch) if !paused => filter.push(ch),
-                        KeyCode::Up => selected = selected.saturating_sub(1),
-                        KeyCode::Down => selected = selected.saturating_add(1),
-                        _ => {}
-                    }
+async fn await_http(
+    mut task: tokio::task::JoinHandle<Result<()>>,
+    cancellation: CancellationToken,
+) -> Result<()> {
+    cancellation.cancel();
+    match tokio::time::timeout(Duration::from_secs(5), &mut task).await {
+        Ok(result) => result.context("HTTP task panicked")??,
+        Err(_) => {
+            task.abort();
+            return Err(anyhow::anyhow!("HTTP server did not stop within 5 seconds"));
+        }
+    };
+    Ok(())
+}
+
+async fn run_monitor(
+    core: Arc<Core>,
+    adapter: McpAdapter,
+    config: Config,
+    cancellation: CancellationToken,
+) -> Result<()> {
+    // Bind before touching the terminal so an address error remains visible and actionable.
+    let listener = bind_http(config.http_addr).await?;
+    let mut http_task = tokio::spawn(serve_http(
+        adapter,
+        listener,
+        config.http_addr,
+        config.allowed_origins.clone(),
+        cancellation.clone(),
+    ));
+    let mut tui_task = Box::pin(tui::run(
+        core,
+        cancellation.clone(),
+        config.ascii,
+        config.export_dir,
+    ));
+    tokio::select! {
+        tui_result = &mut tui_task => {
+            match tui_result {
+                Ok(()) => await_http(http_task, cancellation).await,
+                Err(error) => {
+                    tracing::error!(%error, "terminal monitor unavailable; continuing headless");
+                    wait_headless(cancellation.clone()).await;
+                    await_http(http_task, cancellation).await
                 }
             }
         }
-        Ok(())
+        http_result = &mut http_task => {
+            cancellation.cancel();
+            let _ = tui_task.await;
+            http_result.context("HTTP task panicked")?
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_names_only_supported_modes() {
+        assert!(usage().contains("monitor"));
+        assert!(!usage().contains("--tui"));
     }
 }

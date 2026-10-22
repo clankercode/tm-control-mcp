@@ -21,6 +21,21 @@ namespace TmMcp {
     string g_ToolCallInstance = "";
     uint64 g_ToolCallsStarted = 0;
 
+    bool IsPackGenerationRunning(const string &in generation) {
+        for (uint i = 0; i < g_ToolCalls.calls.Length; i++) {
+            auto call = cast<ToolInvocation@>(g_ToolCalls.calls[i]);
+            if (call !is null && call.packGeneration == generation
+                && call.owner !is null && call.owner.IsRunning()) return true;
+        }
+        // Timed-out workers may still execute. Include quarantine until the
+        // actual coroutine stops, even though its public invocation finished.
+        for (uint i = 0; i < g_UnfinishedWorkers.Length; i++) {
+            auto call = g_UnfinishedWorkers[i];
+            if (call.packGeneration == generation && call.owner !is null && call.owner.IsRunning()) return true;
+        }
+        return false;
+    }
+
     void ToolCallEvent(const string &in message) {
         string bounded = TmMcpTraceOneLine(message);
         trace("TM Control MCP " + bounded);

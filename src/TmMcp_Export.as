@@ -24,6 +24,8 @@ namespace TmMcp {
     // consumers (tm-agent) forward the live registry instead of
     // maintaining a duplicate list that drifts.
     import Json::Value@ GetToolList() from "TmMcp";
+    import Json::Value@ ToolCatalogIdentity() from "TmMcp";
+    import Json::Value@ GetToolCatalog() from "TmMcp";
 
     // Async dispatch (issue #3) — non-blocking + poll.
     import Json::Value@ DispatchAsync(const string &in tool, Json::Value@ input) from "TmMcp";

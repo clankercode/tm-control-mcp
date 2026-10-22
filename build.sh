@@ -112,7 +112,7 @@ remote_load_folder() {
   local op_dir host
   local host_args=()
   op_dir="$(dirname "$plugins_dir")"
-  host="${TM_PLUGIN_REMOTE_HOST:-$(ss -ltnH 2>/dev/null | awk '$4 ~ /:30000$/ { sub(/:[0-9]+$/, "", $4); print $4; exit }')}"
+  host="${TM_PLUGIN_REMOTE_HOST:-$(ss -ltnH 2>/dev/null | awk '!found && $4 ~ /:30000$/ { sub(/:[0-9]+$/, "", $4); print $4; found=1 }')}"
   if [[ -n "$host" && "$host" != "0.0.0.0" && "$host" != "*" ]]; then
     host_args=(--host "$host")
   fi
