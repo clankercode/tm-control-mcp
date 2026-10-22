@@ -2,6 +2,12 @@ name: MCP CLI manual release verification
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "mcp-cli/**"
+      - "packaging/**"
+      - "tools/mcp-cli-remote.sh"
+      - ".github/workflows/mcp-cli.yml"
 
 permissions:
   contents: read
@@ -22,17 +28,47 @@ jobs:
       - name: Test launcher logic
         run: node --test mcp-cli/npm/test/*.test.mjs
 
-  release-notice:
-    name: Report manual binary build path
-    runs-on: ubuntu-latest
-    needs: source-verification
+  rust-linux:
+    name: Build and test Linux x64 on remote runner
+    runs-on: ubuntu-24.04
     steps:
-      - name: Explain build-box boundary
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: Install musl linker
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Check and test
         run: |
-          cat <<'EOF'
-          This workflow intentionally does not claim that GitHub-hosted runners
-          are x-p35. Build Linux x64 with tools/mcp-cli-remote.sh on x-p35,
-          build Windows x64 on a verified Windows build box, then run
-          packaging/verify-mcp-cli-artifacts.py against the staged packages
-          before publishing them with npm.
-          EOF
+          cargo fmt --manifest-path mcp-cli/Cargo.toml --all -- --check
+          cargo test --manifest-path mcp-cli/Cargo.toml --locked
+      - name: Build release binary
+        run: cargo build --manifest-path mcp-cli/Cargo.toml --release --locked --target x86_64-unknown-linux-musl
+      - name: Verify package metadata
+        run: python3 packaging/verify-mcp-cli-artifacts.py --source-only
+
+  rust-windows:
+    name: Build Windows x64 binary on remote runner
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Check and test
+        shell: bash
+        run: |
+          cargo fmt --manifest-path mcp-cli/Cargo.toml --all -- --check
+          cargo test --manifest-path mcp-cli/Cargo.toml --locked
+          cargo build --manifest-path mcp-cli/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
+
+  package-contract:
+    name: Verify package contract
+    runs-on: ubuntu-latest
+    needs: [source-verification, rust-linux, rust-windows]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify package metadata and launch tests
+        run: |
+          python3 packaging/verify-mcp-cli-artifacts.py --source-only
+          node --test mcp-cli/npm/test/*.test.mjs

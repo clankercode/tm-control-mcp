@@ -41,17 +41,17 @@ esac
 repo_root=$(git rev-parse --show-toplevel) || die "run from a git checkout"
 remote_host=${MCP_CLI_REMOTE_HOST:-x-p35}
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
-remote_dir=${MCP_CLI_REMOTE_DIR:-/tmp/tm-control-mcp-mcp-cli-${USER:-unknown}-${timestamp}-$$}
+remote_dir=${MCP_CLI_REMOTE_DIR:-/home/xertrov/src/tm-control-mcp-mcp-cli-${USER:-unknown}-${timestamp}-$$}
 platform=${MCP_CLI_PLATFORM:-linux-x64}
 version=${MCP_CLI_VERSION:-}
 binary_path=${MCP_CLI_BINARY_PATH:-}
 
 case "$platform" in
     linux-x64)
-        default_binary_path=target/release/tm-control-mcp
+        default_binary_path=mcp-cli/target/release/tm-control-mcp
         ;;
     win32-x64)
-        default_binary_path=target/release/tm-control-mcp.exe
+        default_binary_path=mcp-cli/target/release/tm-control-mcp.exe
         ;;
     *)
         die "unsupported MCP_CLI_PLATFORM '$platform' (use linux-x64 or win32-x64)"
@@ -63,11 +63,11 @@ ssh_opts=(-o BatchMode=yes -o ConnectTimeout=10)
 
 remote() {
     local command=$1
-    ssh "${ssh_opts[@]}" "$remote_host" "cd $(quote_sh "$remote_dir") && $command"
+    ssh "${ssh_opts[@]}" "$remote_host" "cd $(quote_sh "$remote_dir") && TMPDIR=\$HOME/tmp/tm-control-mcp-rust CARGO_BUILD_JOBS=2 $command"
 }
 
 ensure_remote_checkout() {
-    ssh "${ssh_opts[@]}" "$remote_host" "mkdir -p $(quote_sh "$remote_dir")" \
+    ssh "${ssh_opts[@]}" "$remote_host" "mkdir -p $(quote_sh "$remote_dir") \$HOME/tmp/tm-control-mcp-rust" \
         || die "cannot reach build box '$remote_host' or create '$remote_dir'"
     rsync -az --delete \
         --exclude .git \
