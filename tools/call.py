@@ -7,6 +7,7 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 
@@ -138,7 +139,6 @@ def attach_screenshot_path(response: object, screenshot_info: dict) -> None:
 
 
 CACHE_PATH = Path.home() / ".cache/tm-control-mcp/schemas.json"
-CACHE_TTL_SECONDS = 24 * 60 * 60
 # Idle WaitUntil budget (no loading screen yet). Once a load starts the
 # plugin keeps waiting; the socket must stay open for big-map loads.
 DEFAULT_WAIT_TIMEOUT_SECONDS = 20.0
@@ -163,21 +163,81 @@ def send_request(host: str, port: int, timeout: float, request: dict) -> dict:
 
 
 def load_schemas(host: str, port: int, timeout: float, refresh: bool) -> dict[str, dict]:
-    if not refresh and CACHE_PATH.is_file():
-        age = time.time() - CACHE_PATH.stat().st_mtime
-        if age < CACHE_TTL_SECONDS:
-            try:
-                return json.loads(CACHE_PATH.read_text())
-            except (json.JSONDecodeError, OSError):
-                pass
-    response = send_request(host, port, timeout, {"route": "tools"})
-    tools = response.get("data", [])
-    if not isinstance(tools, list):
-        raise RuntimeError(f"tools route returned unexpected payload: {response!r}")
-    schemas = {t["name"]: t.get("input_schema", {}) for t in tools if isinstance(t, dict) and "name" in t}
-    CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CACHE_PATH.write_text(json.dumps(schemas, separators=(",", ":")))
+    """Use disk schemas only after checking the endpoint's live catalog identity.
+
+    Legacy bridges have no identity, so their tools are fetched on every call.
+    An unavailable bridge must never authorize a call from a stale disk cache.
+    """
+    endpoint = {"host": host, "port": port}
+    status = send_request(host, port, timeout, {"route": "status"})
+    if not isinstance(status, dict) or not status.get("ok", False):
+        raise RuntimeError(f"status route failed: {status!r}")
+    status_data = status.get("data")
+    identity = status_data.get("catalog") if isinstance(status_data, dict) else None
+    if not (isinstance(identity, dict) and identity.get("schemaVersion") == 1
+            and isinstance(identity.get("instance"), str)
+            and isinstance(identity.get("revision"), str)):
+        identity = None
+    if identity is not None and not refresh:
+        try:
+            cached = json.loads(CACHE_PATH.read_text())
+            if (isinstance(cached, dict) and cached.get("version") == 2
+                    and cached.get("endpoint") == endpoint
+                    and cached.get("identity") == identity
+                    and isinstance(cached.get("schemas"), dict)):
+                return cached["schemas"]
+        except (json.JSONDecodeError, OSError):
+            pass
+    route = "catalog" if identity is not None else "tools"
+    response = send_request(host, port, timeout, {"route": route})
+    if not isinstance(response, dict) or not response.get("ok", False):
+        raise RuntimeError(f"{route} route failed: {response!r}")
+    data = response.get("data")
+    if identity is not None:
+        if not isinstance(data, dict) or data.get("schemaVersion") != 1:
+            raise RuntimeError(f"catalog route returned unexpected payload: {response!r}")
+        # The registry may change between status and catalog. Cache the identity
+        # belonging to the actual, coherent tools snapshot.
+        identity = {key: data.get(key) for key in ("schemaVersion", "instance", "revision")}
+        if not all(isinstance(identity[key], str) for key in ("instance", "revision")):
+            raise RuntimeError("catalog identity is malformed")
+        tool_list = data.get("tools")
+    else:
+        tool_list = data
+    if not isinstance(tool_list, list):
+        raise RuntimeError(f"{route} route returned unexpected payload: {response!r}")
+    schemas = {t["name"]: t.get("input_schema", {}) for t in tool_list
+               if isinstance(t, dict) and isinstance(t.get("name"), str)}
+    if identity is not None:
+        # Cache persistence is optional; permissions or a full disk must not
+        # prevent use of a successfully fetched live catalog.
+        temporary = None
+        try:
+            CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", dir=CACHE_PATH.parent, delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump({"version": 2, "endpoint": endpoint, "identity": identity,
+                           "schemas": schemas}, stream, separators=(",", ":"))
+            temporary.replace(CACHE_PATH)
+        except OSError:
+            pass
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
     return schemas
+
+
+def preflight_schema(host: str, port: int, timeout: float, refresh: bool,
+                     tool: str, input_data: object) -> tuple[dict | None, str]:
+    schemas = load_schemas(host, port, timeout, refresh)
+    schema = schemas.get(tool)
+    error = validate_input(tool, input_data, schema) if schema is not None else ""
+    if not refresh and (schema is None or error):
+        # Refresh only before dispatch; never retry a mutation after dispatch.
+        schemas = load_schemas(host, port, timeout, True)
+        schema = schemas.get(tool)
+        error = validate_input(tool, input_data, schema) if schema is not None else ""
+    return schema, error
 
 
 _JSON_TYPE_OF = {
@@ -619,23 +679,23 @@ def main() -> int:
         print_json(wait_resp, args.pretty)
         return 0
 
-    if args.route_or_tool in {"status", "tools", "recover"}:
+    if args.route_or_tool in {"status", "tools", "catalog", "recover"}:
         request = {"route": args.route_or_tool}
         if args.route_or_tool == "recover":
             request["instance"] = input_data.get("instance", "")
     else:
         if args.strict or args.refresh_schemas:
             try:
-                schemas = load_schemas(args.host, args.port, args.timeout, args.refresh_schemas)
+                schema, err = preflight_schema(args.host, args.port, args.timeout,
+                                               args.refresh_schemas, args.route_or_tool, input_data)
             except (ConnectionRefusedError, TimeoutError, socket.timeout, OSError, RuntimeError, json.JSONDecodeError) as exc:
                 print_json_error(
                     f"Could not load tool schemas from {args.host}:{args.port}: {exc}",
                     args.pretty,
                     trackmaniaPids=pids,
-                    hint="Schemas are fetched via the 'tools' route; ensure the plugin socket is responsive, or drop --strict/--refresh-schemas.",
+                    hint="Schemas are checked against the live catalog; ensure the plugin socket is responsive.",
                 )
                 return 7
-            schema = schemas.get(args.route_or_tool)
             if schema is None:
                 print_json_error(
                     f"unknown tool '{args.route_or_tool}' (not in fetched schema list)",
@@ -643,7 +703,6 @@ def main() -> int:
                     hint="Run with --refresh-schemas if you recently added a tool, or check 'python3 tools/call.py tools' for the current list.",
                 )
                 return 8
-            err = validate_input(args.route_or_tool, input_data, schema)
             if err:
                 print_json_error(
                     f"invalid input for {args.route_or_tool}: {err}",
@@ -725,7 +784,7 @@ def main() -> int:
     if screenshot_before is not None:
         attach_screenshot_path(response, find_new_screenshot(screenshot_before, screenshot_ext, args.timeout))
 
-    if args.route_or_tool not in {"status", "tools", "recover"}:
+    if args.route_or_tool not in {"status", "tools", "catalog", "recover"}:
         enrich_control_plugin_logs(response, args.route_or_tool, input_data)
 
     # Surface structured tool errors on stderr lightly when present
