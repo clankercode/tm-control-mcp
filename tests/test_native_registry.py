@@ -146,6 +146,9 @@ def test_atomic_owner_replacement_and_metadata(as_runner, tmp_path):
     metadata["annotations"]["readOnlyHint"]="false";
     Error(TmMcp::RegisterToolPackEx(Builder("Pack"),options),"pack_bad_metadata");
     metadata["annotations"]["readOnlyHint"]=true;
+    metadata["output_schema"]["type"]=1;
+    Error(TmMcp::RegisterToolPackEx(Builder("Pack"),options),"pack_bad_metadata");
+    metadata["output_schema"]["type"]="object";
     Check(TmMcp::revision==2 && TmMcp::g_Packs[0].generation==generation, "all failed replacements preserve original");
     auto replacement=TmMcp::RegisterToolPackEx(Builder("Pack","Ping","description only"),options); Good(replacement);
     Check(TmMcp::revision==3 && TmMcp::g_Packs[0].generation!=generation, "one atomic commit with new generation");

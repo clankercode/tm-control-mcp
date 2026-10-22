@@ -122,6 +122,50 @@ namespace TmMcp {
         return true;
     }
 
+    // Structural guard only. The adapter compiles complete Draft 2020-12.
+    bool ValidateMetadataSchemaShape(Json::Value@ schema, uint depth, string &out err) {
+        if (depth > 32) { err = "output schema exceeds structural limits"; return false; }
+        if (schema.GetType() == Json::Type::Boolean) return true;
+        if (schema.GetType() != Json::Type::Object) { err = "schema must be an object or boolean"; return false; }
+        string types;
+        if (!ReadSchemaTypes(schema, types, err)) return false;
+        auto keys = schema.GetKeys();
+        for (uint i = 0; i < keys.Length; i++) {
+            string key = keys[i]; auto value = schema[key];
+            if (key == "properties" || key == "patternProperties" || key == "$defs" || key == "definitions" || key == "dependentSchemas") {
+                if (value.GetType() != Json::Type::Object) { err = key + " must be an object"; return false; }
+                auto children = value.GetKeys();
+                for (uint c = 0; c < children.Length; c++)
+                    if (!ValidateMetadataSchemaShape(value[children[c]], depth + 1, err)) return false;
+            } else if (key == "allOf" || key == "anyOf" || key == "oneOf" || key == "prefixItems") {
+                if (value.GetType() != Json::Type::Array || value.Length > 512) { err = key + " must be a bounded array"; return false; }
+                if (key != "prefixItems" && value.Length == 0) { err = key + " must not be empty"; return false; }
+                for (uint c = 0; c < value.Length; c++)
+                    if (!ValidateMetadataSchemaShape(value[c], depth + 1, err)) return false;
+            } else if (key == "items" || key == "additionalProperties" || key == "unevaluatedProperties"
+                || key == "unevaluatedItems" || key == "contains" || key == "propertyNames"
+                || key == "not" || key == "if" || key == "then" || key == "else") {
+                if (!ValidateMetadataSchemaShape(value, depth + 1, err)) return false;
+            } else if (key == "required") {
+                if (value.GetType() != Json::Type::Array || value.Length > 512) { err = "required must be a bounded array"; return false; }
+                for (uint c = 0; c < value.Length; c++)
+                    if (value[c].GetType() != Json::Type::String) { err = "required entries must be strings"; return false; }
+            } else if (key == "$ref" || key == "$id" || key == "$schema" || key == "$anchor" || key == "$dynamicRef"
+                || key == "$dynamicAnchor" || key == "pattern" || key == "format" || key == "title" || key == "description") {
+                if (value.GetType() != Json::Type::String) { err = key + " must be a string"; return false; }
+            } else if (key == "enum") {
+                if (value.GetType() != Json::Type::Array || value.Length == 0) { err = "enum must be a nonempty array"; return false; }
+            } else if (key == "minimum" || key == "maximum" || key == "exclusiveMinimum" || key == "exclusiveMaximum" || key == "multipleOf"
+                || key == "minLength" || key == "maxLength" || key == "minItems" || key == "maxItems" || key == "minProperties" || key == "maxProperties"
+                || key == "minContains" || key == "maxContains") {
+                if (value.GetType() != Json::Type::Number) { err = key + " must be a number"; return false; }
+            } else if (key == "uniqueItems" || key == "readOnly" || key == "writeOnly" || key == "deprecated") {
+                if (value.GetType() != Json::Type::Boolean) { err = key + " must be boolean"; return false; }
+            }
+        }
+        return true;
+    }
+
     bool ValidateToolMetadata(Json::Value@ supplied, string &out err) {
         err = "";
         if (supplied is null || supplied.GetType() != Json::Type::Object) {
@@ -158,6 +202,9 @@ namespace TmMcp {
         }
         if (supplied.HasKey("output_schema") && Json::Write(supplied["output_schema"]).Length > 262144) {
             err = "output_schema exceeds 256 KiB"; return false;
+        }
+        if (supplied.HasKey("output_schema")) {
+            if (!ValidateMetadataSchemaShape(supplied["output_schema"], 0, err)) return false;
         }
         return true;
     }

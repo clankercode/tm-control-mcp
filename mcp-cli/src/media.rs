@@ -326,10 +326,10 @@ impl MediaService {
             .call(
                 tool.to_owned(),
                 input,
-                NativeExpect {
+                Some(NativeExpect {
                     instance: catalog.instance,
                     generation: descriptor.generation.clone(),
-                },
+                }),
             )
             .await
     }
@@ -960,13 +960,13 @@ mod tests {
             &self,
             tool: String,
             input: Value,
-            expect: NativeExpect,
+            expect: Option<NativeExpect>,
         ) -> BoxFuture<'static, Result<NativeResponse>> {
             let root = self.screenshot_root.clone();
             let bytes = self.screenshot_bytes.clone();
             let guides = self.guides.clone();
             let call_number = self.screenshot_calls.fetch_add(1, Ordering::SeqCst) + 1;
-            assert_eq!(expect.instance, "fake");
+            assert_eq!(expect.expect("media expectation").instance, "fake");
             self.calls
                 .lock()
                 .expect("calls mutex poisoned")
@@ -1061,10 +1061,10 @@ mod tests {
             .call(
                 "TakeScreenshot".into(),
                 json!({}),
-                NativeExpect {
+                Some(NativeExpect {
                     instance: "fake".into(),
                     generation: None,
-                },
+                }),
             )
             .await
             .unwrap();

@@ -1,6 +1,10 @@
 //! Shared core for the `mcp-cli` binary.
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow};
 use futures::future::BoxFuture;
@@ -21,7 +25,6 @@ use serde_json::{Value, json};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::broadcast,
     time::timeout,
 };
 use tokio_util::sync::CancellationToken;
@@ -35,6 +38,7 @@ pub mod media;
 pub mod monitor;
 pub use monitor::{CoreEvent, Event, MAX_EVENT_COPY, MAX_EVENTS, MonitorStats, MonitorStore};
 use monitor::{bounded, bounded_json, now_ms, sanitize_value};
+pub const MAX_ACTIVE_CALLS: usize = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NativeResponse {
@@ -60,9 +64,14 @@ pub struct NativeTool {
     pub pack: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<ToolAnnotations>,
-    #[serde(default)]
+    #[serde(
+        rename = "output_schema",
+        alias = "outputSchema",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub output_schema: Option<Value>,
 }
 
@@ -97,7 +106,7 @@ pub trait NativeBackend: Send + Sync {
         &self,
         tool: String,
         input: Value,
-        expect: NativeExpect,
+        expect: Option<NativeExpect>,
     ) -> BoxFuture<'static, Result<NativeResponse>>;
 }
 
@@ -177,12 +186,14 @@ impl NativeBackend for NativeTcpClient {
         &self,
         tool: String,
         input: Value,
-        expect: NativeExpect,
+        expect: Option<NativeExpect>,
     ) -> BoxFuture<'static, Result<NativeResponse>> {
         let client = self.clone();
         Box::pin(async move {
             let mut request = json!({"route":"call","tool":tool,"input":input});
-            request["expect"] = serde_json::to_value(expect)?;
+            if let Some(expect) = expect {
+                request["expect"] = serde_json::to_value(expect)?;
+            }
             client.request(request, client.timeout).await
         })
     }
@@ -258,6 +269,15 @@ impl CatalogSnapshot {
                     .is_none_or(|generation| !generation.is_empty()),
                 "empty pack generation"
             );
+            anyhow::ensure!(
+                tool.output_schema.as_ref().is_none_or(Value::is_object),
+                "output schema for {} must be a JSON object",
+                tool.name
+            );
+            if let Some(schema) = &tool.output_schema {
+                compile_schema(&envelope_output_schema(schema.clone()))
+                    .with_context(|| format!("output schema for {}", tool.name))?;
+            }
             let validator = compile_schema(&tool.input_schema)
                 .with_context(|| format!("schema for {}", tool.name))?;
             validators.insert(tool.name.clone(), Arc::new(validator));
@@ -285,6 +305,12 @@ pub enum CallError {
     CatalogUnavailable(String),
     #[error("native transport failed; outcome unknown; request was not replayed: {0}")]
     NativeTransport(String),
+    #[error("native call queue is full")]
+    QueueFull,
+    #[error(
+        "native call cancelled; an already dispatched operation may still run; outcome unknown; request was not replayed"
+    )]
+    Cancelled,
     #[error("invalid native tool response: {0}")]
     NativeProtocol(String),
 }
@@ -295,6 +321,8 @@ pub struct Core {
     refresh_lock: tokio::sync::Mutex<()>,
     catalog_changes: tokio::sync::watch::Sender<Option<CatalogIdentity>>,
     monitor: Arc<MonitorStore>,
+    call_slots: Arc<tokio::sync::Semaphore>,
+    guides: std::sync::RwLock<Option<GuideCache>>,
 }
 
 impl Core {
@@ -306,6 +334,8 @@ impl Core {
             refresh_lock: tokio::sync::Mutex::new(()),
             catalog_changes,
             monitor,
+            call_slots: Arc::new(tokio::sync::Semaphore::new(MAX_ACTIVE_CALLS)),
+            guides: std::sync::RwLock::new(None),
         })
     }
 
@@ -342,6 +372,7 @@ impl Core {
         let snapshot =
             tokio::task::spawn_blocking(move || CatalogSnapshot::compile(catalog)).await??;
         *self.catalog.write().expect("catalog lock poisoned") = Some(snapshot.clone());
+        *self.guides.write().expect("guide cache lock poisoned") = None;
         self.catalog_changes.send_replace(Some(identity));
         self.monitor
             .catalog_changed(snapshot.identity.revision.clone());
@@ -424,11 +455,18 @@ impl Core {
         &self,
         tool: &str,
         input: Value,
+        cancellation: &CancellationToken,
     ) -> std::result::Result<NativeResponse, CallError> {
-        let catalog = self
-            .poll_catalog()
-            .await
-            .map_err(|error| CallError::CatalogUnavailable(format!("{error:#}")))?;
+        let _slot = self
+            .call_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| CallError::QueueFull)?;
+        let catalog = tokio::select! {
+            _ = cancellation.cancelled() => Err(CallError::Cancelled),
+            result = self.poll_catalog() => result
+                .map_err(|error| CallError::CatalogUnavailable(format!("{error:#}"))),
+        }?;
         let descriptor = catalog
             .tools
             .get(tool)
@@ -438,23 +476,26 @@ impl Core {
             .get(tool)
             .expect("validated descriptor lacks validator")
             .clone();
-        let expect = NativeExpect {
+        let expect = Some(NativeExpect {
             instance: catalog.identity.instance.clone(),
             generation: descriptor.generation.clone(),
-        };
+        });
         let validation_input = input.clone();
-        tokio::task::spawn_blocking(move || {
+        let validation = tokio::task::spawn_blocking(move || {
             validator
                 .validate(&validation_input)
                 .map_err(|error| CallError::InvalidArguments(error.to_string()))
-        })
-        .await
-        .map_err(|error| CallError::InvalidArguments(error.to_string()))??;
-        let response = self
-            .backend
-            .call(tool.to_owned(), input, expect)
-            .await
-            .map_err(|error| CallError::NativeTransport(format!("{error:#}")))?;
+        });
+        tokio::select! {
+            _ = cancellation.cancelled() => return Err(CallError::Cancelled),
+            result = validation => result
+                .map_err(|error| CallError::InvalidArguments(error.to_string()))??,
+        }
+        let response = tokio::select! {
+            _ = cancellation.cancelled() => return Err(CallError::Cancelled),
+            result = self.backend.call(tool.to_owned(), input, expect) => result
+                .map_err(|error| CallError::NativeTransport(format!("{error:#}")))?,
+        };
         if response.ok
             && !response
                 .data
@@ -475,6 +516,24 @@ impl Core {
         connection_id: &str,
         request_id: &str,
     ) -> std::result::Result<NativeResponse, CallError> {
+        self.call_with_cancellation(
+            tool,
+            input,
+            connection_id,
+            request_id,
+            CancellationToken::new(),
+        )
+        .await
+    }
+
+    pub async fn call_with_cancellation(
+        &self,
+        tool: &str,
+        input: Value,
+        connection_id: &str,
+        request_id: &str,
+        cancellation: CancellationToken,
+    ) -> std::result::Result<NativeResponse, CallError> {
         let mut event = Event {
             invocation_id: self.monitor.next_id(),
             connection_id: bounded(connection_id),
@@ -490,7 +549,7 @@ impl Core {
             result: String::new(),
         };
         self.monitor.record(event.clone());
-        let result = self.call_inner(tool, input).await;
+        let result = self.call_inner(tool, input, &cancellation).await;
         event.ended_ms = now_ms();
         event.status = match &result {
             Ok(response) if !native_failed(response) => "ok",
@@ -498,6 +557,8 @@ impl Core {
             Err(CallError::InvalidArguments(_)) => "invalid_arguments",
             Err(CallError::UnknownTool(_)) => "unknown_tool",
             Err(CallError::CatalogUnavailable(_)) => "catalog_unavailable",
+            Err(CallError::QueueFull) => "queue_full",
+            Err(CallError::Cancelled) => "cancelled",
             Err(_) => "transport_error",
         }
         .into();
@@ -517,18 +578,42 @@ impl Core {
         connection_id: &str,
         request_id: &str,
     ) -> Result<Vec<NativeGuide>> {
+        if let Some(cache) = self
+            .guides
+            .read()
+            .expect("guide cache lock poisoned")
+            .clone()
+        {
+            if let Some(guides) = cache.guides {
+                return Ok(guides);
+            }
+        }
         let response = self
             .call("ListGuides", json!({}), connection_id, request_id)
             .await?;
         anyhow::ensure!(!native_failed(&response), "native ListGuides failed");
-        serde_json::from_value(
+        let guides: Vec<NativeGuide> = serde_json::from_value(
             response
                 .data
                 .pointer("/result/output/guides")
                 .cloned()
                 .context("ListGuides has no guides array")?,
         )
-        .context("decode native guides")
+        .context("decode native guides")?;
+        anyhow::ensure!(guides.len() <= 256, "too many native guides");
+        let mut seen = std::collections::BTreeSet::new();
+        for guide in &guides {
+            anyhow::ensure!(
+                !guide.topic.is_empty() && seen.insert(guide.topic.clone()),
+                "invalid or duplicate native guide topic"
+            );
+        }
+        self.guides
+            .write()
+            .expect("guide cache lock poisoned")
+            .get_or_insert_with(GuideCache::default)
+            .guides = Some(guides.clone());
+        Ok(guides)
     }
 
     pub async fn get_guide(
@@ -537,6 +622,15 @@ impl Core {
         connection_id: &str,
         request_id: &str,
     ) -> Result<Value> {
+        if let Some(body) = self
+            .guides
+            .read()
+            .expect("guide cache lock poisoned")
+            .as_ref()
+            .and_then(|cache| cache.bodies.get(topic).cloned())
+        {
+            return Ok(body);
+        }
         let response = self
             .call(
                 "GetGuide",
@@ -550,11 +644,18 @@ impl Core {
             "native GetGuide failed: {}",
             response.data
         );
-        response
+        let output = response
             .data
             .pointer("/result/output")
             .cloned()
-            .context("GetGuide has no output")
+            .context("GetGuide has no output")?;
+        self.guides
+            .write()
+            .expect("guide cache lock poisoned")
+            .get_or_insert_with(GuideCache::default)
+            .bodies
+            .insert(topic.to_owned(), output.clone());
+        Ok(output)
     }
 }
 
@@ -562,6 +663,12 @@ impl Core {
 pub struct NativeGuide {
     pub topic: String,
     pub title: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct GuideCache {
+    guides: Option<Vec<NativeGuide>>,
+    bodies: BTreeMap<String, Value>,
 }
 
 fn native_failed(response: &NativeResponse) -> bool {
@@ -597,42 +704,72 @@ pub fn validate_input(schema: &Value, input: &Value) -> Result<()> {
 pub struct McpAdapter {
     pub core: Arc<Core>,
     media: Option<Arc<media::MediaService>>,
+    connection_id: String,
+    legacy_subscriptions: Arc<Mutex<std::collections::BTreeSet<String>>>,
+    legacy_started: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Clone for McpAdapter {
     fn clone(&self) -> Self {
-        Self {
-            core: self.core.clone(),
-            media: self.media.clone(),
-        }
+        // The HTTP service factory clones the template for each legacy session
+        // or modern stateless exchange; each receives its own observer identity.
+        let mut adapter = Self::new(self.core.clone());
+        adapter.media = self.media.clone();
+        adapter
     }
 }
 
 impl McpAdapter {
     pub fn new(core: Arc<Core>) -> Self {
-        Self::with_media_root(core, None)
-            .unwrap_or_else(|_| unreachable!("optional media construction cannot fail"))
+        let media = media::MediaService::from_environment(core.backend()).ok();
+        Self {
+            core,
+            media,
+            connection_id: uuid::Uuid::new_v4().to_string(),
+            legacy_subscriptions: Arc::new(Mutex::new(std::collections::BTreeSet::new())),
+            legacy_started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
     }
 
     pub fn with_media_root(core: Arc<Core>, root: Option<std::path::PathBuf>) -> Result<Self> {
-        let media = match root {
-            Some(root) => Some(media::MediaService::new(
-                core.backend(),
+        let mut adapter = Self::new(core);
+        if let Some(root) = root {
+            adapter.media = Some(media::MediaService::new(
+                adapter.core.backend(),
                 media::ScreenshotConfig::new(root)?,
-            )),
-            None => match media::MediaService::from_environment(core.backend()) {
-                Ok(media) => Some(media),
-                Err(error) => {
-                    tracing::debug!(%error, "screenshot media disabled; configure TM_USER_GAME_FOLDER");
-                    None
-                }
-            },
-        };
-        Ok(Self { core, media })
+            ));
+        }
+        Ok(adapter)
     }
 
     fn tools(&self, catalog: CatalogSnapshot) -> Vec<Tool> {
-        catalog.tools.into_values().map(mcp_tool).collect()
+        catalog
+            .tools
+            .into_values()
+            .map(Self::tool_from_descriptor)
+            .collect()
+    }
+
+    fn tool_from_descriptor(tool: NativeTool) -> Tool {
+        let input_schema = Arc::new(
+            tool.input_schema
+                .as_object()
+                .expect("catalog compiler validates input schemas")
+                .clone(),
+        );
+        let mut output = Tool::new_with_raw(tool.name, Some(tool.description.into()), input_schema);
+        if let Some(schema) = tool.output_schema {
+            output = output.with_raw_output_schema(Arc::new(
+                envelope_output_schema(schema)
+                    .as_object()
+                    .expect("wrapper schema is an object")
+                    .clone(),
+            ));
+        }
+        if let Some(annotations) = tool.annotations {
+            output = output.with_annotations(annotations);
+        }
+        output
     }
 }
 
@@ -657,9 +794,13 @@ impl ServerHandler for McpAdapter {
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        self.core
-            .cached_catalog()
-            .and_then(|catalog| catalog.tools.get(name).cloned().map(mcp_tool))
+        self.core.cached_catalog().and_then(|catalog| {
+            catalog
+                .tools
+                .get(name)
+                .cloned()
+                .map(McpAdapter::tool_from_descriptor)
+        })
     }
 
     async fn list_tools(
@@ -681,48 +822,49 @@ impl ServerHandler for McpAdapter {
         let input = Value::Object(request.arguments.unwrap_or_default());
         let tool = request.name.to_string();
         let capture = if tool == "TakeScreenshot" {
-            match &self.media {
-                Some(media) => Some(media.prepare().await.map_err(internal_error)?),
-                None => None,
+            let Some(media) = &self.media else {
+                return Ok(CallToolResult::structured_error(json!({"code":"screenshot_mapping_missing", "error":"Configure --screenshots-dir or TM_USER_GAME_FOLDER for fresh image capture"})).into());
+            };
+            match media.prepare().await {
+                Ok(capture) => Some(capture),
+                Err(error) => {
+                    return Ok(CallToolResult::structured_error(
+                        json!({"code":"screenshot_capture", "error":error.to_string()}),
+                    )
+                    .into());
+                }
             }
         } else {
             None
         };
         let result = self
             .core
-            .call(&tool, input, "mcp", &request_id(&context.id))
+            .call_with_cancellation(
+                &tool,
+                input,
+                &self.connection_id,
+                &request_id(&context.id),
+                context.ct.clone(),
+            )
             .await;
-        match result {
-            Ok(response) => {
-                let artifact = if let (Some(media), Some(capture)) = (&self.media, capture) {
-                    if native_failed(&response) {
-                        None
-                    } else {
-                        Some(
-                            media
-                                .finish(capture, &response)
-                                .await
-                                .map_err(internal_error)?,
-                        )
+        if let (Ok(mut response), Some(capture), Some(media)) =
+            (result.as_ref().cloned(), capture, &self.media)
+        {
+            if !native_failed(&response) {
+                match media.finish(capture, &response).await {
+                    Ok(artifact) => {
+                        if let Some(output) = response.data.pointer_mut("/result/output").and_then(Value::as_object_mut) {
+                            output.insert("screenshot".into(), json!({"uri":artifact.uri(),"mimeType":artifact.mime_type(),"size":artifact.size_bytes(),"immutable":true}));
+                        }
+                        let mut result = native_result(response, false);
+                        result.content.push(artifact.image_block());
+                        return Ok(result.into());
                     }
-                } else {
-                    None
-                };
-                let failed = native_failed(&response);
-                Ok(native_result(response, failed, artifact).into())
+                    Err(error) => return Ok(CallToolResult::structured_error(json!({"code":"screenshot_capture", "error":error.to_string(),"native":response})).into()),
+                }
             }
-            Err(CallError::UnknownTool(error)) => Err(McpError::invalid_params(error, None)),
-            Err(CallError::InvalidArguments(error)) => {
-                Ok(CallToolResult::structured_error(json!({
-                    "ok": false, "error": error, "code": "invalid_input"
-                }))
-                .into())
-            }
-            Err(error) => Ok(CallToolResult::structured_error(json!({
-                "ok": false, "error": error.to_string(), "code": "native_transport"
-            }))
-            .into()),
         }
+        map_call_result(result)
     }
 
     async fn list_resources(
@@ -732,7 +874,7 @@ impl ServerHandler for McpAdapter {
     ) -> Result<ListResourcesResult, McpError> {
         let guides = self
             .core
-            .list_guides("mcp", "resources/list")
+            .list_guides(&self.connection_id, "resources/list")
             .await
             .map_err(internal_error)?;
         let mut resources = guides
@@ -762,22 +904,26 @@ impl ServerHandler for McpAdapter {
                 .media
                 .as_ref()
                 .ok_or_else(|| McpError::resource_not_found(request.uri.clone(), None))?;
-            let content = media
-                .read_image_resource(&request.uri)
-                .map_err(internal_error)?;
-            return Ok(ReadResourceResult::new(vec![content])
-                .with_ttl_ms(0)
-                .with_cache_scope(CacheScope::Private)
-                .into());
+            return Ok(ReadResourceResult::new(vec![
+                media
+                    .read_image_resource(&request.uri)
+                    .map_err(internal_error)?,
+            ])
+            .with_ttl_ms(0)
+            .with_cache_scope(CacheScope::Private)
+            .into());
         }
         let prefix = "tm-control://guide/";
+        if !valid_guide_uri(&request.uri) {
+            return Err(McpError::resource_not_found(request.uri.clone(), None));
+        }
         let key = request
             .uri
             .strip_prefix(prefix)
             .ok_or_else(|| McpError::resource_not_found(request.uri.clone(), None))?;
         let output = self
             .core
-            .get_guide(key, "mcp", &request.uri)
+            .get_guide(key, &self.connection_id, &request.uri)
             .await
             .map_err(|error| McpError::resource_not_found(error.to_string(), None))?;
         let body = output
@@ -796,28 +942,40 @@ impl ServerHandler for McpAdapter {
         &self,
         requested: &SubscriptionFilter,
     ) -> Option<SubscriptionFilter> {
-        Some(
-            SubscriptionFilter::builder()
-                .tools_list_changed()
-                .resources_list_changed()
-                .build()
-                .intersection(requested),
-        )
+        let mut builder = SubscriptionFilter::builder()
+            .tools_list_changed()
+            .resources_list_changed();
+        if let Some(uris) = &requested.resource_subscriptions {
+            builder = builder.resource_subscriptions(
+                uris.iter()
+                    .filter(|uri| valid_guide_uri(uri))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            );
+        }
+        Some(builder.build().intersection(requested))
     }
 
     async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
-        let mut events = self.core.monitor.subscribe();
+        // Catalog changes have their own coalescing channel so a busy/lossy
+        // invocation monitor cannot cause missed cache invalidations.
+        let mut changes = self.core.catalog_updates();
         loop {
             tokio::select! {
                 _ = context.cancelled() => return Ok(()),
-                event = events.recv() => match event {
-                    Ok(CoreEvent::CatalogChanged(_)) => {
-                        let _ = context.sink().notify_tool_list_changed().await;
-                        let _ = context.sink().notify_resource_list_changed().await;
-                    }
-                    Ok(CoreEvent::Invocation(_)) => {}
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                changed = changes.changed() => {
+                    if changed.is_err() { return Ok(()); }
+                    let sink = context.sink();
+                    let accepted = context.accepted();
+                    let sent = timeout(Duration::from_secs(2), async {
+                        if accepted.tools_list_changed == Some(true) { sink.notify_tool_list_changed().await?; }
+                        if accepted.resources_list_changed == Some(true) { sink.notify_resource_list_changed().await?; }
+                        if let Some(uris) = &accepted.resource_subscriptions {
+                            for uri in uris { sink.notify_resource_updated(uri.clone()).await?; }
+                        }
+                        Ok::<_, rmcp::service::SubscriptionSendError>(())
+                    }).await;
+                    if !matches!(sent, Ok(Ok(()))) { return Ok(()); }
                 }
             }
         }
@@ -827,20 +985,32 @@ impl ServerHandler for McpAdapter {
         let legacy = context
             .peer
             .peer_info()
-            .map(|info| info.protocol_version != rmcp::model::ProtocolVersion::V_2026_07_28)
-            .unwrap_or(true);
-        if !legacy {
+            .is_some_and(|info| info.protocol_version.has_initialize());
+        if !legacy
+            || self
+                .legacy_started
+                .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
             return;
         }
         let mut changes = self.core.catalog_updates();
+        let subscriptions = self.legacy_subscriptions.clone();
         let peer = context.peer;
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     changed = changes.changed() => {
                         if changed.is_err() || peer.is_transport_closed() { break; }
-                        let _ = peer.notify_tool_list_changed().await;
-                        let _ = peer.notify_resource_list_changed().await;
+                        let uris: Vec<String> = subscriptions.lock().expect("subscription lock poisoned").iter().cloned().collect();
+                        let sent = timeout(Duration::from_secs(2), async {
+                            peer.notify_tool_list_changed().await?;
+                            peer.notify_resource_list_changed().await?;
+                            for uri in uris {
+                                peer.notify_resource_updated(rmcp::model::ResourceUpdatedNotificationParam::new(uri)).await?;
+                            }
+                            Ok::<_, rmcp::service::ServiceError>(())
+                        }).await;
+                        if !matches!(sent, Ok(Ok(()))) { break; }
                     }
                     _ = tokio::time::sleep(Duration::from_secs(1)) => {
                         if peer.is_transport_closed() { break; }
@@ -854,15 +1024,36 @@ impl ServerHandler for McpAdapter {
     async fn subscribe(
         &self,
         request: SubscribeRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<(), McpError> {
-        request
-            .uri
-            .strip_prefix("tm-control://guide/")
-            .filter(|topic| !topic.is_empty())
-            .ok_or_else(|| {
-                McpError::invalid_params("legacy subscribe requires a tm-control guide URI", None)
-            })?;
+        if !valid_guide_uri(&request.uri) {
+            return Err(McpError::invalid_params(
+                "legacy subscribe requires a tm-control guide URI",
+                None,
+            ));
+        }
+        self.core
+            .get_guide(
+                request
+                    .uri
+                    .strip_prefix("tm-control://guide/")
+                    .unwrap_or_default(),
+                &self.connection_id,
+                &request_id(&context.id),
+            )
+            .await
+            .map_err(internal_error)?;
+        let mut subscriptions = self
+            .legacy_subscriptions
+            .lock()
+            .expect("subscription lock poisoned");
+        if subscriptions.len() >= 128 && !subscriptions.contains(&request.uri) {
+            return Err(McpError::invalid_params(
+                "too many guide subscriptions",
+                None,
+            ));
+        }
+        subscriptions.insert(request.uri);
         Ok(())
     }
 
@@ -872,60 +1063,80 @@ impl ServerHandler for McpAdapter {
         request: UnsubscribeRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<(), McpError> {
-        request
-            .uri
-            .strip_prefix("tm-control://guide/")
-            .filter(|topic| !topic.is_empty())
-            .ok_or_else(|| {
-                McpError::invalid_params("legacy unsubscribe requires a tm-control guide URI", None)
-            })?;
+        if !valid_guide_uri(&request.uri) {
+            return Err(McpError::invalid_params(
+                "legacy unsubscribe requires a tm-control guide URI",
+                None,
+            ));
+        }
+        self.legacy_subscriptions
+            .lock()
+            .expect("subscription lock poisoned")
+            .remove(&request.uri);
         Ok(())
     }
 }
 
-fn mcp_tool(tool: NativeTool) -> Tool {
-    let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
-    let mut result = Tool::new_with_raw(tool.name, Some(tool.description.into()), Arc::new(schema));
-    if let Some(output) = tool
-        .output_schema
-        .and_then(|value| value.as_object().cloned())
-    {
-        result.output_schema = Some(Arc::new(output));
+fn map_call_result(
+    result: std::result::Result<NativeResponse, CallError>,
+) -> std::result::Result<CallToolResponse, McpError> {
+    match result {
+        Ok(response) => {
+            let failed = native_failed(&response);
+            Ok(native_result(response, failed).into())
+        }
+        Err(CallError::UnknownTool(error)) => Err(McpError::invalid_params(error, None)),
+        Err(CallError::InvalidArguments(error)) => Ok(CallToolResult::structured_error(json!({
+            "ok": false, "error": error, "code": "invalid_input"
+        }))
+        .into()),
+        Err(error) => Ok(CallToolResult::structured_error(json!({
+            "ok": false, "error": error.to_string(), "code": "native_transport"
+        }))
+        .into()),
     }
-    result.annotations = tool.annotations;
-    result
 }
 
 fn request_id(id: &rmcp::model::RequestId) -> String {
     serde_json::to_string(id).unwrap_or_else(|_| "unknown".into())
 }
+
+fn valid_guide_uri(uri: &str) -> bool {
+    uri.strip_prefix("tm-control://guide/")
+        .is_some_and(|topic| !topic.is_empty() && !topic.contains('/'))
+}
+
 fn internal_error(error: anyhow::Error) -> McpError {
     McpError::internal_error(error.to_string(), None)
 }
 
-fn native_result(
-    response: NativeResponse,
-    error: bool,
-    artifact: Option<media::ImageArtifact>,
-) -> CallToolResult {
-    let mut output = serde_json::to_value(response).unwrap_or(Value::Null);
-    let artifact_for_content = artifact.clone();
-    if let Some(artifact) = artifact {
-        if let Some(native_output) = output
-            .pointer_mut("/data/result/output")
-            .and_then(Value::as_object_mut)
-        {
-            native_output.insert(
-                "screenshot".into(),
-                json!({
-                    "uri": artifact.uri(),
-                    "mimeType": artifact.mime_type(),
-                    "size": artifact.size_bytes(),
-                    "immutable": true
-                }),
-            );
-        }
+/// Native metadata describes `result.output`; MCP structured content includes
+/// the complete response envelope. A nested resource preserves local $refs.
+fn envelope_output_schema(mut payload: Value) -> Value {
+    if let Some(schema) = payload.as_object_mut() {
+        schema
+            .entry("$id")
+            .or_insert(json!("urn:tm-control-mcp:output-payload"));
     }
+    json!({
+        "type":"object",
+        "required":["ok"],
+        "properties":{
+            "ok":{"type":"boolean"},
+            "error":{"type":"string"},
+            "data":{"type":"object","required":["result"],"properties":{
+                "result":{"type":"object","required":["success"],"properties":{"success":{"type":"boolean"}},
+                    "if":{"properties":{"success":{"const":true}}},
+                    "then":{"required":["output"],"properties":{"output":payload}}}
+            }}
+        },
+        "if":{"properties":{"ok":{"const":true}}},
+        "then":{"required":["data"]}
+    })
+}
+
+fn native_result(response: NativeResponse, error: bool) -> CallToolResult {
+    let output = serde_json::to_value(response).unwrap_or(Value::Null);
     let mut result = if error {
         CallToolResult::structured_error(output)
     } else {
@@ -934,15 +1145,14 @@ fn native_result(
     if result.content.is_empty() {
         result.content.push(ContentBlock::text("{}"));
     }
-    if let Some(artifact) = artifact_for_content {
-        result.content.push(artifact.image_block());
-    }
     result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Notify;
 
     struct FakeBackend;
     impl NativeBackend for FakeBackend {
@@ -972,10 +1182,13 @@ mod tests {
             &self,
             _tool: String,
             input: Value,
-            expect: NativeExpect,
+            expect: Option<NativeExpect>,
         ) -> BoxFuture<'static, Result<NativeResponse>> {
             Box::pin(async move {
-                assert_eq!(expect.instance, "fake");
+                assert_eq!(
+                    expect.as_ref().map(|value| value.instance.as_str()),
+                    Some("fake")
+                );
                 Ok(NativeResponse {
                     ok: true,
                     id: Value::Null,
@@ -1000,6 +1213,286 @@ mod tests {
     }
 
     #[test]
+    fn catalog_preserves_raw_tool_metadata_and_schemas() {
+        let input_schema = json!({
+            "type": "object",
+            "properties": {"value": {"type": "integer", "minimum": 1}},
+            "required": ["value"],
+            "additionalProperties": false
+        });
+        let output_schema = json!({
+            "type": "object",
+            "properties": {"ok": {"const": true}},
+            "required": ["ok"]
+        });
+        let snapshot = CatalogSnapshot::compile(NativeCatalog {
+            schema_version: 1,
+            instance: "instance".into(),
+            revision: "revision".into(),
+            tools: vec![NativeTool {
+                name: "Meta".into(),
+                description: "metadata".into(),
+                input_schema: input_schema.clone(),
+                pack: "pack".into(),
+                generation: Some("7".into()),
+                annotations: Some(ToolAnnotations::new().read_only(true).idempotent(true)),
+                output_schema: Some(output_schema.clone()),
+            }],
+        })
+        .unwrap();
+        let tool = McpAdapter::tool_from_descriptor(snapshot.tools["Meta"].clone());
+        assert_eq!(tool.schema_as_json_value(), input_schema);
+        assert_eq!(
+            tool.output_schema
+                .as_ref()
+                .map(|schema| Value::Object(schema.as_ref().clone())),
+            Some(envelope_output_schema(output_schema))
+        );
+        assert_eq!(
+            tool.annotations.as_ref().unwrap().read_only_hint,
+            Some(true)
+        );
+        assert_eq!(
+            tool.annotations.as_ref().unwrap().idempotent_hint,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn output_schema_validates_envelope_payload_and_local_references() {
+        let payload = json!({"type":"object","$defs":{"answer":{"type":"string"}},
+            "properties":{"pong":{"$ref":"#/$defs/answer"}},"required":["pong"],"additionalProperties":false});
+        let schema = envelope_output_schema(payload);
+        let validator = compile_schema(&schema).unwrap();
+        assert!(validator.is_valid(
+            &json!({"ok":true,"data":{"result":{"success":true,"output":{"pong":"yes"}}}})
+        ));
+        assert!(
+            !validator.is_valid(&json!({"ok":true,"data":{"result":{"success":true,"output":{}}}}))
+        );
+        assert!(
+            !validator.is_valid(
+                &json!({"ok":true,"data":{"result":{"success":true,"output":{"pong":5}}}})
+            )
+        );
+        assert!(
+            validator
+                .is_valid(&json!({"ok":true,"data":{"result":{"success":false,"error":"failed"}}}))
+        );
+        assert!(validator.is_valid(&json!({"ok":false,"error":"transport"})));
+    }
+
+    #[derive(Clone)]
+    struct GuideBackend {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl NativeBackend for GuideBackend {
+        fn status(&self) -> BoxFuture<'static, Result<NativeResponse>> {
+            Box::pin(async {
+                Ok(NativeResponse {
+                    ok: true,
+                    id: Value::Null,
+                    route: "status".into(),
+                    error: String::new(),
+                    data: json!({"catalog":{"schemaVersion":1,"instance":"guide","revision":"1"}}),
+                })
+            })
+        }
+
+        fn catalog(&self) -> BoxFuture<'static, Result<NativeResponse>> {
+            Box::pin(async {
+                Ok(NativeResponse {
+                    ok: true,
+                    id: Value::Null,
+                    route: "catalog".into(),
+                    error: String::new(),
+                    data: json!({
+                        "schemaVersion": 1,
+                        "instance": "guide",
+                        "revision": "1",
+                        "tools": [
+                            {"name":"ListGuides","input_schema":{"type":"object"}},
+                            {"name":"GetGuide","input_schema":{"type":"object","properties":{"topic":{"type":"string"}},"required":["topic"]}},
+                        ]
+                    }),
+                })
+            })
+        }
+
+        fn call(
+            &self,
+            tool: String,
+            input: Value,
+            _expect: Option<NativeExpect>,
+        ) -> BoxFuture<'static, Result<NativeResponse>> {
+            let calls = self.calls.clone();
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::Relaxed);
+                let output = match tool.as_str() {
+                    "ListGuides" => json!({"guides":[{"topic":"index","title":"Index"}]}),
+                    "GetGuide" => {
+                        json!({"topic":input["topic"],"title":"Index","body":"native body"})
+                    }
+                    _ => anyhow::bail!("unexpected tool"),
+                };
+                Ok(NativeResponse {
+                    ok: true,
+                    id: Value::Null,
+                    route: "call".into(),
+                    error: String::new(),
+                    data: json!({"result":{"success":true,"output":output}}),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn native_guides_are_cached_after_backend_fetches() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let core = Core::new(
+            Arc::new(GuideBackend {
+                calls: calls.clone(),
+            }),
+            MonitorStore::new(None),
+        );
+        assert_eq!(
+            core.list_guides("test", "1").await.unwrap()[0].topic,
+            "index"
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            core.list_guides("test", "2").await.unwrap()[0].topic,
+            "index"
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            core.get_guide("index", "test", "3").await.unwrap()["body"],
+            "native body"
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            core.get_guide("index", "test", "4").await.unwrap()["body"],
+            "native body"
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+
+        let reverse_calls = Arc::new(AtomicUsize::new(0));
+        let reverse = Core::new(
+            Arc::new(GuideBackend {
+                calls: reverse_calls.clone(),
+            }),
+            MonitorStore::new(None),
+        );
+        reverse.get_guide("index", "test", "5").await.unwrap();
+        assert_eq!(
+            reverse.list_guides("test", "6").await.unwrap()[0].topic,
+            "index"
+        );
+        assert_eq!(reverse_calls.load(Ordering::Relaxed), 2);
+    }
+
+    struct SlowBackend {
+        started: Arc<AtomicUsize>,
+        release: Arc<Notify>,
+    }
+
+    impl NativeBackend for SlowBackend {
+        fn status(&self) -> BoxFuture<'static, Result<NativeResponse>> {
+            Box::pin(async {
+                Ok(NativeResponse {
+                    ok: true,
+                    id: Value::Null,
+                    route: "status".into(),
+                    error: String::new(),
+                    data: json!({"catalog":{"schemaVersion":1,"instance":"slow","revision":"1"}}),
+                })
+            })
+        }
+
+        fn catalog(&self) -> BoxFuture<'static, Result<NativeResponse>> {
+            Box::pin(async {
+                Ok(NativeResponse {
+                    ok: true,
+                    id: Value::Null,
+                    route: "catalog".into(),
+                    error: String::new(),
+                    data: json!({"schemaVersion":1,"instance":"slow","revision":"1","tools":[{"name":"Slow","input_schema":{"type":"object"}}]}),
+                })
+            })
+        }
+
+        fn call(
+            &self,
+            _tool: String,
+            _input: Value,
+            _expect: Option<NativeExpect>,
+        ) -> BoxFuture<'static, Result<NativeResponse>> {
+            let started = self.started.clone();
+            let release = self.release.clone();
+            Box::pin(async move {
+                started.fetch_add(1, Ordering::Relaxed);
+                release.notified().await;
+                Ok(NativeResponse {
+                    ok: true,
+                    id: Value::Null,
+                    route: "call".into(),
+                    error: String::new(),
+                    data: json!({"result":{"success":true,"output":{}}}),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn calls_have_bounded_admission_and_honor_cancellation() {
+        let backend = Arc::new(SlowBackend {
+            started: Arc::new(AtomicUsize::new(0)),
+            release: Arc::new(Notify::new()),
+        });
+        let core = Core::new(backend.clone(), MonitorStore::new(None));
+        let mut tasks = Vec::new();
+        for index in 0..MAX_ACTIVE_CALLS {
+            let core = core.clone();
+            tasks.push(tokio::spawn(async move {
+                core.call("Slow", json!({}), "test", &index.to_string())
+                    .await
+            }));
+        }
+        for _ in 0..100 {
+            if backend.started.load(Ordering::Relaxed) == MAX_ACTIVE_CALLS {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(backend.started.load(Ordering::Relaxed), MAX_ACTIVE_CALLS);
+        assert!(matches!(
+            core.call("Slow", json!({}), "test", "full").await,
+            Err(CallError::QueueFull)
+        ));
+        backend.release.notify_waiters();
+        for task in tasks {
+            assert!(task.await.unwrap().is_ok());
+        }
+
+        let token = CancellationToken::new();
+        let core = core.clone();
+        let cancel = token.clone();
+        let task = tokio::spawn(async move {
+            core.call_with_cancellation("Slow", json!({}), "test", "cancel", cancel)
+                .await
+        });
+        for _ in 0..100 {
+            if backend.started.load(Ordering::Relaxed) > MAX_ACTIVE_CALLS {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        token.cancel();
+        assert!(matches!(task.await.unwrap(), Err(CallError::Cancelled)));
+    }
+
+    #[test]
     fn rejects_network_refs_and_accepts_full_draft_2020_12_validation() {
         assert!(validate_input(&json!({"type":"object","properties":{"x":{"type":"array","items":{"type":"integer"}}},"required":["x"]}), &json!({"x":[1,2]})).is_ok());
         assert!(
@@ -1021,7 +1514,7 @@ mod tests {
             error: String::new(),
             data: json!({"tool":"Echo","result":{"success":false,"error":"native failure","code":"failed"}}),
         };
-        let result = native_result(response, true, None);
+        let result = native_result(response, true);
         assert_eq!(result.is_error, Some(true));
         assert_eq!(
             result.structured_content.unwrap()["data"]["result"]["success"],
@@ -1076,7 +1569,6 @@ mod tests {
                 data: json!({"result":{"success":false,"output":{"fullName":"GameData/ScreenShot01.jpg"}}}),
             },
             true,
-            None,
         );
         assert_eq!(output.is_error, Some(true));
         assert_eq!(
