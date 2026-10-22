@@ -36,44 +36,9 @@ namespace TmMcp {
             Json::Value@ schema = entry["input_schema"];
             if (schema is null || schema.GetType() != Json::Type::Object) continue;
 
-            ToolSchema@ rec = ToolSchema();
-            rec.toolName = toolName;
-
-            // Parse properties.
-            if (schema.HasKey("properties") && schema["properties"].GetType() == Json::Type::Object) {
-                Json::Value@ props = schema["properties"];
-                array<string> keys = props.GetKeys();
-                for (uint k = 0; k < keys.Length; k++) {
-                    string key = keys[k];
-                    rec.allowedKeys.InsertLast(key);
-
-                    // Extract type string from property definition.
-                    string typeStr = "";
-                    Json::Value@ propDef = props[key];
-                    if (propDef !is null && propDef.GetType() == Json::Type::Object && propDef.HasKey("type")) {
-                        Json::Value@ typeVal = propDef["type"];
-                        if (typeVal !is null && typeVal.GetType() == Json::Type::String) {
-                            typeStr = string(typeVal);
-                        }
-                        // Union types (e.g. ["string","integer"] in DevSafeRead.ptr) leave
-                        // typeStr empty so the validator skips the type check for that key
-                        // while still enforcing unknown-key / required-key rules.
-                    }
-                    rec.allowedKeyTypes.InsertLast(typeStr);
-                }
-            }
-
-            // Parse required list.
-            if (schema.HasKey("required") && schema["required"].GetType() == Json::Type::Array) {
-                Json::Value@ req = schema["required"];
-                uint reqLen = req.Length;
-                for (uint r = 0; r < reqLen; r++) {
-                    Json::Value@ rv = req[r];
-                    if (rv !is null && rv.GetType() == Json::Type::String) {
-                        rec.requiredKeys.InsertLast(string(rv));
-                    }
-                }
-            }
+            string err;
+            auto rec = BuildToolSchemaRecord(toolName, schema, err);
+            if (rec is null) continue;
 
             g_schemaToolNames.InsertLast(toolName);
             g_schemaRecords.InsertLast(rec);
@@ -96,6 +61,19 @@ namespace TmMcp {
             return false;
         }
 
+        auto rec = BuildToolSchemaRecord(toolName, schema, err);
+        if (rec is null) return false;
+        g_schemaToolNames.InsertLast(toolName);
+        g_schemaRecords.InsertLast(rec);
+        return true;
+    }
+
+    ToolSchema@ BuildToolSchemaRecord(const string &in toolName, Json::Value@ schema, string &out err) {
+        err = "";
+        if (schema is null || schema.GetType() != Json::Type::Object) {
+            err = "schema must be a JSON object";
+            return null;
+        }
         ToolSchema@ rec = ToolSchema();
         rec.toolName = toolName;
         if (schema.HasKey("properties") && schema["properties"].GetType() == Json::Type::Object) {
@@ -125,9 +103,7 @@ namespace TmMcp {
                 }
             }
         }
-        g_schemaToolNames.InsertLast(toolName);
-        g_schemaRecords.InsertLast(rec);
-        return true;
+        return rec;
     }
 
     void UnregisterToolSchema(const string &in toolName) {

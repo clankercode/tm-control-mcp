@@ -42,7 +42,7 @@ def test_pack_generation_and_call_expectation_are_host_side():
     async_dispatch = (ROOT / "src" / "AsyncDispatchLocal.as").read_text()
     assert "string generation;" in PACKS
     assert "GetPackToolGeneration" in PACKS
-    assert "pack.generation = \"\" + (++g_NextPackGeneration);" in PACKS
+    assert "g_NextPackGeneration++;" in PACKS
     assert "CallToolExpected" in calls
     assert "stale_instance" in calls and "stale_generation" in calls
     assert "ValidateToolInput(name, input)" in calls

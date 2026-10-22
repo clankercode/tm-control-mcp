@@ -39,6 +39,7 @@ namespace TmMcp {
 
     // Tool packs — other plugins register tools into this surface.
     import Json::Value@ RegisterToolPack(ToolPackBuilder@ builder) from "TmMcp";
+    import Json::Value@ RegisterToolPackEx(ToolPackBuilder@ builder, Json::Value &in options) from "TmMcp";
     import Json::Value@ UnregisterToolPack(const string &in packId) from "TmMcp";
     import Json::Value@ ListToolPacks(Json::Value &in input) from "TmMcp";
 }

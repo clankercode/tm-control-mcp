@@ -58,6 +58,40 @@ Custom pack ids (constructor or `SetPackId`) must match the charset above. The d
 
 Adding the pack-id field / constructor is a shared-type change: reload TmMcp, then reload packs.
 
+## Atomic replacement and descriptor metadata
+
+The ordinary `RegisterToolPackEx(builder, options)` export adds JSON options without
+changing `ToolPackBuilder` or its shared types. Legacy `RegisterToolPack` still
+rejects an already registered prefix.
+
+```json
+{
+  "replace": true,
+  "expectedGeneration": "3",
+  "tools": {
+    "Ping": {
+      "annotations": {"readOnlyHint": true},
+      "output_schema": {"type": "object", "properties": {"pong": {"type": "boolean"}}}
+    }
+  }
+}
+```
+
+Use `replace` only to replace an existing pack owned by the calling plugin, and
+pass its current generation from registration or `ListToolPacks`. New registration
+omits `replace` and `expectedGeneration`. Metadata keys are local tool names and
+must belong to the builder. `annotations` and `output_schema` are detached JSON
+objects preserved in discovery. Options are limited to 1 MiB and packs to 512
+tools. Public names must be at most 128 ASCII letters, digits, `_`, `-`, and one
+`.` separating the prefix and local name.
+
+Replacement prepares the entire descriptor and validation tables before one
+publication. Invalid schemas, metadata, owner, or generation leave the previous
+pack usable and do not advance revision. Successful replacement advances revision
+once and assigns a new generation, including description-only changes. Passing
+the caller's plugin ID to `UnregisterToolPack` always removes all its owned packs;
+this takes precedence over an exact prefix collision with another owner's pack.
+
 ## Release metadata
 
 Declare `latestReleaseUrl` with `SetLatestReleaseUrl` on every builder. The URL
