@@ -1,0 +1,38 @@
+name: MCP CLI manual release verification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-verification:
+    name: Verify launcher and package metadata
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Verify npm package metadata
+        run: python3 packaging/verify-mcp-cli-artifacts.py --source-only
+      - name: Test launcher logic
+        run: node --test mcp-cli/npm/test/*.test.mjs
+
+  release-notice:
+    name: Report manual binary build path
+    runs-on: ubuntu-latest
+    needs: source-verification
+    steps:
+      - name: Explain build-box boundary
+        run: |
+          cat <<'EOF'
+          This workflow intentionally does not claim that GitHub-hosted runners
+          are x-p35. Build Linux x64 with tools/mcp-cli-remote.sh on x-p35,
+          build Windows x64 on a verified Windows build box, then run
+          packaging/verify-mcp-cli-artifacts.py against the staged packages
+          before publishing them with npm.
+          EOF

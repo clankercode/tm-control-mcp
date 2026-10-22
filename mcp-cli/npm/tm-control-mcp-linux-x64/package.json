@@ -1,0 +1,22 @@
+{
+  "name": "@clankercode/tm-control-mcp-linux-x64",
+  "version": "0.1.0",
+  "description": "Linux x64 executable for @clankercode/tm-control-mcp.",
+  "license": "Unlicense",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "bin": {
+    "tm-control-mcp": "bin/tm-control-mcp"
+  },
+  "exports": {
+    "./bin/tm-control-mcp": "./bin/tm-control-mcp"
+  }
+}
