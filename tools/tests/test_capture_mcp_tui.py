@@ -49,6 +49,27 @@ class HarnessTests(unittest.TestCase):
             capture.check_output(args)
             self.assertEqual(original.read_bytes(), b"original gallery image")
 
+    def test_new_artifact_guards_follow_details_toggle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = argparse.Namespace(output=Path(directory), overwrite=False, details_key=None)
+            for toggle in (None, "Tab"):
+                args.details_key = toggle
+                names = capture.output_names(args)
+                self.assertIn("long-filter.png", names)
+                for name in ("error-details.png", "error-details-scroll.png"):
+                    self.assertEqual(name in names, toggle == "Tab")
+                guarded = ("long-filter.png",)
+                if toggle:
+                    guarded += ("error-details.png", "error-details-scroll.png")
+                for name in guarded:
+                    with self.subTest(toggle=toggle, name=name):
+                        target = args.output / name
+                        target.write_bytes(b"existing evidence")
+                        with self.assertRaisesRegex(RuntimeError, "--overwrite"):
+                            capture.check_output(args)
+                        self.assertEqual(target.read_bytes(), b"existing evidence")
+                        target.unlink()
+
     def test_native_fixture_framing_errors_and_held_unicode_result(self):
         with capture.Fixture().running() as fixture:
             address = fixture.server_address

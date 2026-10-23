@@ -9,6 +9,7 @@ that wrapper. No Cargo commands or live game connections are made.
 Example: python3 tools/capture_mcp_tui.py --binary /tmp/tm-control-mcp \
     --output /tmp/tui-wide --commit REV --isolated-run /path/to/isolated-run
 Use --columns 80 --rows 24 --details-key Tab for a UI with narrow-view switching.
+The optional toggle also captures the selected native error at both scroll ends.
 """
 
 import argparse
@@ -42,7 +43,8 @@ TOOLS = ("GetMode", "GetReadiness", "ControlCamera", "GetEditorSelectionState",
          "ListToolPacks", "GetCursor", "GetLightmapComputeState", PACK_TOOL,
          "ControlInventory", "ControlPlugin")
 SHOTS = ("live.png", "error.png", "paused.png", "scrollback.png", "filter.png",
-         "empty.png", "detail-scroll.png")
+         "empty.png", "detail-scroll.png", "long-filter.png")
+DETAIL_SHOTS = ("details.png", "error-details.png", "error-details-scroll.png")
 
 
 def require(condition, message):
@@ -389,6 +391,13 @@ def capture(args, scratch):
             client.call("ControlInventory", {"action": "select", "path": "Fixture/Missing.Item.Gbx"}, error=True)
             client.call("ControlPlugin", {"action": "reload", "plugin": "tm-control-mcp"}, error=True)
             shot("error.png", "LIVE, following native tool_busy error envelope")
+            if args.details_key:
+                key(args.details_key)
+                shot("error-details.png", "Narrow details view, selected ControlPlugin tool_busy error at top")
+                key(*(["bracketright"] * 100))
+                shot("error-details-scroll.png", "Selected ControlPlugin error scrolled to final envelope lines")
+                key(*(["bracketleft"] * 100))
+                key(args.details_key)
             key("slash")
             text("status:error")
             key("Return", "p")
@@ -403,10 +412,20 @@ def capture(args, scratch):
             text("GetReadiness")
             shot("filter.png", "Filter input editing GetReadiness")
             key(*(["BackSpace"] * len("GetReadiness")))
-            text("no-such-fixture-tool")
+            empty_query = "no-such-fixture-tool"
+            text(empty_query)
             key("Return")
             shot("empty.png", "Applied no-match filter; empty matching history")
-            key("q")
+            key("slash")
+            key(*(["BackSpace"] * len(empty_query)))
+            prefix = "long_filter_draft_"
+            suffix = "FINAL_EDIT_VISIBLE_9Z"
+            draft = prefix * (args.columns // len(prefix) + 2) + suffix
+            text(draft)
+            shot("long-filter.png", "Filter input editing an over-width ASCII draft; insertion tail should remain visible")
+            screenshots["long-filter.png"].update({"draft": draft, "expectedTail": suffix})
+            # Cancel the draft to restore the applied no-match query before exit.
+            key("Escape", "q")
             terminal.wait(timeout=3)
             require(terminal.returncode == 0, f"Monitor exit status: {terminal.returncode}")
         require(not fixture.failures, f"Native fixture failures: {fixture.failures}")
@@ -428,7 +447,7 @@ def capture(args, scratch):
 
 
 def output_names(args):
-    return (*SHOTS, *(("details.png",) if args.details_key else ()), "capture.json")
+    return (*SHOTS, *(DETAIL_SHOTS if args.details_key else ()), "capture.json")
 
 
 def check_output(args):
