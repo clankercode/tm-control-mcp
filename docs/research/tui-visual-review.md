@@ -60,3 +60,25 @@ Independent vision and source reviewers agreed on the presentation gaps above an
 These are verified against the code and baseline screenshots, not inferred from the mockup. The mockup's `native_error` label and “following newest” while inspecting a middle row are illustrative mistakes and are not copied into the implementation.
 
 Baseline build-box check: `cargo test --all-targets --locked --jobs 2` on `x-p35` passed **22 library + 5 binary tests (27 total)**. No local Cargo commands were used. Actual screenshot capture tools and a private task font configuration are available on the build box so the next comparisons use the same JetBrains Mono font as the baseline.
+
+The reusable harness then exercised the pinned baseline on `x-p35`: seven direct terminal captures, **65 completed MCP calls and two tool errors**, exact **164×46** PTY dimensions. The baseline binary SHA-256 is `92043643cc7f9f394787e3d8f42568bcc86b68c8401382f2438213a5331bb9af`. Captures and receipt: `~/served-html/tm-control-mcp-tui/review/baseline/wide/`.
+
+The baseline `detail-scroll.png` confirms the scrolling defect visually: after 100 scroll-down keys it still ends at fixture row 21, before rows 22–23 and the `zzFinalWrappedLine` sentinel. Five headless harness checks also passed on the build box, covering native fixture framing, overwrite protection, isolation refusal, cleanup after failure, and PNG dimension parsing.
+
+### First implementation and vision pass
+
+The first native implementation (`8464c09`, remotely formatted as `ca4c1c2`) adds shared theme colors, a masthead with the actual listener address, an explicit mode/filter area, padded rows and visible selection, adaptive tool/status/duration columns, separate JSON cards, failure tinting, and a narrow calls/details switch. The model now reconciles selection by invocation id, freezes the display clock while paused, classifies dispatcher outcomes consistently, and budgets/wraps each detail card independently.
+
+Remote formatting and `cargo check --all-targets --locked --jobs 2` passed. The first full test run passed 22 library and 11 binary tests; one new test had an incorrect fixed width expectation (73 cells rather than the actual allocated 75-cell pane). Commit `528e913` changes the assertion to verify all lines against the measured allocation while preserving its reachable-tail and resize checks. That correction still requires its follow-up run.
+
+The first rendered review set contains **29 actual terminal screenshots**: wide 164×46 (7), standard 120×36 (7), narrow 80×24 including its full-width details view (8), and ASCII 120×36 (7). Each run observes 65 completed calls, two tool errors and a stable binary hash. Files and receipts are under `~/served-html/tm-control-mcp-tui/review/round-1/`.
+
+Vision findings from full frames and enlarged crops:
+
+- Full tool names, selected row identity, right-aligned durations, active status and a waiting-result card are now directly readable.
+- Error rows, detail status and result cards share the rose treatment without losing the native envelope.
+- Standard-width pack names wrap at the namespace/function boundary. Narrow screens expose a full-width call view and a separate full-width details view.
+- The new maximum-scroll capture shows rows 22–23, `zzFinalWrappedLine`, and the envelope's final lines; the baseline stops early. This verifies the wrapped-tail improvement with real terminal output.
+- Apparent damage in a downsampled narrow screenshot was refuted by 2× crops of its actual header and footer pixels; no speculative redraw change was made.
+
+Independent source and visual re-reviews are in progress. The first pass is not yet final sign-off.
