@@ -69,7 +69,7 @@ The baseline `detail-scroll.png` confirms the scrolling defect visually: after 1
 
 The first native implementation (`8464c09`, remotely formatted as `ca4c1c2`) adds shared theme colors, a masthead with the actual listener address, an explicit mode/filter area, padded rows and visible selection, adaptive tool/status/duration columns, separate JSON cards, failure tinting, and a narrow calls/details switch. The model now reconciles selection by invocation id, freezes the display clock while paused, classifies dispatcher outcomes consistently, and budgets/wraps each detail card independently.
 
-Remote formatting and `cargo check --all-targets --locked --jobs 2` passed. The first full test run passed 22 library and 11 binary tests; one new test had an incorrect fixed width expectation (73 cells rather than the actual allocated 75-cell pane). Commit `528e913` changes the assertion to verify all lines against the measured allocation while preserving its reachable-tail and resize checks. That correction still requires its follow-up run.
+Remote formatting and `cargo check --all-targets --locked --jobs 2` passed. The first full test run passed 22 library and 11 binary tests; one new test had an incorrect fixed width expectation (73 cells rather than the actual allocated 75-cell pane). Commit `528e913` changes the assertion to verify all lines against the measured allocation while preserving its reachable-tail and resize checks. The follow-up build-box run passed **all 34 tests (22 library + 12 binary)**.
 
 The first rendered review set contains **29 actual terminal screenshots**: wide 164×46 (7), standard 120×36 (7), narrow 80×24 including its full-width details view (8), and ASCII 120×36 (7). Each run observes 65 completed calls, two tool errors and a stable binary hash. Files and receipts are under `~/served-html/tm-control-mcp-tui/review/round-1/`.
 
@@ -81,4 +81,21 @@ Vision findings from full frames and enlarged crops:
 - The new maximum-scroll capture shows rows 22–23, `zzFinalWrappedLine`, and the envelope's final lines; the baseline stops early. This verifies the wrapped-tail improvement with real terminal output.
 - Apparent damage in a downsampled narrow screenshot was refuted by 2× crops of its actual header and footer pixels; no speculative redraw change was made.
 
-Independent source and visual re-reviews are in progress. The first pass is not yet final sign-off.
+### Independent review of the first pass
+
+The visual reviewer inspected all 29 new captures, the seven matching baseline captures and the HTML references, including enlarged regions. The source reviewer checked state transitions, layout calculations, scrolling, Unicode handling and the new regression coverage. Both agreed the main presentation had converged; neither recommended additional palette, spacing, table or border churn.
+
+Six verified P2 findings remain for the next iteration:
+
+| Finding | Evidence | Fix/verification required |
+| --- | --- | --- |
+| Long filter drafts hide the newly typed suffix | Filter presentation clips the prefix before adding a cursor | Use a grapheme-aware trailing edit window; test long input and Backspace; capture a distinctive final suffix |
+| A disappearing selected invocation causes an unexplained switch | Surviving identities are preserved, but missing identities fall back silently | Give an explicit disappearance policy/notice and test eviction plus filter membership changes |
+| Scrollbar thumb does not reach the bottom at the final offset | Ratatui 0.29 range semantics differ from the provided content length | Adapt the scroll range and verify track endpoints and hidden-when-fitting behavior |
+| Very short windows have no detail payload space | 40×10 and 100×10 allocate four body rows and zero payload rows | Use a capacity-based compact fallback and test both Tab states |
+| Header action hints disagree with state | Paused captures advertise pause; export appears enabled without an export directory | Show resume when paused and omit/disable unavailable export |
+| Narrow filter help clips its Escape instruction | 80-column footer ends at `Esc c…` | Prioritize complete apply/cancel instructions over examples |
+
+The reviewer also requested a narrow selected-error details capture showing `tool_busy`, the full message, retryability and the final envelope lines. The capture harness is being extended for that case and the long draft. No automatic switch into error details is required; explicit Tab navigation already works.
+
+The proposed “no selected call renders at 40×10” mechanism was corrected: one selected name row renders, but compact status/duration and detail payload capacity are lost. The fix targets usable capacity, not a nonexistent blank-row defect.
