@@ -422,10 +422,11 @@ async fn run_monitor(
 ) -> Result<()> {
     // Bind before touching the terminal so an address error remains visible and actionable.
     let listener = bind_http(config.http_addr).await?;
+    let http_address = listener.local_addr().context("read HTTP listen address")?;
     let mut http_task = tokio::spawn(serve_http(
         adapter,
         listener,
-        config.http_addr,
+        http_address,
         config.allowed_origins.clone(),
         cancellation.clone(),
     ));
@@ -434,6 +435,7 @@ async fn run_monitor(
         cancellation.clone(),
         config.ascii,
         config.export_dir,
+        http_address,
     ));
     tokio::select! {
         tui_result = &mut tui_task => {
