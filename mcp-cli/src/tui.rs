@@ -1998,14 +1998,18 @@ mod tests {
         let buffer = draw(&mut app, 80, 24);
         assert!(text(&buffer).contains("TAIL_SENTINEL"));
         assert_eq!(app.details_offset, app.details_max_offset);
-        assert!(
-            app.details_cache
-                .as_ref()
-                .unwrap()
-                .lines
-                .iter()
-                .all(|line| line.width() <= 73)
-        );
+        // At 80 columns the pane has 75 content cells after borders, inset and scrollbar.
+        // Validate against the allocated width rather than an unrelated hardcoded budget.
+        let cached = app.details_cache.as_ref().unwrap();
+        for line in &cached.lines {
+            assert!(
+                line.width() <= cached.width,
+                "detail line occupies {} cells in a {}-cell viewport: {:?}",
+                line.width(),
+                cached.width,
+                line_string(line)
+            );
+        }
         for (width, height) in [(40, 16), (164, 46), (120, 36), (80, 24)] {
             app.details_offset = usize::MAX;
             draw(&mut app, width, height);
