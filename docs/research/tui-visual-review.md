@@ -45,4 +45,18 @@ The HTML viewer fails the native terminal requirement. Terminal configuration al
 
 ## Iterations and validation
 
-Implementation, review findings, captures and build-box receipts will be recorded here as the loop proceeds.
+### Baseline review
+
+Independent vision and source reviewers agreed on the presentation gaps above and verified the following behavior defects from the baseline source:
+
+- Detail scrolling counts logical lines rather than wrapped rows, making long payload tails unreachable.
+- Selection is an index rather than an invocation identity; eviction or changing filter membership can silently change which call is inspected or exported.
+- Pause freezes objects but not the rendering clock, so active elapsed time continues advancing.
+- Error classification omits dispatcher statuses such as `invalid_arguments`, `unknown_tool`, `catalog_unavailable` and `queue_full`.
+- Filter cancellation does not restore the previous filter, and follow mode can fight selection during editing.
+- ASCII mode only changes status icons; chrome and truncation remain Unicode.
+- Display truncation is silent, and temporary notices never expire.
+
+These are verified against the code and baseline screenshots, not inferred from the mockup. The mockup's `native_error` label and “following newest” while inspecting a middle row are illustrative mistakes and are not copied into the implementation.
+
+Baseline build-box check: `cargo test --all-targets --locked --jobs 2` on `x-p35` passed **22 library + 5 binary tests (27 total)**. No local Cargo commands were used. Actual screenshot capture tools and a private task font configuration are available on the build box so the next comparisons use the same JetBrains Mono font as the baseline.
