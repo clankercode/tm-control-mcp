@@ -20,6 +20,9 @@ Json::Value@ TestKitDispatch(const string &in name, Json::Value &in input) {
     }
     // A completed suite is a successful tool call even if assertions failed.
     result["success"] = true;
+    // Direct dispatch executes as tm-control-mcp, unlike load-time Main().
+    // Pure/local tests only: storage, hooks, allocations and coroutines can be
+    // attributed to the bridge. Inline startnew is not a proven ownership switch.
     result["output"] = TestKit::RunSelfChecks("testkit-sample");
     return result;
 }

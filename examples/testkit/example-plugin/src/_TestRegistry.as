@@ -7,6 +7,7 @@ namespace TestKit {
         g_TestKitRegistryReady = true;
         ::TestKit::Reg("Tests::AssertionFailurePaths", ::Tests::AssertionFailurePaths);
         ::TestKit::Reg("Tests::BooleanAndString", ::Tests::BooleanAndString);
+        ::TestKit::Reg("Tests::DoubleApproxBoundaries", ::Tests::DoubleApproxBoundaries);
         ::TestKit::Reg("Tests::ExceptionIsolation", ::Tests::ExceptionIsolation);
         ::TestKit::Reg("Tests::HandleAssertions", ::Tests::HandleAssertions);
         ::TestKit::Reg("Tests::NumericOverloads", ::Tests::NumericOverloads);

@@ -154,7 +154,13 @@ namespace TestKit {
     // Explicit absolute tolerance; native docs expose no tolerance guarantee.
     // NaN is never approximately equal; equal signed infinities compare equal.
     bool Approx(float a, float b) { return a == b || Math::Abs(a - b) <= 0.00001f; }
-    bool Approx(double a, double b) { return a == b || Math::Abs(a - b) <= 0.000000001; }
+    bool Approx(double a, double b) {
+        if (a == b) return true;
+        // Math::Abs only has int/float overloads; preserve double precision.
+        double delta = a - b;
+        const double tolerance = 0.000000001;
+        return delta >= -tolerance && delta <= tolerance;
+    }
 
     funcdef void TestFn(Ctx@ ctx);
     class TestEntry {

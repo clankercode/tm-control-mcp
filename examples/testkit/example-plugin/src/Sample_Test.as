@@ -43,6 +43,38 @@ namespace Tests {
         ctx.AssertFalse(TestKit::Approx(Math::PosInf - Math::PosInf, 0.0f), "NaN differs");
     }
 
+    void CheckDoubleApproxBoundary(TestKit::Ctx@ ctx, double actual, double expected, bool within) {
+        bool sameThrew = false;
+        bool notSameThrew = false;
+        try { ctx.AssertSameApprox(actual, expected); }
+        catch { sameThrew = true; }
+        try { ctx.AssertNotSameApprox(actual, expected); }
+        catch { notSameThrew = true; }
+        ctx.AssertTrue(sameThrew == !within, "SameApprox double boundary: " + actual + ", " + expected);
+        ctx.AssertTrue(notSameThrew == within, "NotSameApprox double boundary: " + actual + ", " + expected);
+    }
+
+    // Both assertion verdicts at each side of the inclusive double tolerance.
+    // [TestKit]
+    void DoubleApproxBoundaries(TestKit::Ctx@ ctx) {
+        double[] deltas = {double(0.000000000999999995), double(0.000000001), double(0.000000001000000005)};
+        for (uint i = 0; i < deltas.Length; i++) {
+            bool within = i < 2;
+            CheckDoubleApproxBoundary(ctx, deltas[i], double(0), within);
+            CheckDoubleApproxBoundary(ctx, -deltas[i], double(0), within);
+            CheckDoubleApproxBoundary(ctx, double(0), deltas[i], within);
+            CheckDoubleApproxBoundary(ctx, double(0), -deltas[i], within);
+        }
+        double inf = double(Math::PosInf);
+        double nan = double(Math::PosInf - Math::PosInf);
+        CheckDoubleApproxBoundary(ctx, inf, inf, true);
+        CheckDoubleApproxBoundary(ctx, -inf, -inf, true);
+        CheckDoubleApproxBoundary(ctx, inf, -inf, false);
+        CheckDoubleApproxBoundary(ctx, inf, double(0), false);
+        CheckDoubleApproxBoundary(ctx, nan, double(0), false);
+        CheckDoubleApproxBoundary(ctx, nan, nan, false);
+    }
+
     class SampleObject {}
     // [TestKit]
     void HandleAssertions(TestKit::Ctx@ ctx) {

@@ -37,9 +37,10 @@ float, double and string, and SameApprox/NotSameApprox for float and double.
 Messages are optional and default to an empty string. See the
 [official Context API](https://openplanet.dev/docs/api/Tests/Context).
 The exact signatures also live in `OpenplanetCore.json` in an Openplanet profile.
-Approximate comparisons use an explicit absolute tolerance of 1e-5 for float and
-1e-9 for double; the native API does not document its tolerance, so numeric policy
-parity is not promised. Equal infinities compare equal; NaN never compares equal.
+Approximate comparisons use an inclusive absolute tolerance of 1e-5 for float and
+1e-9 for double, with double differences compared in double precision. The native
+API does not document its tolerance, so numeric policy parity is not promised.
+Equal infinities compare equal; NaN never compares equal.
 
 ## Marker and result contract
 
@@ -80,9 +81,10 @@ The example is windowless: its inspectable demo is its log output and optional
 `testkit.RunSelfChecks` tool. There is no game-state mutation or UI setup. Its
 `src/TestKit.as` is a relative symlink to the canonical sample; dereference that
 symlink when copying to Windows (for example `cp -RL` into your staging tree).
-The five tests exercise every assertion overload, failure paths, null handles,
-large integers, and exception isolation. The intentionally failing inner
-fixtures use a recording sink, so the outer sample suite passes.
+The six tests exercise every assertion overload, double tolerance boundaries,
+failure paths, null handles, large integers, and exception isolation. The
+intentionally failing inner fixtures use a recording sink, so the outer sample
+suite passes.
 
 ```bash
 python3 examples/testkit/gen_registry.py --plugin-dir examples/testkit/example-plugin --check
@@ -149,6 +151,17 @@ suite, registry count, nonnegative integer counts and each named failure, then
 uses exit 1 for test failures. This path needs no reload or log reader. For a
 custom tool, return the same JSON schema and the suite selected by `--suite`.
 
+**Executing-plugin ownership differs by route.** Load-time `Main()` runs as the
+adopting plugin. This direct, synchronous tool-pack dispatch runs test bodies
+under the bridge's `Meta::ExecutingPlugin()` identity (`tm-control-mcp`). Calls
+such as `IO::FromStorageFolder` therefore resolve the bridge's storage, and
+per-plugin hooks, allocations and coroutines can belong to the bridge. This
+sample's rerun route supports only context-independent tests using pure/local
+fixtures. For tests that need plugin ownership, use an adopter-owned execution
+mechanism and verify its identity and resource cleanup before exposing reruns.
+An inline `startnew` is not a proven ownership switch. Native UI runner ownership
+has not been verified here; sharing test bodies does not establish that identity.
+
 ## Pitfalls carried forward from Dips++ and MapTogether
 
 - Passing a null native context works only for bodies that never dereference it.
@@ -164,6 +177,12 @@ custom tool, return the same JSON schema and the suite selected by `--suite`.
   live collectibles/hats, and recomputing unlocks played audio during reload.
   Use pure seams/local fixtures here; a generic harness cannot restore another
   plugin's persistent stores, retained handles, animations or map state.
+- Imported calls can change the executing-plugin identity: direct bridge reruns
+  do not have the load-time plugin's ownership. Dips++ observed hooks/allocations
+  assigned to the caller, then freed or unhooked with the wrong owner. Keep this
+  synchronous rerun pattern context-independent; verify adopter-owned execution
+  and cleanup separately for per-plugin APIs, including storage and coroutines.
+  Neither inline `startnew` nor the native UI adapter proves owner-context parity.
 - Keep tests synchronous, independent and bounded. Never keep a native context
   across yields. A test that wedges or exhausts Openplanet's execution budget
   cannot be rescued by exception capture; the host runner times out with exit 2.
