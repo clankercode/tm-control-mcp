@@ -62,3 +62,7 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
 - After menu nav: `WaitUntil condition=pageVisible` / GetMode.
 - Tag places: `SetAgentTag` then place; cleanup with `RemoveByTag`.
 - Do not depend on old disabled `mcp-tm` / `tm-mcptm` library plugins.
+
+### Plugin tests
+
+- For load-time self-checks, native test adapters, or socket-driven reruns, read [docs/testkit.md](docs/testkit.md); the reusable sample is in `examples/testkit/`.
