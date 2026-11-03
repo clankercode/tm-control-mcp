@@ -21,7 +21,7 @@ import subprocess
 import sys
 import time
 
-from gen_registry import RegistryError, check_registry
+from gen_registry import check_registry
 
 
 class InfrastructureError(ValueError):
@@ -279,7 +279,9 @@ def main(argv=None):
             raise InfrastructureError('reload mode requires --log or --log-cmd')
         names = [case.name for case in check_registry(args.plugin_dir)]
         results = run_tool(args, suite, names) if args.via_tool_pack else run_reload(args, suite, names)
-    except (InfrastructureError, RegistryError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+    # ValueError includes registry/schema/Unicode errors and numeric conversion
+    # limits from log counts and both JSON decoders. Keep the digit limit intact.
+    except (OSError, ValueError) as exc:
         print(f'TestKit infrastructure: {exc}', file=sys.stderr)
         return 2
     print(f'{"RESULT":<8} TEST')

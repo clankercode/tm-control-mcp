@@ -107,6 +107,62 @@ class RunnerTests(unittest.TestCase):
         result = subprocess.run([sys.executable, str(ROOT / 'run_plugin_tests.py'), '--plugin-dir', str(self.plugin), '--plugin-id', 'sample', '--via-tool-pack', 'sample.RunSelfChecks', '--call-script', str(call)], capture_output=True)
         self.assertEqual(result.returncode, 2)
 
+    def test_cli_oversized_counts_are_infrastructure(self):
+        # Override even a disabled/high inherited limit in child interpreters.
+        # Older Pythons still reject these counts through registry validation;
+        # the injected-decoder test below covers ValueError independently.
+        number = '9' * 5000
+        with mock.patch.dict(os.environ, PYTHONINTMAXSTRDIGITS='640'):
+            for count in ('passed', 'failed'):
+                with self.subTest(route='reload', count=count):
+                    text = self.markers().replace(
+                        '2 passed' if count == 'passed' else '0 failed',
+                        f'{number} {count}')
+                    result = self.invoke(text)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn('TestKit infrastructure:', result.stderr)
+                    self.assertNotIn('Traceback', result.stderr)
+                    self.assertLess(len(result.stderr), 1000)
+            call = self.root / 'fake_call.py'
+            for count in ('registered', 'passed', 'failed'):
+                with self.subTest(route='tool', count=count):
+                    response = json.dumps({'ok': True, 'data': {'result': {
+                        'success': True, 'output': {'suite': 'sample',
+                        'registered': 2, 'passed': 2, 'failed': 0, 'failures': []}}}})
+                    response = response.replace(f'"{count}": {0 if count == "failed" else 2}',
+                                                f'"{count}": {number}')
+                    call.write_text(f'print({response!r})\n')
+                    result = subprocess.run([sys.executable, str(ROOT / 'run_plugin_tests.py'),
+                        *self.args, '--via-tool-pack', 'sample.RunSelfChecks',
+                        '--call-script', str(call)], capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn('TestKit infrastructure:', result.stderr)
+                    self.assertNotIn('Traceback', result.stderr)
+                    self.assertLess(len(result.stderr), 1000)
+
+    def test_json_conversion_errors_are_infrastructure_on_both_routes(self):
+        # Exercise both actual decoders without depending on interpreter limits
+        # or connecting to any network endpoint.
+        call = self.root / 'fake_call.py'
+        call.write_text('print("{}")\n')
+        for route in ('tool', 'raw-reload'):
+            with self.subTest(route=route):
+                stream = mock.MagicMock()
+                stream.__enter__.return_value = stream
+                stream.recv.side_effect = [run.struct.pack('<I', 2), b'{}']
+                stderr = io.StringIO()
+                extra = ['--via-tool-pack', 'sample.RunSelfChecks', '--call-script', str(call)] if route == 'tool' else []
+                with mock.patch.object(run.json, 'loads', side_effect=ValueError('numeric conversion failed')) as decode, \
+                     mock.patch.object(run, 'command_output', return_value=b'{}'), \
+                     mock.patch.object(run.shutil, 'which', return_value=None), \
+                     mock.patch.object(run.socket, 'create_connection', return_value=stream) as connect, \
+                     redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    result = run.main([*self.args, *extra])
+                self.assertEqual(result, 2)
+                self.assertEqual(stderr.getvalue(), 'TestKit infrastructure: numeric conversion failed\n')
+                decode.assert_called_once_with(b'{}')
+                self.assertEqual(connect.call_count, int(route == 'raw-reload'))
+
     def test_partial_utf8_lines_and_byte_offset(self):
         self.log.write_bytes(b'old \xc3\xa9\n')
         reader = run.FreshLog(self.log, None, 1)
