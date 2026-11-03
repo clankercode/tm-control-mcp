@@ -4,7 +4,8 @@
 
 [Website](https://clankercode.github.io/tm-control-mcp/) ·
 [Latest version](https://clankercode.github.io/tm-control-mcp/latest-version.txt) ·
-[Pack authoring](docs/tool-packs.md) · [Pack updates](docs/pack-updates.md)
+[Pack authoring](docs/tool-packs.md) · [Pack updates](docs/pack-updates.md) ·
+[TestKit sample](docs/testkit.md)
 
 `tm-control-mcp` is an Openplanet plugin that exposes Trackmania’s **map editor**,
 **main menu**, and related game state over a **localhost JSON TCP socket**. Coding

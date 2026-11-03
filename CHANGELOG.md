@@ -9,6 +9,8 @@ Versions follow `info.toml` `[meta] version`.
 
 ### Added
 
+- Reusable DEV [TestKit sample](docs/testkit.md) with the native assertion surface, generated registry, load-time log runner, and optional tool-pack reruns.
+
 - Generic editor-script status/reload, offline pending-value recovery, and preloaded user-pack inspection/mounting. Preserved local tooling is ported with public-only interfaces.
 - Confirmed, bounded text replacements for user editor scripts and menu pages, with readback verification.
 - DEV native-auth availability diagnostics without credential acquisition or values.
