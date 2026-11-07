@@ -523,7 +523,7 @@ namespace TmMcp {
                 extracted = Fids::Extract(file, hookMethod);
             } catch {
                 return MakeError("Extract threw: " + getExceptionInfo(), "EXTRACT_FAILED", true, "",
-                    "hookMethod defaults false; leave it off.");
+                    "hookMethod defaults false. An explicit hookMethod:true retry is an alternate API path; verify its output too.");
             }
         }
         bool doUpdate = dest.Length > 0 || (input.HasKey("updateTree") && bool(input["updateTree"]));
@@ -534,23 +534,55 @@ namespace TmMcp {
         output["action"] = "extract";
         output["method"] = method;
         output["extracted"] = extracted;
+        output["apiSucceeded"] = extracted;
         if (method == "Extract") output["hookMethod"] = hookMethod;
         if (dest.Length > 0) output["dest"] = dest;
         output["fid"] = FidsFileJson(file, false);
         output["existsOnDisk"] = file.OSCheckIfExists();
+        string extractionPath = "";
+        if (dest.Length == 0) {
+            string drive = "", relative = "";
+            FidsLocation(file.ParentFolder, string(file.FileName), drive, relative);
+            string pathError = "";
+            if (relative.Length > 0 && FidsDestOk(relative, pathError)) {
+                extractionPath = IO::FromDataFolder("Extract/" + relative);
+            }
+        }
         if (dest.Length > 0 && file.ParentFolder !is null) {
             auto destFid = Fids::GetFidsFile(file.ParentFolder, dest);
             if (destFid !is null) {
                 output["destFid"] = FidsFileJson(destFid, false);
-                output["existsOnDisk"] = destFid.OSCheckIfExists();
+                if (destFid.OSCheckIfExists()) extractionPath = string(destFid.FullFileName);
             }
         }
-        if (!extracted && dest.Length == 0) {
-            Json::Value@ fail = MakeError("Extract returned false", "EXTRACT_FAILED", true, "",
-                "Packed/zipped fids usually extract next to the pack; check destFid / existsOnDisk.");
+        bool outputExists = false;
+        uint64 actualBytes = 0;
+        string statError = "";
+        try {
+            outputExists = extractionPath.Length > 0 && IO::FileExists(extractionPath);
+            if (outputExists) actualBytes = IO::FileSize(extractionPath);
+        } catch { statError = getExceptionInfo(); }
+        uint64 expectedBytes = uint64(file.ByteSize);
+        // Text extraction can transform encoding; ByteSize is then not a
+        // reliable disk-size contract. Never label that case verified.
+        bool sizeMeaningful = expectedBytes > 0 && !file.Text;
+        string state = FidsExtractionState(extracted, outputExists, sizeMeaningful ? expectedBytes : 0, actualBytes);
+        output["extractionPath"] = extractionPath;
+        output["outputExists"] = outputExists;
+        output["expectedBytes"] = int64(expectedBytes);
+        output["actualBytes"] = int64(actualBytes);
+        output["sizeMeaningful"] = sizeMeaningful;
+        output["verification"] = state;
+        output["verified"] = state == "verified";
+        if (statError.Length > 0) output["statError"] = statError;
+        if (state == "size_mismatch" || state == "missing" || state == "api_failed") {
+            auto fail = MakeError("Extraction output was not verified: " + state,
+                state == "api_failed" ? "EXTRACT_FAILED" : "EXTRACT_UNVERIFIED", true, "",
+                "Inspect extractionPath / actualBytes. A default-path 4096-byte truncation has been observed; explicitly retry hookMethod:true if appropriate, then verify again. No automatic fallback or overwrite is performed.");
             fail["output"] = output;
             return fail;
         }
+        if (state == "size_unknown") output["warning"] = "Extraction API succeeded, but the expected disk byte count is unknown; completeness is not verified.";
         return MakeSuccess(output);
     }
 

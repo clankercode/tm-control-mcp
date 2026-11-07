@@ -254,7 +254,7 @@ class ProcessDiscoveryTests(OfflineTestCase):
                     patch.object(discovery, "_x11_windows", return_value=[]) as windows:
                 found = discovery.find_instances()
                 self.assertEqual([i["pid"] for i in found], [43])
-                windows.assert_called_once_with(43)
+                windows.assert_called_once_with(43, properties=True, deadline=unittest.mock.ANY)
 
     def test_cmdline_exit_or_access_race_returns_empty(self):
         for error in (FileNotFoundError(), PermissionError(), ProcessLookupError()):

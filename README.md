@@ -251,6 +251,22 @@ Errors may include structured fields:
 
 ### Client: `tools/call.py`
 
+`PlayMap` performs a bounded raw-file GBX envelope check before queuing a local
+map. Invalid or truncated envelopes return `INVALID_MAP_FILE`; unresolved,
+remote and unsupported files report an unverified preflight state. The check
+does **not** parse compressed map bodies or validate embedded items. Malformed
+embedded content can still crash the native game loader, outside AngelScript
+exception handling; `queued:true` and `envelope_only` do not certify safe content.
+Use trusted maps and inspect `preflight` / `contentWarning` in results.
+
+On a local socket failure, the client checks PID-owned X11/Wine windows for a
+crash or message box. It returns `dialogs` with title/metadata evidence and exit
+code **14** when such a box is identified; ordinary transport failures remain
+code **4**. Unclassified secondary windows are candidates only. Missing display
+tools or native Wayland windows leave detection unavailable, so an empty list
+does not prove the game is healthy. No window is activated, dismissed, or captured.
+`tools/tm_get_running_pids.py --json` exposes the same dialog classification.
+
 ```bash
 python3 tools/call.py status
 python3 tools/call.py --pretty GetMode

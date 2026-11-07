@@ -35,7 +35,12 @@ namespace TmMcp {
 
         // Let OnAction/BackToMainMenu/editor requests advance before observing.
         yield();
-        output["dialogAfter"] = BuildDialogSummary();
+        if (name == "ControlValidation") {
+            // Derive the warning from the very snapshot returned to callers.
+            AttachValidationWarning(output);
+        } else {
+            output["dialogAfter"] = BuildDialogSummary();
+        }
         output["dialogAfterFrameDelay"] = 1;
         result["output"] = output;
     }

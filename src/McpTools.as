@@ -357,6 +357,7 @@ namespace TmMcp {
             if (c is null) continue;
             Json::Value f = Json::Object();
             f["idName"] = c.Id.GetName();
+            f["visible"] = c.IsVisible && !c.IsHiddenExternal && !c.IsHiddenInternal;
             frames.Add(f);
         }
         return frames;
@@ -408,7 +409,7 @@ namespace TmMcp {
         auto editor = app is null ? null : cast<CGameCtnEditorFree>(app.Editor);
         if (editor is null || editor.EditorInterface is null || editor.EditorInterface.InterfaceRoot is null) return "";
         auto frame = _DlgFindChild(editor.EditorInterface.InterfaceRoot, "FrameTempMsg");
-        if (frame is null) return "";
+        if (frame is null || !frame.IsVisible || frame.IsHiddenExternal || frame.IsHiddenInternal) return "";
         auto label = cast<CControlLabel>(_DlgFindChild(cast<CControlContainer>(frame), "LabelTempMsg"));
         if (label is null) return "";
         // The live text sits on the label's nod (like the SaveAs entry), not the
@@ -585,6 +586,26 @@ namespace TmMcp {
         if (lower == "tga") return ".tga";
         if (lower == "dds") return ".dds";
         return ".jpg";
+    }
+
+    string ScreenshotPathKey(const string &in path) {
+        return path.Replace("\\", "/").ToLower();
+    }
+
+    void SnapshotScreenshotFile(Json::Value &inout files, const string &in path) {
+        if (!IO::FileExists(path)) return;
+        auto state = Json::Object();
+        state["size"] = int64(IO::FileSize(path));
+        state["modified"] = IO::FileModifiedTime(path);
+        files[ScreenshotPathKey(path)] = state;
+    }
+
+    void SnapshotScreenshotFolder(Json::Value &inout files, const string &in folder, const string &in ext) {
+        if (!IO::FolderExists(folder)) return;
+        auto paths = IO::IndexFolder(folder, false);
+        for (uint i = 0; i < paths.Length; i++) {
+            if (paths[i].ToLower().EndsWith(ext)) SnapshotScreenshotFile(files, paths[i]);
+        }
     }
 
     string SafeMapFileStem(const string &in name) {
@@ -2103,6 +2124,16 @@ namespace TmMcp {
         if (path.Length == 0) return MakeError("path is empty");
         if (!Permissions::PlayLocalMap()) return MakeError("PlayLocalMap permission unavailable");
 
+        auto preflight = PlayMapPreflight(path);
+        if (string(preflight["state"]) == "invalid") {
+            auto error = MakeError("Map file has an invalid or truncated GBX envelope", "INVALID_MAP_FILE", false);
+            auto rejected = Json::Object();
+            rejected["queued"] = false;
+            rejected["preflight"] = preflight;
+            error["output"] = rejected;
+            return error;
+        }
+
         Json::Value spec = Json::Object();
         spec["path"] = path;
         if (input.HasKey("mode")) spec["mode"] = string(input["mode"]);
@@ -2112,6 +2143,8 @@ namespace TmMcp {
         Json::Value output = Json::Object();
         output["queued"] = true;
         output["path"] = path;
+        output["preflight"] = preflight;
+        output["contentWarning"] = string(preflight["warning"]);
         if (input.HasKey("mode")) output["mode"] = string(input["mode"]);
         int waitMs = input.HasKey("waitMs") ? int(input["waitMs"]) : 1500;
         if (waitMs > 0) {
@@ -2390,6 +2423,24 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         return MakeSuccess(output);
     }
 
+    void AttachValidationWarning(Json::Value &inout output) {
+        auto summary = BuildDialogSummary();
+        output["dialogAfter"] = summary;
+        output["warning"] = "";
+        bool blocking = DialogIsBlocking(summary) || _LeaveDialogIsUp();
+        auto frames = summary["editorFrames"];
+        for (uint i = 0; i < frames.Length; i++) {
+            if (frames[i].HasKey("visible") && bool(frames[i]["visible"])
+                && _IsLeaveBlockingFrameName(string(frames[i]["idName"]))) blocking = true;
+        }
+        bool message = string(summary["tempMessage"]).Length > 0;
+        if (blocking || message) {
+            output["warning"] = blocking
+                ? "A game dialog is visible after validation. Inspect dialogAfter and answer it with RespondDialog before continuing."
+                : "The editor is showing a message after validation; inspect dialogAfter.tempMessage. If a dialog requires an answer, use RespondDialog.";
+        }
+    }
+
     Json::Value@ ControlValidation(Json::Value &in input) {
         auto editor = GetEditor();
         auto pmt = editor is null ? null : cast<CGameEditorPluginMapMapType>(editor.PluginMapType);
@@ -2434,6 +2485,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["actions"] = actions;
         output["before"] = before;
         output["after"] = ValidationToJson(pmt);
+        AttachValidationWarning(output);
         return MakeSuccess(output);
     }
 
@@ -2880,6 +2932,8 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
             return MakeError("focus requires the map editor", "NOT_IN_EDITOR", true, "Editor");
         }
 
+        Json::Value screenshotBefore = Json::Object();
+        bool slotsFull = true;
         try {
             if (hideOverlay) vp.DisableOverlayRender = true;
             if (forceRes) {
@@ -2889,6 +2943,15 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
             }
             // Let override flags apply for at least one rendered frame before queuing the capture.
             yield();
+
+            string ext = ScreenshotExtForFormat(format);
+            SnapshotScreenshotFolder(screenshotBefore, IO::FromUserGameFolder(""), ext);
+            SnapshotScreenshotFolder(screenshotBefore, IO::FromUserGameFolder("ScreenShots"), ext);
+            SnapshotScreenshotFile(screenshotBefore, fullNameBefore);
+            for (uint slot = 1; slot <= 99; slot++) {
+                string name = "ScreenShot" + (slot < 10 ? "0" : "") + slot + ext;
+                if (!IO::FileExists(IO::FromUserGameFolder(name))) { slotsFull = false; break; }
+            }
 
             if (format == "webp") vp.ScreenShotDoCaptureWebp();
             else if (format == "tga") vp.ScreenShotDoCaptureTga();
@@ -2903,24 +2966,30 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
             return MakeError("screenshot capture failed: " + getExceptionInfo());
         }
 
-        // Poll for the finished file. ScreenShotFullName updates to the new capture's
-        // path once the game queues/completes it; file existence + size confirm the write.
+        // The engine publishes the filename when queued. Only changed metadata
+        // or a newly created nonempty file is evidence that the write happened.
         string fullName = "";
         bool detected = false;
         uint64 sizeBytes = 0;
         uint64 waitedStart = Time::Now;
         string pollError = "";
+        bool overwroteExisting = false;
         try {
             while (Time::Now - waitedStart < uint(waitMs)) {
                 yield();
                 string candidate = string(vp.ScreenShotFullName);
-                if (candidate.Length > 0 && candidate != fullNameBefore) {
+                if (candidate.Length > 0 && candidate.ToLower().EndsWith(ScreenshotExtForFormat(format))) {
                     if (IO::FileExists(candidate)) {
                         uint64 sz = uint64(IO::FileSize(candidate));
-                        if (sz > 0) {
+                        string key = ScreenshotPathKey(candidate);
+                        bool existed = screenshotBefore.HasKey(key);
+                        uint64 oldSize = existed ? uint64(int64(screenshotBefore[key]["size"])) : 0;
+                        int64 oldModified = existed ? int64(screenshotBefore[key]["modified"]) : 0;
+                        if (ScreenshotFileChanged(existed, oldSize, oldModified, true, sz, IO::FileModifiedTime(candidate))) {
                             fullName = candidate;
                             sizeBytes = sz;
                             detected = true;
+                            overwroteExisting = existed;
                             break;
                         }
                     }
@@ -2950,6 +3019,9 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["format"] = format;
         output["extension"] = ScreenshotExtForFormat(format);
         output["detected"] = detected;
+        output["slotsFull"] = slotsFull;
+        output["overwroteExisting"] = overwroteExisting;
+        if (slotsFull) output["warning"] = "All ScreenShot01..99 slots for this format exist; the engine may overwrite one. Archive screenshots or choose another format.";
         output["waitMs"] = waitMs;
         output["waitedMs"] = int(Time::Now - waitedStart);
         if (detected) {
