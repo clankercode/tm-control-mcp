@@ -105,7 +105,7 @@ impl App {
         self.events = events;
         self.stats = stats;
         self.snapshot_ms = tm_control_mcp_cli::monitor::now_ms();
-        self.reconcile(previous.as_deref());
+        self.reconcile(previous.as_deref(), true);
     }
 
     fn query(&self) -> &str {
@@ -132,20 +132,34 @@ impl App {
             .map(Arc::as_ref)
     }
 
-    fn reconcile(&mut self, previous: Option<&str>) {
+    fn reconcile(&mut self, previous: Option<&str>, report_missing: bool) {
         let visible = self.visible_indices();
+        let previous_position = previous.and_then(|id| {
+            visible
+                .iter()
+                .position(|i| self.events[*i].invocation_id == id)
+        });
         self.selected = if self.follow && self.filter_mode != FilterMode::Input {
             visible.len().saturating_sub(1)
         } else {
-            previous
-                .and_then(|id| {
-                    visible
-                        .iter()
-                        .position(|i| self.events[*i].invocation_id == id)
-                })
+            previous_position
                 .unwrap_or_else(|| self.selected.min(visible.len().saturating_sub(1)))
         };
         self.sync_selection(&visible);
+        // Announce refresh-driven identity changes, without notices for follow or draft edits.
+        if report_missing && !self.follow && self.filter_mode != FilterMode::Input {
+            if let Some(id) = previous.filter(|_| previous_position.is_none()) {
+                let reason = if self.events.iter().any(|event| event.invocation_id == id) {
+                    "left the filter"
+                } else {
+                    "left retained history"
+                };
+                self.notice(format!(
+                    "Selected {id} {reason}; now {}",
+                    self.selected_id.as_deref().unwrap_or("no matching invocation")
+                ));
+            }
+        }
     }
 
     fn sync_selection(&mut self, visible: &[usize]) {
@@ -193,7 +207,11 @@ impl App {
                     self.filter_mode = FilterMode::None;
                 }
                 KeyCode::Backspace => {
-                    self.filter_draft.pop();
+                    let last_bytes = Span::raw(self.filter_draft.as_str())
+                        .styled_graphemes(Style::default())
+                        .last()
+                        .map_or(0, |grapheme| grapheme.symbol.len());
+                    self.filter_draft.truncate(self.filter_draft.len().saturating_sub(last_bytes));
                 }
                 KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.filter_draft.push(ch);
@@ -201,7 +219,7 @@ impl App {
                 _ => {}
             }
             // Preview the draft without a following stream moving the selection while typing.
-            self.reconcile(previous.as_deref());
+            self.reconcile(previous.as_deref(), false);
             return Action::Continue;
         }
         let previous = self
@@ -220,7 +238,7 @@ impl App {
             }
             KeyCode::Char('f') => {
                 self.follow = !self.follow;
-                self.reconcile(previous.as_deref());
+                self.reconcile(previous.as_deref(), false);
             }
             KeyCode::Char('/') => {
                 self.filter_draft = self.filter.clone();
@@ -228,7 +246,7 @@ impl App {
             }
             KeyCode::Char('c') => {
                 self.filter.clear();
-                self.reconcile(previous.as_deref());
+                self.reconcile(previous.as_deref(), false);
             }
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
@@ -571,15 +589,17 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &mut App) {
         app.status_until = None;
     }
     let now = app.display_ms();
-    if area.width < 40 || area.height < 10 {
+    let compact = area.height < 20 || area.width < 60;
+    let header_height = if compact { 3 } else { 5 };
+    // Borders and selection metadata must leave room for actual content.
+    if area.width < 40 || area.height.saturating_sub(header_height + 3) < 6 {
         render_tiny(frame, area, app, &visible, now);
         return;
     }
-    let compact = area.height < 20 || area.width < 60;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(if compact { 3 } else { 5 }),
+            Constraint::Length(header_height),
             Constraint::Min(3),
             Constraint::Length(3),
         ])
@@ -660,7 +680,14 @@ fn filter_line(app: &App, matches: usize, width: usize) -> Line<'static> {
     );
     Line::from(vec![
         Span::styled(label, fg(theme::MUTED)),
-        Span::styled(clip_cells(query, available, app.ascii), fg(theme::CYAN)),
+        Span::styled(
+            if app.filter_mode == FilterMode::Input {
+                tail_cells(query, available, app.ascii)
+            } else {
+                clip_cells(query, available, app.ascii)
+            },
+            fg(theme::CYAN),
+        ),
         Span::styled(cursor, fg(theme::CYAN)),
         Span::styled(suffix, fg(theme::MUTED)),
     ])
@@ -724,15 +751,19 @@ fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App, matches:
         Line::styled("TM CONTROL MCP / TELEMETRY", fg(theme::MUTED)),
     );
     let hints = if app.filter_mode == FilterMode::Input {
-        "[Enter] apply  [Esc] cancel"
+        "[Enter] apply  [Esc] cancel".into()
     } else if area.width < 100 {
         if app.show_details {
-            "[Tab] calls  [ ] scroll  [q] quit"
+            "[Tab] calls  [ ] scroll  [q] quit".into()
         } else {
-            "[Tab] details  [/] filter  [q] quit"
+            "[Tab] details  [/] filter  [q] quit".into()
         }
     } else {
-        "[q] quit  [p] pause  [f] follow  [/] filter  [e] export"
+        format!(
+            "[q] quit  [p] {}  [f] follow  [/] filter{}",
+            if app.paused { "resume" } else { "pause" },
+            if app.export_dir.is_some() { "  [e] export" } else { "" }
+        )
     };
     put(
         frame,
@@ -811,7 +842,13 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App, visible:
     let message = if !app.status.is_empty() {
         app.status.clone()
     } else if app.filter_mode == FilterMode::Input {
-        "Editing draft: status:error, tool:name, errors, or text | Enter apply / Esc cancel".into()
+        let controls = "[Enter] apply | [Esc] cancel";
+        let examples = "status:error, tool:name, errors, text";
+        if Span::raw(controls).width() + 3 + Span::raw(examples).width() <= inner.width as usize {
+            format!("{controls} | {examples}")
+        } else {
+            controls.into()
+        }
     } else if inner.width < 98 {
         format!(
             "[Tab] {}  [p] {}  [f] follow  [c] clear  [ ] scroll  [q] quit",
@@ -1167,11 +1204,13 @@ fn render_scrollbar(
     viewport: usize,
     ascii: bool,
 ) {
-    if area.height == 0 || length <= viewport {
+    if area.height == 0 || viewport == 0 || length <= viewport {
         return;
     }
-    let mut state = ScrollbarState::new(length)
-        .position(offset)
+    // Ratatui's last position is content_length - 1; ours is total - viewport.
+    let max_offset = length.saturating_sub(viewport);
+    let mut state = ScrollbarState::new(max_offset + 1)
+        .position(offset.min(max_offset))
         .viewport_content_length(viewport);
     frame.render_stateful_widget(
         Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -1609,6 +1648,34 @@ fn clip_cells(value: &str, width: usize, ascii: bool) -> String {
     output
 }
 
+/// Keep the edit point visible without splitting a combining sequence or emoji cluster.
+fn tail_cells(value: &str, width: usize, ascii: bool) -> String {
+    let span = Span::raw(value);
+    if span.width() <= width {
+        return value.to_owned();
+    }
+    let marker = if ascii {
+        ".".repeat(width.min(3))
+    } else if width > 0 {
+        "…".into()
+    } else {
+        String::new()
+    };
+    let cap = width.saturating_sub(Span::raw(&marker).width());
+    let graphemes: Vec<_> = span.styled_graphemes(Style::default()).collect();
+    let mut start = value.len();
+    let mut used = 0;
+    for grapheme in graphemes.iter().rev() {
+        let cells = Span::raw(grapheme.symbol).width();
+        if used + cells > cap {
+            break;
+        }
+        start -= grapheme.symbol.len();
+        used += cells;
+    }
+    format!("{marker}{}", &value[start..])
+}
+
 fn pad(value: &str, width: usize, right: bool) -> String {
     let padding = " ".repeat(width.saturating_sub(Span::raw(value).width()));
     if right {
@@ -1873,6 +1940,133 @@ mod tests {
         app.update(vec![event("b", "started", "Two")], MonitorStats::default());
         assert_eq!(app.selected_event().unwrap().invocation_id, "b");
         assert_eq!(app.details_offset, 0);
+        assert!(app.status.contains("Selected d left retained history; now b"));
+    }
+
+    #[test]
+    fn refresh_announces_when_selection_leaves_filter_but_draft_preview_is_quiet() {
+        let events = vec![event("a", "started", "One"), event("b", "started", "Two")];
+        let mut app = app(events.clone(), true);
+        press(&mut app, KeyCode::Home);
+        app.filter = "status:started".into();
+        app.details_offset = 12;
+        app.update(
+            vec![event("a", "ok", "One"), events[1].clone()],
+            MonitorStats::default(),
+        );
+        assert_eq!(app.selected_event().unwrap().invocation_id, "b");
+        assert_eq!(app.details_offset, 0);
+        assert!(app.status.contains("Selected a left the filter; now b"));
+        assert!(text(&draw(&mut app, 120, 36)).contains("left the filter; now b"));
+
+        app.status.clear();
+        app.filter.clear();
+        press(&mut app, KeyCode::Home);
+        press(&mut app, KeyCode::Char('/'));
+        for ch in "tool:Two".chars() {
+            press(&mut app, KeyCode::Char(ch));
+        }
+        assert!(app.status.is_empty(), "intentional previews must not announce fallbacks");
+        app.update(vec![event("a", "ok", "One")], MonitorStats::default());
+        assert!(app.status.is_empty(), "draft refreshes must not spam selection notices");
+    }
+
+    #[test]
+    fn long_filter_edit_shows_tail_and_backspace_removes_whole_graphemes() {
+        for ascii in [false, true] {
+            for width in [80, 120] {
+                let mut app = app(vec![event("a", "ok", "Echo")], ascii);
+                press(&mut app, KeyCode::Char('/'));
+                app.filter_draft = "界e\u{301}👩\u{200d}💻".repeat(40);
+                for ch in "TAIL-XYZ".chars() {
+                    press(&mut app, KeyCode::Char(ch));
+                }
+                let cursor = if ascii { "_" } else { "▏" };
+                let buffer = draw(&mut app, width, 36);
+                assert!(rows(&buffer)[3].contains(&format!("TAIL-XYZ{cursor}")));
+                press(&mut app, KeyCode::Backspace);
+                let buffer = draw(&mut app, width, 36);
+                assert!(rows(&buffer)[3].contains(&format!("TAIL-XY{cursor}")));
+                assert!(!rows(&buffer)[3].contains("TAIL-XYZ"));
+                for ch in "e\u{301}👩\u{200d}💻".chars() {
+                    press(&mut app, KeyCode::Char(ch));
+                }
+                press(&mut app, KeyCode::Backspace);
+                assert!(app.filter_draft.ends_with("TAIL-XYe\u{301}"));
+                let line = filter_line(&app, 0, width as usize - 2);
+                assert!(line.width() <= width as usize - 2);
+                assert!(line_string(&line).contains(&format!("TAIL-XYe\u{301}{cursor}")));
+                press(&mut app, KeyCode::Backspace);
+                assert!(app.filter_draft.ends_with("TAIL-XY"));
+                assert!(app.filter.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn scrollbar_reaches_both_track_endpoints_and_hides_when_content_fits() {
+        let capture = |length, offset, viewport, ascii| {
+            let mut terminal = Terminal::new(TestBackend::new(3, 10)).unwrap();
+            terminal.draw(|frame| {
+                render_scrollbar(frame, Rect::new(1, 1, 1, 8), length, offset, viewport, ascii);
+            }).unwrap();
+            terminal.backend().buffer().clone()
+        };
+        for ascii in [false, true] {
+            let thumb = if ascii { "#" } else { "┃" };
+            let track = if ascii { "|" } else { "│" };
+            let start = capture(100, 0, 20, ascii);
+            assert_eq!(start[(1, 1)].symbol(), thumb);
+            assert_eq!(start[(1, 8)].symbol(), track);
+            assert_eq!(start[(1, 1)].fg, theme::SCROLL);
+            for offset in [80, usize::MAX] {
+                let end = capture(100, offset, 20, ascii);
+                assert_eq!(end[(1, 1)].symbol(), track);
+                assert_eq!(end[(1, 8)].symbol(), thumb);
+            }
+            for (length, viewport) in [(20, 20), (10, 20), (0, 20), (100, 0)] {
+                let hidden = capture(length, 0, viewport, ascii);
+                assert!(hidden.content().iter().all(|cell| cell.symbol() == " "));
+            }
+        }
+    }
+
+    #[test]
+    fn short_terminals_keep_selected_status_and_duration_in_both_tab_states() {
+        let mut app = app(vec![event("a", "tool_error", "CompactTool")], true);
+        for (width, height) in [(40, 10), (100, 10), (80, 11)] {
+            for _ in 0..2 {
+                let output = text(&draw(&mut app, width, height));
+                assert!(output.contains("CompactTool"));
+                assert!(output.contains("tool_error 5.04s"));
+                assert!(output.contains("Resize"));
+                press(&mut app, KeyCode::Tab);
+            }
+        }
+    }
+
+    #[test]
+    fn key_hints_reflect_pause_export_configuration_and_prioritize_filter_controls() {
+        for ascii in [false, true] {
+            for width in [120, 164] {
+                let mut app = app(vec![event("a", "ok", "Echo")], ascii);
+                press(&mut app, KeyCode::Char('p'));
+                let buffer = draw(&mut app, width, 36);
+                assert!(rows(&buffer)[2].contains("[p] resume"));
+                assert!(!rows(&buffer)[2].contains("[p] pause"));
+                assert!(!rows(&buffer)[2].contains("[e] export"));
+                app.export_dir = Some(PathBuf::from("explicit-export-directory"));
+                let buffer = draw(&mut app, width, 36);
+                assert!(rows(&buffer)[2].contains("[e] export"));
+                press(&mut app, KeyCode::Char('p'));
+                let buffer = draw(&mut app, width, 36);
+                assert!(rows(&buffer)[2].contains("[p] pause"));
+            }
+            let mut app = app(Vec::new(), ascii);
+            press(&mut app, KeyCode::Char('/'));
+            let buffer = draw(&mut app, 80, 24);
+            assert!(rows(&buffer)[23].contains("[Enter] apply | [Esc] cancel"));
+        }
     }
 
     #[test]
