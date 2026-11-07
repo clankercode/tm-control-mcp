@@ -1,0 +1,15 @@
+[Unit]
+Description=Read-only Trackmania crash watcher (Wine/X11)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.local/lib/tm-crashwatch/crashwatch_linux.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=graphical-session.target

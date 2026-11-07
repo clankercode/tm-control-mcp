@@ -251,6 +251,11 @@ Errors may include structured fields:
 
 ### Client: `tools/call.py`
 
+For continuous crash/dialog detection on Linux/Wine and native Windows, use
+[crashwatch](docs/crashwatch.md). Its reader reports watcher heartbeat age,
+active boxes and new crash-log names; `call.py` consults it before the existing
+on-timeout desktop probe. The watcher never dismisses dialogs or restarts games.
+
 `PlayMap` performs a bounded raw-file GBX envelope check before queuing a local
 map. Invalid or truncated envelopes return `INVALID_MAP_FILE`; unresolved,
 remote and unsupported files report an unverified preflight state. The check

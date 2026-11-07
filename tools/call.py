@@ -12,8 +12,22 @@ import time
 
 from tm_get_running_pids import find_game_dialogs
 
+from crashwatch import get_status as get_crashwatch_status
+
 
 def socket_failure(message, pretty, pids, host, fallback_code=4):
+    # Watcher reads precede the legacy X11 probe. Known remote hosts use one SSH
+    # attempt; unrelated endpoints must never inherit this desktop's evidence.
+    watcher_host = host if host in {"xsm", "x-lappy"} else None
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        import platform
+        local_host = platform.node().split(".")[0].lower()
+        watcher_host = local_host if local_host in {"xsm", "x-lappy"} else None
+    watcher = get_crashwatch_status(watcher_host) if watcher_host else None
+    if watcher and watcher["active_boxes"]:
+        print_json_error(message, pretty, trackmaniaPids=pids, crashwatch=watcher,
+                         hint="Crashwatch reports an active crash/dialog box. Preserve crash evidence and follow the approved recovery procedure; no dismissal or restart was performed.")
+        return 14
     # These windows belong to local PIDs; never attach them to a remote server.
     dialogs = find_game_dialogs(pids) if pids and host in {"localhost", "127.0.0.1", "::1"} else []
     confirmed = next((d for d in dialogs if d["kind"] in {"crash", "message"}), None)
@@ -21,7 +35,7 @@ def socket_failure(message, pretty, pids, host, fallback_code=4):
             "No restart or dismissal was performed." if confirmed else
             "No crash/message box was identified (display inspection may be unavailable). "
             "If connected but no reply arrived, the server loop may have stopped; inspect Openplanet.log.")
-    print_json_error(message, pretty, trackmaniaPids=pids, dialogs=dialogs, hint=hint)
+    print_json_error(message, pretty, trackmaniaPids=pids, dialogs=dialogs, crashwatch=watcher, hint=hint)
     return 14 if confirmed else fallback_code
 
 
