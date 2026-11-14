@@ -50,7 +50,7 @@ namespace TmMcp {
         if (kind == "saveAs") return "SaveAs dialog: RespondDialog {action:saveas-setname,name} then {action:validate}, or {action:saveas-cancel}. SaveMapFlow drives the whole chain.";
         if (kind == "message") return "Acknowledge with RespondDialog {action:ok}.";
         if (kind == "wait") return "Wait message (loading/saving): WaitUntil {condition:dialogClear}.";
-        if (kind == "menuDialog") return "Menu modal (e.g. map-saved card): RespondDialog {action:frame-ok} or {action:frame-cancel}.";
+        if (kind == "menuDialog") return "Menu modal (e.g. map-saved card): RespondDialog {action:frame-ok} or {action:frame-cancel}; for a frame with several buttons (server join card: ButtonJoin / ButtonSpectator / ButtonCancel) ClickClassicMenuControl {id}.";
         if (kind == "frameDialog") return "Unknown dialog frame: inspect GetDialog, then RespondDialog.";
         return "";
     }
