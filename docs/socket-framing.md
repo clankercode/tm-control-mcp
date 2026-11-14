@@ -32,5 +32,7 @@ token, script, setting value, or private path. Lifecycle metadata lines are capp
 at 512 characters before a truncation marker, enough for an invocation ID, tool
 name, timing, and outcome. Unknown tool names are rejected with a fixed
 placeholder before lifecycle admission; both the Openplanet and file sinks use
-the same escaped, bounded formatter. Files rotate at 2 MB. The unused argument-serialization
+the same escaped, bounded formatter. Only the caller's own error result echoes the
+name, and only when it is name-shaped (`[A-Za-z0-9._-]`, at most 64 characters),
+next to `suggestions` of real tool names. Files rotate at 2 MB. The unused argument-serialization
 helper was removed rather than increasing its old 180-character limit to 2048.
