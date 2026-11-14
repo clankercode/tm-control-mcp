@@ -37,7 +37,7 @@ def test_dispatcher_refuses_before_any_tool_runs():
     assert 'bool(dialog["blocking"])' in refuse
     assert '"DIALOG_BLOCKING"' in refuse
     assert 'output["started"] = false;' in refuse
-    assert "DialogNextCallHint(kind)" in refuse
+    assert "DialogNextCallHint(kind, frame)" in refuse
 
 
 @pytest.mark.parametrize("tool,signature", [

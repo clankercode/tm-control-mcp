@@ -54,6 +54,16 @@ def test_blocking_means_needs_an_answer(as_runner, tmp_path):
     ''')
 
 
+def test_join_card_hint_names_its_buttons(as_runner, tmp_path):
+    run_policy(as_runner, tmp_path, r'''
+    string join = DialogNextCallHint("menuDialog", "FrameDialogJoin");
+    Check(join.IndexOf("ClickClassicMenuControl {id:ButtonJoin}") >= 0, "join card names its button");
+    Check(join.IndexOf("JoinServer {link}") >= 0, "one-call alternative");
+    Check(DialogNextCallHint("menuDialog", "FrameDialogEditorChallengeCard") == DialogNextCallHint("menuDialog"), "other menu modals keep the generic hint");
+    Check(DialogNextCallHint("askYesNo", "FrameDialogJoin") == DialogNextCallHint("askYesNo"), "frame refines menu modals only");
+    ''')
+
+
 def test_only_map_module_and_test_starts_need_a_clear_dialog(as_runner, tmp_path):
     run_policy(as_runner, tmp_path, r'''
     string[] guarded = {"EditNewMap", "OpenMapInEditor", "PlayMap", "BackToMainMenu", "CreateMapViaMenu"};

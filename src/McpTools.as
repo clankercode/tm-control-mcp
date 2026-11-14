@@ -1463,7 +1463,7 @@ namespace TmMcp {
         tools.Add(MakeTool("GetEditorInterfaceTree", "Read-only recursive dump of the active editor control tree: CGameEditorItem.FrameRoot in Item Editor, otherwise CGameCtnEditorFree.EditorInterface.InterfaceRoot. Includes per-node id, class, visibility/read-only/hidden flags, tooltip, and children. Expensive; use maxDepth (default 6), maxNodes (default 4000), and optional rootId to dump a subtree (e.g. FrameTempMsg).", '{"type":"object","properties":{"maxDepth":{"type":"integer"},"maxNodes":{"type":"integer"},"rootId":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ClickClassicMenuControl", "Click a control in a 'classic' engine menu frame (app.ActiveMenus: server join card, map-saved card, ...) by its id name, via CControlButton.OnAction. A card (e.g. ButtonJoin, ButtonSpectator, ButtonCancel on FrameDialogJoin) is clicked through its ButtonSelection child. Searches the topmost active menu first; menuIndex restricts it. List ids with GetMenuFrameTree {menuIndex}. Not for ManiaLink pages (use ClickMenuButton / TriggerControlOnAction).", '{"type":"object","properties":{"id":{"type":"string"},"menuIndex":{"type":"integer"},"requireVisible":{"type":"boolean","default":true}},"required":["id"],"additionalProperties":false}'));
         tools.Add(MakeTool("JoinServer", "From the main menu, join a server by link '#join=host:password:port' (password may be empty: '#join=host::port'; '#spectate=' or spectate:true joins as spectator): opens the link, confirms the server card that the game shows, and waits until the playground has started. Fails with JOIN_FAILED if the card never appears or the playground does not start within timeoutMs (default 60000).", '{"type":"object","properties":{"link":{"type":"string"},"spectate":{"type":"boolean"},"timeoutMs":{"type":"integer","minimum":1000,"maximum":300000}},"required":["link"],"additionalProperties":false}'));
-        tools.Add(MakeTool("RespondDialog", "Respond to Trackmania dialogs (BasicDialogs + SaveAs frame). action: yes, no, cancel, ok, wait-ok, validate/saveas-validate, saveas-cancel, saveas-up, saveas-setname (with name), hide, frame-ok (dismiss modal menu dialog like the map-saved challenge card via its ButtonOk). By default yields one frame and includes an 'after' summary of the next dialog in the chain; set disable1FrameYieldAndWarning=true to return immediately.", '{"type":"object","properties":{"action":{"type":"string"},"name":{"type":"string"},"disable1FrameYieldAndWarning":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
+        tools.Add(MakeTool("RespondDialog", "Respond to Trackmania dialogs (BasicDialogs + SaveAs frame). action: yes, no, cancel, ok, wait-ok, validate/saveas-validate, saveas-cancel, saveas-up, saveas-setname (with name), hide, frame-ok (dismiss a modal menu dialog like the map-saved challenge card via its one card or its ButtonOk; refuses with AMBIGUOUS_FRAME, clicking nothing, on a frame of several cards such as the server join card: use ClickClassicMenuControl {id}), frame-cancel. frame-ok/cancel report output.frameClosed. By default yields one frame and includes an 'after' summary of the next dialog in the chain; set disable1FrameYieldAndWarning=true to return immediately.", '{"type":"object","properties":{"action":{"type":"string"},"name":{"type":"string"},"disable1FrameYieldAndWarning":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
         tools.Add(MakeTool("ControlValidation", "Inspect or trigger map validation/test/playground controls. Actions: status, validate, requestEnterPlayground, requestLeavePlayground, testFromStart, testFromCoord. Starts (validate, requestEnterPlayground, testFrom*) are refused with DIALOG_BLOCKING while a dialog is up. testFromStart/testFromCoord wait up to waitMs (default 10000, max 30000, 0 = do not wait) for the playground and fail with PLAYGROUND_NOT_STARTED if it never starts (seen after requestLeavePlayground: one test start per map load), output.playgroundStarted otherwise.", '{"type":"object","properties":{"action":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"waitMs":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlSelection", "Inspect or control editor copy-paste/custom selection. Actions: status, showCustom, hideCustom, resetSelection, selectAll, addSelection, copy, cut, remove, symmetrize.", '{"type":"object","properties":{"action":{"type":"string"},"x1":{"type":"integer"},"y1":{"type":"integer"},"z1":{"type":"integer"},"x2":{"type":"integer"},"y2":{"type":"integer"},"z2":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetCursor", "Get editor cursor coordinate and selected block.", '{"type":"object","properties":{},"additionalProperties":false}'));
@@ -1710,7 +1710,7 @@ namespace TmMcp {
             : (dialog.HasKey("menuFrameIdName") ? string(dialog["menuFrameIdName"]) : "");
         auto err = MakeError(name + " refused: a game dialog is up (" + kind
             + (frame.Length > 0 ? ", frame " + frame : "") + "). Nothing was done.",
-            "DIALOG_BLOCKING", false, "", DialogNextCallHint(kind) + " Then call " + name + " again.");
+            "DIALOG_BLOCKING", false, "", DialogNextCallHint(kind, frame) + " Then call " + name + " again.");
         Json::Value output = Json::Object();
         output["started"] = false;
         output["dialog"] = dialog;
@@ -2562,12 +2562,67 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         if (kind == "none") return o;
         o["kind"] = kind;
         o["blocking"] = bool(full["blocking"]);
-        if (full.HasKey("frameIdName")) o["frame"] = string(full["frameIdName"]);
-        else if (full.HasKey("menuFrameIdName")) o["frame"] = string(full["menuFrameIdName"]);
+        string frame = full.HasKey("frameIdName") ? string(full["frameIdName"])
+            : (full.HasKey("menuFrameIdName") ? string(full["menuFrameIdName"]) : "");
+        if (frame.Length > 0) o["frame"] = frame;
         if (full.HasKey("messageText")) o["text"] = string(full["messageText"]).SubStr(0, 200);
         else if (full.HasKey("waitText")) o["text"] = string(full["waitText"]).SubStr(0, 200);
-        o["hint"] = DialogNextCallHint(kind);
+        o["hint"] = DialogNextCallHint(kind, frame);
         return o;
+    }
+
+    // Every control with id `nameId` under c (same depth bound as _DlgFindChildRecursive).
+    void _DlgCollectNamed(CControlBase@ c, uint nameId, int depth, array<CControlBase@>@ found) {
+        if (c is null || depth > 12 || found.Length >= 32) return;
+        if (c.Id.Value == nameId) { found.InsertLast(c); return; }
+        auto cont = cast<CControlContainer>(c);
+        if (cont is null) return;
+        for (uint i = 0; i < cont.Childs.Length; i++) _DlgCollectNamed(cont.Childs[i], nameId, depth + 1, found);
+    }
+
+    // The card a ButtonSelection belongs to: its nearest named ancestor.
+    string _DlgCardId(CControlBase@ selection) {
+        CControlBase@ p = selection.Parent;
+        for (int up = 0; p !is null && p.IdName.Length == 0 && up < 4; up++) @p = p.Parent;
+        return p is null ? "?" : p.IdName;
+    }
+
+    bool _MenuFrameIsUp(const string &in frameName) {
+        auto app = cast<CTrackMania>(GetApp());
+        if (app is null) return false;
+        for (uint i = 0; i < app.ActiveMenus.Length; i++) {
+            auto m = app.ActiveMenus[i];
+            if (m !is null && m.CurrentFrame !is null && m.CurrentFrame.IdName == frameName) return true;
+        }
+        return false;
+    }
+
+    // frame-ok on a frame of several cards (server join: ButtonJoin, ButtonSpectator,
+    // ButtonCancel, a row per map) used to fire the first ButtonSelection: a map row.
+    Json::Value@ _FrameOkAmbiguousError(int menuIndex, const string &in frame, array<CControlBase@>@ cards) {
+        Json::Value list = Json::Array();
+        string ids = "";
+        for (uint i = 0; i < cards.Length; i++) {
+            string id = _DlgCardId(cards[i]);
+            Json::Value row = Json::Object();
+            row["id"] = id;
+            row["visible"] = cards[i].IsVisible;
+            list.Add(row);
+            if (i < 8) ids += (i == 0 ? "" : ", ") + id;
+        }
+        if (cards.Length > 8) ids += ", ...";
+        string specific = MenuDialogFrameHint(frame);
+        auto err = MakeError("frame-ok refused: " + frame + " has " + cards.Length + " cards (" + ids
+            + ") and no ButtonOk, so there is no single OK to press. Nothing was clicked.",
+            "AMBIGUOUS_FRAME", false, "",
+            specific.Length > 0 ? specific
+                : "Click the card you mean: ClickClassicMenuControl {id} with an id from output.cards (GetMenuFrameTree {menuIndex:" + menuIndex + "} shows the frame). RespondDialog {action:frame-cancel} closes it.");
+        Json::Value output = Json::Object();
+        output["frame"] = frame;
+        output["menuIndex"] = menuIndex;
+        output["cards"] = list;
+        err["output"] = output;
+        return err;
     }
 
     Json::Value@ RespondDialog(Json::Value &in input) {
@@ -2577,6 +2632,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
 
         string action = string(input["action"]).ToLower();
         auto before = BasicDialogSummary();
+        string menuFrameActed = "";
         try {
             if (action == "yes") {
                 app.BasicDialogs.AskYesNo_Yes();
@@ -2609,21 +2665,31 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
                     auto menu = app.ActiveMenus[i];
                     if (menu is null || menu.CurrentFrame is null) continue;
                     if (action == "frame-cancel") {
+                        menuFrameActed = menu.CurrentFrame.IdName;
                         if (!menu.EnableFrameStack) menu.EnableFrameStack = true;
                         menu.Back();
                         fired = true;
                         continue;
                     }
-                    auto btn = _DlgFindChildRecursive(menu.CurrentFrame, "ButtonSelection", 0);
+                    // One card: its ButtonSelection is the OK. Several: only ButtonOk is.
+                    MwId selectionId = MwId();
+                    selectionId.SetName("ButtonSelection");
+                    array<CControlBase@> cards;
+                    _DlgCollectNamed(menu.CurrentFrame, selectionId.Value, 0, cards);
+                    CControlBase@ btn = null;
+                    if (cards.Length == 1) @btn = cards[0];
                     if (btn is null) {
                         @btn = _DlgFindChildRecursive(menu.CurrentFrame, "ButtonOk", 0);
                     }
+                    if (btn is null && cards.Length > 1) return _FrameOkAmbiguousError(int(i), menu.CurrentFrame.IdName, cards);
                     if (btn !is null) {
+                        menuFrameActed = menu.CurrentFrame.IdName;
                         btn.OnAction();
                         fired = true;
                     }
                 }
-                if (!fired) return MakeError("no ButtonOk under any ActiveMenus CurrentFrame");
+                if (!fired) return MakeError("no ButtonOk or ButtonSelection under any ActiveMenus CurrentFrame", "NOT_FOUND", false, "",
+                    "GetDialog shows what is up; GetMenuFrameTree {menuIndex} lists a frame's controls and ClickClassicMenuControl {id} clicks one.");
             } else {
                 return MakeError("action must be one of: yes, no, cancel, ok, wait-ok, validate, saveas-cancel, saveas-up, saveas-setname, hide, frame-ok, frame-cancel");
             }
@@ -2643,6 +2709,15 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
             output["after"] = BasicDialogSummary();
         } else {
             output["note"] = "returned immediately (disable1FrameYieldAndWarning); no after summary";
+        }
+        if (menuFrameActed.Length > 0) {
+            output["frame"] = menuFrameActed;
+            if (!immediate) {
+                bool stillUp = _MenuFrameIsUp(menuFrameActed);
+                output["frameClosed"] = !stillUp;
+                if (stillUp) output["warning"] = menuFrameActed + " is still up one frame after " + action
+                    + ": the click may not have answered it. GetMenuFrameTree lists its controls; ClickClassicMenuControl {id} clicks one.";
+            }
         }
         return MakeSuccess(output);
     }

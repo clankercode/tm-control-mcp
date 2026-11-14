@@ -45,7 +45,15 @@ namespace TmMcp {
         return false;
     }
 
-    string DialogNextCallHint(const string &in kind) {
+    // Menu modals whose right answer is known by frame name; "" otherwise.
+    string MenuDialogFrameHint(const string &in frame) {
+        if (frame == "FrameDialogJoin") return "Server join card: ClickClassicMenuControl {id:ButtonJoin} joins ({id:ButtonSpectator} spectates), RespondDialog {action:frame-cancel} closes it. JoinServer {link} opens and confirms a card in one call. frame-ok refuses this card: it has several buttons.";
+        return "";
+    }
+
+    // frame: the dialog's frame id (data.dialog.frame), refines menu modals.
+    string DialogNextCallHint(const string &in kind, const string &in frame = "") {
+        if (kind == "menuDialog" && MenuDialogFrameHint(frame).Length > 0) return MenuDialogFrameHint(frame);
         if (kind == "askYesNo") return "Answer with RespondDialog {action:yes|no|cancel}. For the unsaved-changes prompt: SaveMapFlow {name} saves, SaveMapFlow {save:false} discards.";
         if (kind == "saveAs") return "SaveAs dialog: RespondDialog {action:saveas-setname,name} then {action:validate}, or {action:saveas-cancel}. SaveMapFlow drives the whole chain.";
         if (kind == "message") return "Acknowledge with RespondDialog {action:ok}.";
