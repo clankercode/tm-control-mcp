@@ -40,6 +40,9 @@ namespace TmMcp {
     }
 
     void Shutdown() {
+        // A reload during EditNewMap must not leave the shared decoration fid
+        // swapped: that breaks EditNewMap until the game restarts.
+        try { RestoreEditNewMapDecoSwap(); } catch { warn("TM Control MCP: decoration swap restore failed: " + getExceptionInfo()); }
         StopToolCalls();
         StopPackUpdates();
         FidsPacksShutdown();

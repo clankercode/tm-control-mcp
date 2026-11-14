@@ -1819,14 +1819,67 @@ namespace TmMcp {
         return memberTy.Offset;
     }
 
-    void _EditNewMapCoroutine(string environment, string decoration, string mapType, string vista, string car, nat3 mapSize) {
+    // Latest EditNewMap coroutine status, read back by EditNewMapTool after its
+    // waitMs. "error: ..." means no map was requested.
+    uint g_EditNewMapSeq = 0;
+    string g_EditNewMapStatus = "";
+    // True while the Stadium standard decoration fid holds another decoration
+    // (SwapDecoHack). At most one swap may be in flight; the fid and its own
+    // nod are kept so Shutdown can undo a swap a plugin reload interrupts.
+    bool g_EditNewMapDecoSwapped = false;
+    CSystemFidFile@ g_DecoSwapFid = null;
+    CMwNod@ g_DecoSwapOrigNod = null;
+
+    void RestoreEditNewMapDecoSwap() {
+        if (!g_EditNewMapDecoSwapped) return;
+        Dev::SetOffset(g_DecoSwapFid, _MemberOffset("CSystemFidFile", "Nod"), g_DecoSwapOrigNod);
+        g_DecoSwapOrigNod.MwRelease();
+        @g_DecoSwapOrigNod = null;
+        @g_DecoSwapFid = null;
+        g_EditNewMapDecoSwapped = false;
+    }
+
+    void _EditNewMapStatus(uint seq, const string &in status) {
+        if (seq == g_EditNewMapSeq) g_EditNewMapStatus = status;
+    }
+
+    void _EditNewMapFail(uint seq, const string &in msg) {
+        warn("TM Control MCP EditNewMap: " + msg);
+        _EditNewMapStatus(seq, "error: " + msg);
+    }
+
+    void _EditNewMapCoroutine(string environment, string decoration, string mapType, string vista, string car, nat3 mapSize, uint seq) {
         if (!Permissions::OpenAdvancedMapEditor()) {
-            warn("TM Control MCP EditNewMap: missing advanced map editor permission");
+            _EditNewMapFail(seq, "missing advanced map editor permission");
             return;
         }
         auto app = cast<CGameManiaPlanet>(GetApp());
         if (app is null || app.ManiaTitleControlScriptAPI is null) {
-            warn("TM Control MCP EditNewMap: title control API not available");
+            _EditNewMapFail(seq, "title control API not available");
+            return;
+        }
+
+        // Leave first, touch decorations after. On 2026-11-15 a swap made while
+        // a dirty editor sat behind its save prompt was followed by a broken
+        // standard fid, and EditNewMap did nothing for the rest of the run.
+        app.BackToMainMenu();
+        uint64 tReady = Time::Now;
+        while (!app.ManiaTitleControlScriptAPI.IsReady && Time::Now - tReady < 10000) {
+            if (_LeaveDialogIsUp()) break;
+            yield();
+        }
+        uint64 tMenu = Time::Now;
+        while ((app.Switcher.ModuleStack.Length < 1 || cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0]) is null)
+            && Time::Now - tMenu < 10000) {
+            if (_LeaveDialogIsUp()) break;
+            yield();
+        }
+        if (_LeaveDialogIsUp()) {
+            _EditNewMapFail(seq, "blocked by dialog after BackToMainMenu (unsaved changes?); nothing requested");
+            return;
+        }
+        if (g_EditNewMapDecoSwapped) {
+            _EditNewMapFail(seq, "a previous EditNewMap still has its decoration swap in place; poll GetMode and retry");
             return;
         }
 
@@ -1856,13 +1909,10 @@ namespace TmMcp {
         }
         if (fidBase.Length == 0) fidBase = _VistaToDecoFidBase(vista);
         if (fidBase.Length == 0) {
-            warn("TM Control MCP EditNewMap: unknown vista '" + vista + "' (see map-vistas guide)");
+            _EditNewMapFail(seq, "unknown vista '" + vista + "' (see map-vistas guide)");
             return;
         }
-        bool standard = fidBase == stdFidBase && mapSize.x == 0;
-
         CGameCtnDecoration@ chosenDeco = null;
-        CMwNod@ origStdNod = null;
         nat3 origSize;
         bool swapped = false;
         {
@@ -1871,7 +1921,7 @@ namespace TmMcp {
             auto chosenFid = Fids::GetGame(decoFolder + fidBase + ".Decoration.Gbx");
             @chosenDeco = cast<CGameCtnDecoration>(Fids::Preload(chosenFid));
             if (chosenDeco is null) {
-                warn("TM Control MCP EditNewMap: failed to preload decoration " + fidBase);
+                _EditNewMapFail(seq, "failed to preload decoration " + fidBase);
                 return;
             }
             chosenDeco.MwAddRef();
@@ -1887,71 +1937,67 @@ namespace TmMcp {
             // EditNewMap2 looks up that IdName after preload — no swap needed.
             // Stadium still only accepts the standard 48x48Screen155Day nod
             // name, so non-standard Stadium vistas keep SwapDecoHack.
-            if (environment != "Stadium" || standard) {
+            string fail = "";
+            if (environment != "Stadium") {
                 stdNodName = chosenDeco.IdName;
+                if (stdNodName.Length == 0) fail = "no decoration nod IdName for " + fidBase;
             } else {
+                // Check the shared standard fid before trusting or swapping it.
+                // If an earlier swap was never undone it holds another
+                // decoration (or a dead one with an empty IdName); using it, or
+                // swapping again and returning, left EditNewMap2 doing nothing
+                // for the rest of the game run (2026-11-15).
                 auto stdFid = Fids::GetGame(decoFolder + stdFidBase + ".Decoration.Gbx");
                 auto stdNod = Fids::Preload(stdFid);
-                if (stdNod !is null) {
-                    stdNodName = stdNod.IdName;
-                    if (stdNod.IdName != chosenDeco.IdName) {
-                        @origStdNod = stdNod;
-                        origStdNod.MwAddRef();
-                        Dev::SetOffset(stdFid, _MemberOffset("CSystemFidFile", "Nod"), chosenDeco);
-                        swapped = true;
-                    }
+                string stdId = stdNod is null ? "(null)" : string(stdNod.IdName);
+                if (stdId != STD_DECO_NOD) {
+                    fail = "standard decoration fid holds '" + stdId + "', expected '" + STD_DECO_NOD
+                        + "' (an earlier decoration swap was not undone); refusing. Restart the game to recover.";
+                } else if (stdNod.IdName != chosenDeco.IdName) {
+                    @g_DecoSwapFid = stdFid;
+                    @g_DecoSwapOrigNod = stdNod;
+                    g_DecoSwapOrigNod.MwAddRef();
+                    Dev::SetOffset(stdFid, _MemberOffset("CSystemFidFile", "Nod"), chosenDeco);
+                    swapped = true;
+                    g_EditNewMapDecoSwapped = true;
                 }
             }
-            if (stdNodName.Length == 0) {
-                warn("TM Control MCP EditNewMap: no decoration nod IdName for " + fidBase);
+            if (fail.Length > 0) {
+                // Nothing swapped on this path; undo the size and the ref.
+                chosenDeco.DecoSize.SizeX = origSize.x;
+                chosenDeco.DecoSize.SizeY = origSize.y;
+                chosenDeco.DecoSize.SizeZ = origSize.z;
                 chosenDeco.MwRelease();
                 @chosenDeco = null;
+                _EditNewMapFail(seq, fail);
                 return;
             }
             trace("TM Control MCP EditNewMap: fid=" + fidBase + " nod=" + stdNodName + " swapped=" + swapped);
         }
 
-        app.BackToMainMenu();
-        uint64 tReady = Time::Now;
-        while (!app.ManiaTitleControlScriptAPI.IsReady && Time::Now - tReady < 10000) {
-            if (_LeaveDialogIsUp()) break;
-            yield();
-        }
-        uint64 tMenu = Time::Now;
-        while ((app.Switcher.ModuleStack.Length < 1 || cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0]) is null)
-            && Time::Now - tMenu < 10000) {
-            if (_LeaveDialogIsUp()) break;
-            yield();
-        }
-        if (_LeaveDialogIsUp()) {
-            warn("TM Control MCP EditNewMap: blocked by dialog after BackToMainMenu (unsaved changes?)");
-        } else {
-            yield();
-            app.ManiaTitleControlScriptAPI.EditNewMap2(environment, stdNodName, "", car, mapType, false, "", "");
-            yield();
-            trace("TM Control MCP EditNewMap: EditNewMap2('" + environment + "', '" + stdNodName + "') LatestResult=" + int(app.ManiaTitleControlScriptAPI.LatestResult));
-        }
+        yield();
+        app.ManiaTitleControlScriptAPI.EditNewMap2(environment, stdNodName, "", car, mapType, false, "", "");
+        yield();
+        trace("TM Control MCP EditNewMap: EditNewMap2('" + environment + "', '" + stdNodName + "') LatestResult=" + int(app.ManiaTitleControlScriptAPI.LatestResult));
+        _EditNewMapStatus(seq, "requested");
         // 20s idle to start a load / open the editor; once a loading screen
         // is up, keep waiting (big maps can take many minutes).
         uint waited = 0;
         bool opened = _WaitForEditorAfterMapLoad(20000, 1800000, waited);
         if (opened) {
             trace("TM Control MCP EditNewMap: editor opened after " + waited + "ms");
+            _EditNewMapStatus(seq, "opened");
         } else if (_LeaveDialogIsUp()) {
-            warn("TM Control MCP EditNewMap: blocked by dialog after " + waited + "ms");
+            _EditNewMapFail(seq, "blocked by dialog after " + waited + "ms");
         } else {
-            warn("TM Control MCP EditNewMap: editor did not open after " + waited + "ms (vista '" + vista + "', deco '" + fidBase + "')");
+            _EditNewMapFail(seq, "editor did not open after " + waited + "ms (vista '" + vista + "', deco '" + fidBase + "')");
         }
-        if (swapped) {
-            auto stdFid = Fids::GetGame(decoFolder + stdFidBase + ".Decoration.Gbx");
-            Dev::SetOffset(stdFid, _MemberOffset("CSystemFidFile", "Nod"), origStdNod);
-            origStdNod.MwRelease();
-            @origStdNod = null;
-        }
+        if (swapped) RestoreEditNewMapDecoSwap();
         if (chosenDeco !is null) {
-            if (mapSize.x > 0 && opened) {
-                // Restore the shared deco size only after the map is closed.
-                while (true) {
+            if (mapSize.x > 0) {
+                // Restore the shared deco size only after the map is closed
+                // (at once if it never opened).
+                while (opened) {
                     sleep(500);
                     auto tmApp = cast<CTrackMania>(GetApp());
                     if (tmApp is null || tmApp.Editor is null) break;
@@ -2017,14 +2063,21 @@ namespace TmMcp {
         if (input.HasKey("sizeY")) mapSize.y = uint(int(input["sizeY"]));
         if (input.HasKey("sizeZ")) mapSize.z = uint(int(input["sizeZ"]));
         string sizeStr = mapSize.x + "x" + mapSize.y + "x" + mapSize.z;
+        if (g_EditNewMapDecoSwapped) {
+            return MakeError("a previous EditNewMap is still opening its map (decoration swap in place)",
+                "EDITNEWMAP_BUSY", true, "", "Poll GetMode until MapEditor (the previous call gives up after 20s idle), then call EditNewMap again.");
+        }
         auto pre = _PrepareModuleChange("EditNewMap");
         if (pre !is null) return pre;
+        g_EditNewMapSeq++;
+        uint seq = g_EditNewMapSeq;
+        g_EditNewMapStatus = "queued";
         startnew(function(ref@ ctx) {
             auto args = cast<array<string>>(ctx);
             auto p = args[5].Split("x");
             nat3 sz(Text::ParseUInt(p[0]), Text::ParseUInt(p[1]), Text::ParseUInt(p[2]));
-            _EditNewMapCoroutine(args[0], args[1], args[2], args[3], args[4], sz);
-        }, array<string> = { environment, decoration, mapType, vista, car, sizeStr });
+            _EditNewMapCoroutine(args[0], args[1], args[2], args[3], args[4], sz, Text::ParseUInt(args[6]));
+        }, array<string> = { environment, decoration, mapType, vista, car, sizeStr, "" + seq });
         Json::Value output = Json::Object();
         output["environment"] = environment;
         output["decoration"] = decoration;
@@ -2039,6 +2092,16 @@ namespace TmMcp {
             _AttachLeaveDialogWarning(output);
             if (output.HasKey("warning")) {
                 output["note"] = "EditNewMap stalled on a dialog (typically unsaved changes). Answer it before the new map can open.";
+            }
+        }
+        // queued | requested | opened | error: ... (the coroutine outlives this call)
+        if (seq == g_EditNewMapSeq) {
+            output["status"] = g_EditNewMapStatus;
+            if (g_EditNewMapStatus.StartsWith("error: ")) {
+                auto err = MakeError("EditNewMap failed: " + g_EditNewMapStatus.SubStr(7), "EDITNEWMAP_FAILED", false, "",
+                    "No map was created. See output.status and the Openplanet log.");
+                err["output"] = output;
+                return err;
             }
         }
         return MakeSuccess(output);
