@@ -2364,6 +2364,29 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         return MakeSuccess(BuildDialogSummary());
     }
 
+    // data.dialog on every socket tool response: {up:false} when clear, else
+    // kind/blocking/frame/text/hint. A few field reads; no yield, no tree walk.
+    Json::Value CompactDialogState() {
+        auto full = BasicDialogSummary();
+        Json::Value o = Json::Object();
+        if (!bool(full["available"])) {
+            o["up"] = false;
+            o["available"] = false;
+            return o;
+        }
+        string kind = string(full["dialogKind"]);
+        o["up"] = kind != "none";
+        if (kind == "none") return o;
+        o["kind"] = kind;
+        o["blocking"] = bool(full["blocking"]);
+        if (full.HasKey("frameIdName")) o["frame"] = string(full["frameIdName"]);
+        else if (full.HasKey("menuFrameIdName")) o["frame"] = string(full["menuFrameIdName"]);
+        if (full.HasKey("messageText")) o["text"] = string(full["messageText"]).SubStr(0, 200);
+        else if (full.HasKey("waitText")) o["text"] = string(full["waitText"]).SubStr(0, 200);
+        o["hint"] = DialogNextCallHint(kind);
+        return o;
+    }
+
     Json::Value@ RespondDialog(Json::Value &in input) {
         auto app = cast<CTrackMania>(GetApp());
         if (app is null || app.BasicDialogs is null) return MakeError("basic dialogs unavailable");

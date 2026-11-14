@@ -149,6 +149,9 @@ namespace TmMcp {
         Json::Value data = Json::Object();
         data["tool"] = tool;
         data["result"] = result;
+        // Every tool response says whether a dialog is up, sampled last (after
+        // any dialogAfter frame), so no caller acts blind. docs/dialogs.md.
+        data["dialog"] = CompactDialogState();
         return MakeResponse(id, route, data, "");
     }
 

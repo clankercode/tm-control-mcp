@@ -85,6 +85,19 @@ def print_json_error(message: str, pretty: bool, **extra) -> None:
     print_json(payload, pretty)
 
 
+def dialog_notice(response: object) -> str | None:
+    """One stderr line when the bridge reports a game dialog in data.dialog."""
+    data = response.get("data") if isinstance(response, dict) else None
+    dialog = data.get("dialog") if isinstance(data, dict) else None
+    if not isinstance(dialog, dict) or dialog.get("up") is not True:
+        return None
+    bits = [f"kind={dialog.get('kind')}", f"blocking={str(dialog.get('blocking') is True).lower()}"]
+    for key in ("frame", "text", "hint"):
+        if isinstance(dialog.get(key), str) and dialog[key]:
+            bits.append(f"{key}={dialog[key]}")
+    return "[tm-control-mcp] dialog up: " + " ".join(bits)
+
+
 def screenshot_extension(input_data: object) -> str:
     if not isinstance(input_data, dict):
         return ".jpg"
@@ -826,6 +839,9 @@ def main() -> int:
                     if hint:
                         bits.append(f"hint={hint}")
                     print("[tm-control-mcp] " + " ".join(bits), file=sys.stderr)
+        notice = dialog_notice(response)
+        if notice:
+            print(notice, file=sys.stderr)
 
     print_json(response, args.pretty)
     return 0
