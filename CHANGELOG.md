@@ -9,6 +9,7 @@ Versions follow `info.toml` `[meta] version`.
 
 ### Added
 
+- 2026-11-15: `SaveMapAs` fails with `DIALOG_BLOCKING` (`saved:false`, dialog left up) when the game answers the save with a prompt instead of saving; it used to report success (`src/McpTools.as`).
 - 2026-11-15: every socket response has compact `data.dialog`; `dialogKind` no longer says `none` for the save prompt (`askYesNo`, `saveAs`, `menuDialog`, …, plus `blocking`); map switches and test starts refuse behind a dialog (`DIALOG_BLOCKING`) and stop on the save prompt instead of queueing; EditNewMap can no longer leave its decoration swap behind (the "EditNewMap does nothing until restart" bug); `testFrom*` fail with `PLAYGROUND_NOT_STARTED`. See `docs/dialogs.md`.
 
 - Generic editor-script status/reload, offline pending-value recovery, and preloaded user-pack inspection/mounting. Preserved local tooling is ported with public-only interfaces.
