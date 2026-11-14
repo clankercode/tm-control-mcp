@@ -2662,6 +2662,25 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
                 // Dismiss a modal menu dialog (e.g. FrameDialogEditorChallengeCard,
                 // the 'map saved' card) via the menus dialog validate/cancel hooks.
                 bool fired = false;
+                // frame-cancel: the topmost modal frame is the one meant, not whichever menu is
+                // first (at the main menu that is the menu itself, under the server join card).
+                // A modal frame with a ButtonCancel is cancelled by clicking it.
+                if (action == "frame-cancel") {
+                    for (int mi = int(app.ActiveMenus.Length) - 1; mi >= 0 && !fired; mi--) {
+                        auto modal = app.ActiveMenus[mi];
+                        if (modal is null || modal.CurrentFrame is null) continue;
+                        if (!IsModalDialogFrameName(modal.CurrentFrame.IdName)) continue;
+                        menuFrameActed = modal.CurrentFrame.IdName;
+                        auto cancelBtn = _ClassicButtonOf(_DlgFindChildRecursive(modal.CurrentFrame, "ButtonCancel", 0));
+                        if (cancelBtn !is null) {
+                            cancelBtn.OnAction();
+                        } else {
+                            if (!modal.EnableFrameStack) modal.EnableFrameStack = true;
+                            modal.Back();
+                        }
+                        fired = true;
+                    }
+                }
                 for (uint i = 0; i < app.ActiveMenus.Length && !fired; i++) {
                     auto menu = app.ActiveMenus[i];
                     if (menu is null || menu.CurrentFrame is null) continue;
