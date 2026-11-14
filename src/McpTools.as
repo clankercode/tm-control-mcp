@@ -1458,7 +1458,7 @@ namespace TmMcp {
         tools.Add(MakeTool("GetMenuFrameTree", "Recursive dump of the CurrentFrame on app.ActiveMenus[menuIndex] (default 0) — where modal menu dialogs like the 'map saved' challenge card live. Params: menuIndex, maxDepth (default 8), maxNodes (default 4000).", '{"type":"object","properties":{"menuIndex":{"type":"integer"},"maxDepth":{"type":"integer"},"maxNodes":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetEditorInterfaceTree", "Read-only recursive dump of the active editor control tree: CGameEditorItem.FrameRoot in Item Editor, otherwise CGameCtnEditorFree.EditorInterface.InterfaceRoot. Includes per-node id, class, visibility/read-only/hidden flags, tooltip, and children. Expensive; use maxDepth (default 6), maxNodes (default 4000), and optional rootId to dump a subtree (e.g. FrameTempMsg).", '{"type":"object","properties":{"maxDepth":{"type":"integer"},"maxNodes":{"type":"integer"},"rootId":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("RespondDialog", "Respond to Trackmania dialogs (BasicDialogs + SaveAs frame). action: yes, no, cancel, ok, wait-ok, validate/saveas-validate, saveas-cancel, saveas-up, saveas-setname (with name), hide, frame-ok (dismiss modal menu dialog like the map-saved challenge card via its ButtonOk). By default yields one frame and includes an 'after' summary of the next dialog in the chain; set disable1FrameYieldAndWarning=true to return immediately.", '{"type":"object","properties":{"action":{"type":"string"},"name":{"type":"string"},"disable1FrameYieldAndWarning":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
-        tools.Add(MakeTool("ControlValidation", "Inspect or trigger map validation/test/playground controls. Actions: status, validate, requestEnterPlayground, requestLeavePlayground, testFromStart, testFromCoord.", '{"type":"object","properties":{"action":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("ControlValidation", "Inspect or trigger map validation/test/playground controls. Actions: status, validate, requestEnterPlayground, requestLeavePlayground, testFromStart, testFromCoord. Starts (validate, requestEnterPlayground, testFrom*) are refused with DIALOG_BLOCKING while a dialog is up. testFromStart/testFromCoord wait up to waitMs (default 10000, max 30000, 0 = do not wait) for the playground and fail with PLAYGROUND_NOT_STARTED if it never starts (seen after requestLeavePlayground: one test start per map load), output.playgroundStarted otherwise.", '{"type":"object","properties":{"action":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"waitMs":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlSelection", "Inspect or control editor copy-paste/custom selection. Actions: status, showCustom, hideCustom, resetSelection, selectAll, addSelection, copy, cut, remove, symmetrize.", '{"type":"object","properties":{"action":{"type":"string"},"x1":{"type":"integer"},"y1":{"type":"integer"},"z1":{"type":"integer"},"x2":{"type":"integer"},"y2":{"type":"integer"},"z2":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetCursor", "Get editor cursor coordinate and selected block.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlCursor", "Use the editor cursor API: status, raise, lower, rotate, move, moveToCameraTarget, followCamera, disableMouseDetection, releaseLock, resetRGB, setRGB.", '{"type":"object","properties":{"action":{"type":"string"},"direction":{"type":"string"},"directionKind":{"type":"string"},"count":{"type":"integer"},"clockwise":{"type":"boolean"},"follow":{"type":"boolean"},"disable":{"type":"boolean"},"r":{"type":"number"},"g":{"type":"number"},"b":{"type":"number"}},"additionalProperties":false}'));
@@ -2675,7 +2675,52 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["before"] = before;
         output["after"] = ValidationToJson(pmt);
         AttachValidationWarning(output);
+        int waitMs = input.HasKey("waitMs") ? int(input["waitMs"]) : 10000;
+        if ((action == "testFromStart" || action == "testFromCoord") && waitMs > 0) {
+            // A request can leave isTesting set with no playground for 30-60s
+            // and then fall back without an error (2026-11-15). Confirm it.
+            @pmt = null;
+            @editor = null;
+            uint64 t0 = Time::Now;
+            string outcome = _TestPlaygroundState();
+            while (outcome.Length == 0 && Time::Now - t0 < uint(Math::Min(waitMs, 30000))) {
+                yield();
+                outcome = _TestPlaygroundState();
+            }
+            output["playgroundStarted"] = outcome == "started";
+            output["startWaitedMs"] = int(Time::Now - t0);
+            auto ed = GetEditor();
+            output["after"] = ValidationToJson(ed is null ? null : cast<CGameEditorPluginMapMapType>(ed.PluginMapType));
+            @ed = null;
+            AttachValidationWarning(output);
+            if (outcome != "started") {
+                Json::Value@ err;
+                if (outcome == "dialog") {
+                    string kind = string(BasicDialogSummary()["dialogKind"]);
+                    @err = MakeError(action + " did not start the playground: a dialog came up (" + kind + ").",
+                        "DIALOG_BLOCKING", false, "Editor", DialogNextCallHint(kind));
+                } else {
+                    @err = MakeError(action + " did not start the playground within " + int(output["startWaitedMs"]) + "ms"
+                        + (outcome == "noEditor" ? " (the editor went away)." : " (isTesting set, no playground)."),
+                        "PLAYGROUND_NOT_STARTED", false, "Editor",
+                        "Seen in the stock game: a tool-driven test start works once per map load; after requestLeavePlayground, later starts hang like this and fall back after 30-60s. Wait for GetMode MapEditor, then reload the map (save if needed, BackToMainMenu, OpenMapInEditor) before testing again.");
+                }
+                err["output"] = output;
+                return err;
+            }
+        }
         return MakeSuccess(output);
+    }
+
+    // ControlValidation test start: "started" once the editor reports the
+    // playground, "dialog" if one needing an answer is up, "noEditor", or ""
+    // (keep waiting). Takes no handle across frames.
+    string _TestPlaygroundState() {
+        auto editor = GetEditor();
+        if (editor is null || editor.PluginMapType is null) return "noEditor";
+        if (editor.PluginMapType.IsSwitchedToPlayground) return "started";
+        if (_DialogBlocksNow()) return "dialog";
+        return "";
     }
 
     Json::Value@ ControlSelection(Json::Value &in input) {
