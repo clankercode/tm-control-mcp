@@ -45,6 +45,7 @@ Versions follow `info.toml` `[meta] version`.
 
 ### Changed
 
+- 2026-11-15: errors that named a problem now name the next call: `ClickClassicMenuControl` `NOT_VISIBLE` / not-a-button, socket `unknown route` (lists the routes) and `missing tool` (shows the request shape), `reentrant_tool`, `RespondDialog saveas-setname` without the SaveAs dialog (`src/ClassicMenus.as`, `src/Protocol.as`, `src/ToolCalls.as`, `src/McpTools.as`).
 - 2026-11-15: docs: README tool table has `GetMenuFrameTree`, `ClickClassicMenuControl`, `JoinServer` and the new frame-ok rule; the `catalog` route is how to list tools; `ControlPlugin {action:"reload", id}` is the reload tool (also for a stuck RemoteBuild). New in-game guide `plugins`; the `dialogs` guide covers classic menu cards (`README.md`, `AGENTS.md`, `src/Guides.as`).
 - 2026-11-15: input validation names what is accepted: `unknown parameter 'path' (allowed: …)`, same wording as `call.py --strict` (`src/ToolInputValidation.as`).
 - 2026-11-15: `RespondDialog {action:frame-ok}` no longer clicks the first `ButtonSelection` of a frame holding several cards (server join card): with no `ButtonOk` it refuses with `AMBIGUOUS_FRAME`, clicking nothing, and lists the card ids (`output.cards`) for `ClickClassicMenuControl {id}`. frame-ok/cancel report `output.frameClosed` and warn when the frame is still up. `data.dialog.hint` (and `DIALOG_BLOCKING` hints) now use the frame: on `FrameDialogJoin` they name `ClickClassicMenuControl {id:ButtonJoin}` and `JoinServer` (`src/McpTools.as`, `src/DialogPolicy.as`).

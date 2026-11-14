@@ -204,7 +204,8 @@ namespace TmMcp {
         if (!g_ToolCalls.Admit(call)) {
             auto held = g_ToolCalls.Find(name);
             ToolCallEvent("tool rejected " + name + " reentrant_tool held=#" + held.id + " ageMs=" + (Time::Now - held.started));
-            auto err = MakeError("reentrant tool call: " + name, "reentrant_tool", false);
+            auto err = MakeError("reentrant tool call: " + name, "reentrant_tool", false, "",
+                "Another " + name + " call is in flight (inFlight; status route calls.active). Calls of one tool never overlap or nest: let it finish, then call again.");
             err["inFlight"] = ToolCallToJson(held);
             return err;
         }

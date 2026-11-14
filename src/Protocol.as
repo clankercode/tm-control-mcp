@@ -111,12 +111,13 @@ namespace TmMcp {
             return HandleCall(id, route, request);
         }
 
-        return MakeResponse(id, route, null, "unknown route: " + route);
+        return MakeResponse(id, route, null, "unknown route: " + route
+            + " (routes: status, tools, catalog, call, recover, or a tool name; the catalog route lists tools)");
     }
 
     Json::Value@ HandleCall(const string &in id, const string &in route, Json::Value@ request) {
         string tool = request.HasKey("tool") ? string(request["tool"]) : "";
-        if (tool.Length == 0) return MakeResponse(id, route, null, "missing tool");
+        if (tool.Length == 0) return MakeResponse(id, route, null, "missing tool: send {\"route\":\"call\",\"tool\":\"<Name>\",\"input\":{}}");
 
         Json::Value input = Json::Object();
         if (request.HasKey("input")) {

@@ -60,10 +60,12 @@ namespace TmMcp {
                 "NOT_FOUND", false, "", "GetMenuFrameTree {menuIndex} lists the ids.");
         }
         auto btn = _ClassicButtonOf(target);
-        if (btn is null) return MakeError("'" + id + "' is not a button and has no ButtonSelection child", "INVALID_INPUT");
+        if (btn is null) return MakeError("'" + id + "' is not a button and has no ButtonSelection child", "INVALID_INPUT", false, "",
+            "Pass the id of a button or of a card that holds one; GetMenuFrameTree {menuIndex:" + foundIndex + "} shows the frame.");
         bool visible = btn.IsVisible && target.IsVisible;
         bool requireVisible = !input.HasKey("requireVisible") || bool(input["requireVisible"]);
-        if (requireVisible && !visible) return MakeError("'" + id + "' is not visible", "NOT_VISIBLE");
+        if (requireVisible && !visible) return MakeError("'" + id + "' is not visible", "NOT_VISIBLE", false, "",
+            "GetMenuFrameTree {menuIndex:" + foundIndex + "} shows what is visible; requireVisible:false clicks it anyway.");
         btn.OnAction();
         Json::Value output = Json::Object();
         output["clicked"] = id;

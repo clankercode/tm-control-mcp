@@ -2653,7 +2653,8 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
             } else if (action == "saveas-setname") {
                 if (!input.HasKey("name")) return MakeError("saveas-setname requires name");
                 if (!_SetSaveAsEntryText(string(input["name"]))) {
-                    return MakeError("no FrameDialogSaveAs / EntryFileName available");
+                    return MakeError("no FrameDialogSaveAs / EntryFileName available", "NOT_FOUND", false, "",
+                        "The SaveAs dialog is not up: GetDialog shows what is. SaveMapFlow {name} drives the whole save chain.");
                 }
             } else if (action == "hide") {
                 app.BasicDialogs.HideDialogs();
