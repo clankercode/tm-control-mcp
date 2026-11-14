@@ -9,6 +9,8 @@ Versions follow `info.toml` `[meta] version`.
 
 ### Added
 
+- 2026-11-15: every socket response has compact `data.dialog`; `dialogKind` no longer says `none` for the save prompt (`askYesNo`, `saveAs`, `menuDialog`, …, plus `blocking`); map switches and test starts refuse behind a dialog (`DIALOG_BLOCKING`) and stop on the save prompt instead of queueing; EditNewMap can no longer leave its decoration swap behind (the "EditNewMap does nothing until restart" bug); `testFrom*` fail with `PLAYGROUND_NOT_STARTED`. See `docs/dialogs.md`.
+
 - Generic editor-script status/reload, offline pending-value recovery, and preloaded user-pack inspection/mounting. Preserved local tooling is ported with public-only interfaces.
 - Confirmed, bounded text replacements for user editor scripts and menu pages, with readback verification.
 - DEV native-auth availability diagnostics without credential acquisition or values.

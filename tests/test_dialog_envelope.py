@@ -70,6 +70,18 @@ def test_call_prints_one_dialog_line_on_stderr_and_keeps_stdout_json(capsys):
                      "hint=Answer with RespondDialog {action:yes|no|cancel}."]
 
 
+def test_guide_readme_and_design_note_document_the_envelope():
+    guides = (ROOT / "src" / "Guides.as").read_text()
+    guide = guides[guides.index('_RegisterGuide("dialogs",'):guides.index('_RegisterGuide("agent-cleanup",')]
+    for phrase in ("data.dialog", "DIALOG_BLOCKING", "SaveMapFlow {save:false}", "PLAYGROUND_NOT_STARTED", "askYesNo"):
+        assert phrase in guide, phrase
+    readme = (ROOT / "README.md").read_text()
+    assert "`data.dialog`" in readme and "docs/dialogs.md" in readme
+    note = (ROOT / "docs" / "dialogs.md").read_text()
+    for heading in ("## The game's dialog systems", "## Options weighed", "## Live checks"):
+        assert heading in note
+
+
 @pytest.mark.parametrize("dialog", [{"up": False}, None, "garbage", {"up": "true"}])
 def test_call_is_silent_without_a_reported_dialog(dialog, capsys):
     data = {"tool": "GetMode", "result": {"success": True, "output": {}}}

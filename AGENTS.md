@@ -58,6 +58,7 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
 
 ### Agent habits
 
+- Dialogs: every socket response has `data.dialog` (`up`, `kind`, `blocking`, `hint`). Map switches refuse (`DIALOG_BLOCKING`) behind a dialog and stop on the save prompt instead of queueing; answer with `SaveMapFlow {name}` / `{save:false}`, then call again. Never test `GetDialog.dialog` (raw enum) alone. `docs/dialogs.md`.
 - Smoke: `GetReadiness want=editor` or `call.py --until-ready editor GetMode`.
 - After menu nav: `WaitUntil condition=pageVisible` / GetMode.
 - Tag places: `SetAgentTag` then place; cleanup with `RemoveByTag`.

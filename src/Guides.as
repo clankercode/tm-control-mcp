@@ -270,6 +270,36 @@ namespace TmMcp {
             + " does not wait), then WaitUntil {condition:shadowsClear} / GetLightmapComputeState.\n"
             + "call.py: --wait-mode Editor --until-ready editor --wait-timeout 20");
 
+        _RegisterGuide("dialogs",
+            "Game dialogs: detecting, answering, not acting behind them",
+            "Every socket tool response has data.dialog: {up:false} when clear, else"
+            + " {up:true, kind, blocking, frame, text?, hint}. hint names the call that answers it.\n"
+            + "kind (also GetDialog.dialogKind): askYesNo (save changes? / overwrite?), saveAs,"
+            + " message, wait (loading/saving; not blocking), frameDialog, menuDialog (e.g. the"
+            + " map-saved card), none. GetDialog.dialog is the raw BasicDialogs enum, which says"
+            + " None for AskYesNo and SaveAs: do not test it alone.\n"
+            + "\n"
+            + "Refused with DIALOG_BLOCKING while a blocking dialog is up (nothing done):"
+            + " EditNewMap, OpenMapInEditor, PlayMap, BackToMainMenu, CreateMapViaMenu,"
+            + " ControlValidation validate/requestEnterPlayground/testFromStart/testFromCoord.\n"
+            + "EditNewMap / OpenMapInEditor / PlayMap leave the current map first. If that raises"
+            + " the unsaved-changes prompt they stop with DIALOG_BLOCKING and output.started=false;"
+            + " nothing is queued and the prompt stays up. Nothing answers it for you.\n"
+            + "\n"
+            + "Unsaved-changes prompt:\n"
+            + "- keep the map: SaveMapFlow {name:'MyMap'} (answers yes, names, saves)\n"
+            + "- discard it: SaveMapFlow {save:false} (same as RespondDialog {action:no})\n"
+            + "The game then finishes returning to the menu; call your tool again.\n"
+            + "Other answers: RespondDialog {action:ok} (message), {action:frame-ok} (menu modal),"
+            + " WaitUntil {condition:dialogClear} (wait). Full detail: GetDialog.\n"
+            + "\n"
+            + "ControlValidation testFromStart/testFromCoord wait for the playground (waitMs,"
+            + " default 10000) and fail with PLAYGROUND_NOT_STARTED if it never starts. Seen in"
+            + " the stock game: one tool-driven test start per map load; reload the map to test again.\n"
+            + "EditNewMap returns output.status (requested/opened); EDITNEWMAP_FAILED means no map"
+            + " was requested. 'standard decoration fid holds ...' means an earlier swap was not"
+            + " undone: restart the game.");
+
         _RegisterGuide("agent-cleanup",
             "Provenance tags for safe multi-step cleanup",
             "SetAgentTag sets the default tag applied to PlaceBlock/PlaceItem E++ tools"

@@ -355,17 +355,31 @@ the authoritative per-tool indicator for whether these fields are present. The
 snapshot is the global dialog state after the call, not a claim that the tool
 caused it; another concurrent request or game action can change that state.
 
+Every socket tool response also carries a compact `data.dialog` next to
+`data.result`: `{"up":false}` when no dialog is up, otherwise
+`{"up":true,"kind","blocking","frame","text","hint"}` (`hint` names the call
+that answers it). `tools/call.py` prints it as one `dialog up:` line on stderr.
+`dialogKind` (in `GetDialog`, `dialogAfter`, readiness) is one of `askYesNo`,
+`saveAs`, `message`, `wait`, `frameDialog`, `menuDialog`, `none`; the raw
+`BasicDialogs` enum in `dialog` says `None` for the unsaved-changes prompt, so do
+not test it alone. Map switches (`EditNewMap`, `OpenMapInEditor`, `PlayMap`,
+`BackToMainMenu`, `CreateMapViaMenu`) and `ControlValidation` starts are refused
+with `DIALOG_BLOCKING` while a dialog needs an answer, and the first three leave
+the current map before queueing anything: a save prompt stops them with
+`output.started:false`. Nothing answers a save prompt for you. Design and live
+checklist: [`docs/dialogs.md`](docs/dialogs.md); in game: `GetGuide {topic:dialogs}`.
+
 | Tool | Summary |
 |------|---------|
 | `GetMode` | Current game mode (Menu / Race / Loading / MapEditor / ItemEditor / MediatrackerEditor / …). `Editor` is only the unknown-editor fallback; `WaitUntil equals=Editor` still matches any editor. |
-| `OpenMapInEditor` | Open a local map file in the editor (`path`). Warns if a leave-map dialog pops. |
+| `OpenMapInEditor` | Open a local map file in the editor (`path`). Leaves the current map first; stops with `DIALOG_BLOCKING` on the save prompt. |
 | `GetMapInfo` | Current editor map name and counts (+ bounds). |
 | `GetMapEnvironment` | Collection, decoration, map type/style, mood, collection-unit metadata. |
 | `SetMoodTimeOfDay` | Set `MoodTimeOfDay01` (0..1); optional `dynamic` → `MoodIsDynamicTime`. Change TOD before a second LM bake. |
 | `ComputeShadows` | Start `ComputeShadows1` (does not wait). `quality` Default default; `bustCache` default true. Then `WaitUntil condition=shadowsClear`. |
 | `ControlMapObjectives` | Get/set race objectives: `nbClones`, `nbLaps`, `isLapRace` (E++). |
 | `SaveMapAs` | Save under user Maps (`name`+`folder` or `fileName`; `overwrite`). |
-| `GetDialog` | Inspect `BasicDialogs` state / active frame. |
+| `GetDialog` | Full dialog state: `dialogKind`, `blocking`, frames, menu modals. |
 | `RespondDialog` | Respond: `yes`, `no`, `cancel`, `ok`, `validate`, `hide`, … |
 
 ### Readiness / agent provenance / assert
@@ -385,7 +399,7 @@ caused it; another concurrent request or game action can change that state.
 
 | Tool | Summary |
 |------|---------|
-| `ControlValidation` | Validation / test / playground. |
+| `ControlValidation` | Validation / test / playground. `testFrom*` fail with `PLAYGROUND_NOT_STARTED` if the playground never starts (`waitMs`, default 10 s). |
 | `ControlSelection` | Copy-paste / custom selection. |
 | `GetCursor` | Editor cursor **coord** + selected block name/id. |
 | `GetEditorSelectionState` | Placement modes, picked block, selected models, cursor, variant. |
@@ -459,8 +473,8 @@ Menu stack is **landed**. Clicks use `CControlBase::OnAction` — **not**
 |------|---------|
 | `SetMenuPage` | MLHook `Router_Push` hierarchical `route`. |
 | `GetMenuPage` / `ListKnownMenuRoutes` | Mode + menu module; route catalogue. |
-| `EditNewMap` | Title-control new map (env + decoration + mapType). Warns if leaving a dirty map pops AskYesNo. |
-| `BackToMainMenu` | Unwind Editor/Race → menu. Warns and stops early on the unsaved-changes dialog. |
+| `EditNewMap` | Title-control new map (env + decoration + mapType). Leaves the current map first; stops with `DIALOG_BLOCKING` on the save prompt; `output.status`. |
+| `BackToMainMenu` | Unwind Editor/Race → menu. Stops with `blockedByDialog:true` on the unsaved-changes dialog (never answers it). |
 | `GetUILayers` / `GetActiveMenuPages` / `GetLayerTree` / `GetLayerXml` | Layer introspection. |
 | `ListMenuManialinkControls` / `FindMenuButtons` / `FindControlsByClass` / `FindControlsByLabel` | Discovery. |
 | `InspectMenuControl` / `FocusMenuControl` / `SetMenuControlVisible` | Probe / focus / show-hide. |
