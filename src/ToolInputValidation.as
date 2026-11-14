@@ -154,7 +154,7 @@ namespace TmMcp {
         for (uint i = 0; i < inputKeys.Length; i++) {
             string key = inputKeys[i];
             int propertyIndex = rec.allowedKeys.Find(key);
-            if (propertyIndex < 0 && rec.rejectAdditionalProperties) return "unknown parameter '" + key + "'";
+            if (propertyIndex < 0 && rec.rejectAdditionalProperties) return "unknown parameter '" + key + "' (allowed: " + AllowedKeysText(rec) + ")";
             string types = propertyIndex < 0 ? rec.additionalTypes : rec.allowedKeyTypes[uint(propertyIndex)];
             if (types.Length == 0) continue;
             auto unionTypes = types.Split("|");
@@ -165,6 +165,15 @@ namespace TmMcp {
             if (!matched) return "parameter '" + key + "' must be " + types + ", got " + JsonTypeName(input[key].GetType());
         }
         return "";
+    }
+
+    // Same wording as tools/call.py validate_input. Capped: pack schemas may be large.
+    string AllowedKeysText(ToolSchema@ rec) {
+        if (rec.allowedKeys.Length == 0) return "(none)";
+        string text = "";
+        for (uint i = 0; i < rec.allowedKeys.Length && i < 40; i++) text += (i == 0 ? "" : ", ") + rec.allowedKeys[i];
+        if (rec.allowedKeys.Length > 40) text += ", ...";
+        return text;
     }
 
     string JsonTypeName(Json::Type t) {

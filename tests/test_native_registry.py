@@ -194,7 +194,7 @@ def test_union_and_additional_properties_validation(as_runner, tmp_path):
     input["value"]=0.5; Check(TmMcp::ValidateToolInput("Union",input)!="","fractional integer rejected");
     input["value"]=false; Check(TmMcp::ValidateToolInput("Union",input)!="","bool rejected by union");
     input=Json::Object(); input["extra"]=true;
-    Check(TmMcp::ValidateToolInput("Union",input)!="","closed schema rejects extras");
+    Check(TmMcp::ValidateToolInput("Union",input)=="unknown parameter 'extra' (allowed: value)","closed schema rejects extras and names the allowed keys");
     auto open=Json::Object(); open["type"]="object";
     Check(TmMcp::RegisterToolSchema("Open",open,err),"open schema registers");
     Check(TmMcp::ValidateToolInput("Open",input)=="","default permits extras");

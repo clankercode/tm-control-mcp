@@ -45,6 +45,7 @@ Versions follow `info.toml` `[meta] version`.
 
 ### Changed
 
+- 2026-11-15: input validation names what is accepted: `unknown parameter 'path' (allowed: …)`, same wording as `call.py --strict` (`src/ToolInputValidation.as`).
 - 2026-11-15: `RespondDialog {action:frame-ok}` no longer clicks the first `ButtonSelection` of a frame holding several cards (server join card): with no `ButtonOk` it refuses with `AMBIGUOUS_FRAME`, clicking nothing, and lists the card ids (`output.cards`) for `ClickClassicMenuControl {id}`. frame-ok/cancel report `output.frameClosed` and warn when the frame is still up. `data.dialog.hint` (and `DIALOG_BLOCKING` hints) now use the frame: on `FrameDialogJoin` they name `ClickClassicMenuControl {id:ButtonJoin}` and `JoinServer` (`src/McpTools.as`, `src/DialogPolicy.as`).
 - 2026-11-15: unknown tool names get help: the error names the tool asked for (only when it is name-shaped; logs still get a placeholder), `suggestions` lists up to 5 real tools (built-in and pack) by case, shared words (Reload→Control) and edit distance, and the hint says the list is the `catalog` route (`python3 tools/call.py catalog`), not a tool. `call.py` prints the suggestions on stderr (`src/ToolNameSuggest.as`, `src/ToolCalls.as`, `tools/call.py`).
 - Request traces record sizes only; raw arguments/responses are never logged. Metadata lines are bounded to 512 characters plus marker.
