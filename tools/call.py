@@ -758,6 +758,11 @@ def main() -> int:
     if args.route_or_tool in {"RespondDialog", "OpenMapInEditor", "PlayMap",
                               "BackToMainMenu", "ControlValidation", "EditNewMap"}:
         call_timeout = max(call_timeout, 30.0)
+    # Map switches unwind to the menu before returning (editor quiesce up to
+    # 5s, then up to 30s while loading) and test starts wait for the playground.
+    if args.route_or_tool in {"OpenMapInEditor", "PlayMap", "BackToMainMenu",
+                              "ControlValidation", "EditNewMap"}:
+        call_timeout = max(call_timeout, 60.0)
     if args.route_or_tool == "WaitUntil" and isinstance(input_data, dict):
         # Plugin default is 20s when timeoutMs is omitted.
         wait_ms = input_data["timeoutMs"] if "timeoutMs" in input_data else int(DEFAULT_WAIT_TIMEOUT_SECONDS * 1000)

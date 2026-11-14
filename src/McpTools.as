@@ -1143,6 +1143,8 @@ namespace TmMcp {
         if (ToolRequiresEditorPlusPlus(name) && !IsEditorPlusPlusAvailable()) {
             return EditorPlusPlusMissingError();
         }
+        auto dialogRefusal = RefuseWhileDialogBlocks(name, input);
+        if (dialogRefusal !is null) return dialogRefusal;
         if (name == "GetMode") return GetMode(input);
         if (name == "OpenMapInEditor") return OpenMapInEditor(input);
         if (name == "PlayMap") return PlayMap(input);
@@ -1596,9 +1598,25 @@ namespace TmMcp {
         return RequestShutdownGame();
     }
 
-    Json::Value@ BackToMainMenu(Json::Value &in input) {
+    bool _DialogBlocksNow() {
+        auto d = BasicDialogSummary();
+        return d.HasKey("blocking") && bool(d["blocking"]);
+    }
+
+    // Main menu proper: no editor or playground, not loading, menus module on
+    // the switcher stack. The save prompt keeps the editor alive, so it can
+    // never look like "menu reached".
+    bool _AtMainMenu() {
+        return DetectGameModeName() == "Menu" && MenuModuleAvailable();
+    }
+
+    // Leave the editor/race for the main menu and wait for the outcome:
+    // "menu", "dialog" (one needing an answer came up, usually the
+    // unsaved-changes prompt, which can appear frames after the request) or
+    // "timeout". Never answers a dialog.
+    string _UnwindToMenu(Json::Value &inout output, bool closeInGameMenu = false) {
         auto app = cast<CGameManiaPlanet>(GetApp());
-        if (app is null) return MakeError("app not available", "UNKNOWN", true);
+        if (app is null) return "timeout";
         uint readyWaitedMs = 0;
         bool editorWasReady = true;
         auto editor = cast<CGameCtnEditorFree>(app.Editor);
@@ -1614,36 +1632,97 @@ namespace TmMcp {
             }
             @editor = null;
         }
-        app.BackToMainMenu();
-        uint menuWaitedMs = 0;
-        bool reachedMenu = false;
-        bool blockedByDialog = false;
-        uint64 t1 = Time::Now;
-        while (menuWaitedMs < 10000) {
-            if (_LeaveDialogIsUp()) {
-                blockedByDialog = true;
-                break;
-            }
-            if (app.Switcher.ModuleStack.Length > 0
-                && cast<CTrackManiaMenus>(app.Switcher.ModuleStack[app.Switcher.ModuleStack.Length - 1]) !is null) {
-                reachedMenu = true;
-                break;
-            }
-            yield();
-            menuWaitedMs = uint(Time::Now - t1);
+        if (closeInGameMenu
+            && app.Network !is null
+            && app.Network.PlaygroundClientScriptAPI !is null
+            && app.Network.PlaygroundClientScriptAPI.IsInGameMenuDisplayed
+            && app.Network.PlaygroundInterfaceScriptHandler !is null) {
+            app.Network.PlaygroundInterfaceScriptHandler.CloseInGameMenu(
+                CGameScriptHandlerPlaygroundInterface::EInGameMenuResult::Quit);
         }
-        Json::Value output = Json::Object();
+        app.BackToMainMenu();
+        // 10s idle; time on a loading screen is not charged (cap 30s).
+        string outcome = "timeout";
+        uint64 t1 = Time::Now;
+        uint64 last = t1;
+        uint charged = 0;
+        while (charged < 10000 && Time::Now - t1 < 30000) {
+            if (_DialogBlocksNow()) { outcome = "dialog"; break; }
+            if (_AtMainMenu()) { outcome = "menu"; break; }
+            yield();
+            uint64 now = Time::Now;
+            if (!IsLoadingLike(cast<CTrackMania>(app))) charged += uint(now - last);
+            last = now;
+        }
         output["editorWasReady"] = editorWasReady;
         output["readyWaitedMs"] = int(readyWaitedMs);
-        output["menuWaitedMs"] = int(menuWaitedMs);
-        output["reachedMenu"] = reachedMenu;
-        output["blockedByDialog"] = blockedByDialog;
-        if (blockedByDialog) {
-            output["note"] = "BackToMainMenu() stalled on a dialog (typically unsaved changes).";
-        } else if (!reachedMenu) {
-            output["note"] = "BackToMainMenu() issued but menu module not on top after 10s; poll GetMode manually.";
+        output["menuWaitedMs"] = int(Time::Now - t1);
+        output["reachedMenu"] = outcome == "menu";
+        output["blockedByDialog"] = outcome == "dialog";
+        return outcome;
+    }
+
+    // Shared preflight for EditNewMap / OpenMapInEditor / PlayMap. Leave the
+    // current map synchronously, before anything is queued, so a save prompt
+    // is reported instead of a request waiting behind it (a new-map request
+    // made from a dirty editor broke EditNewMap for the rest of the game run,
+    // 2026-11-15). DispatchTool has already refused if a dialog was up.
+    // Returns null at the main menu, else the error result to return.
+    Json::Value@ _PrepareModuleChange(const string &in tool, bool closeInGameMenu = false) {
+        if (_AtMainMenu()) return null;
+        Json::Value unwind = Json::Object();
+        string outcome = _UnwindToMenu(unwind, closeInGameMenu);
+        if (outcome == "menu") return null;
+        unwind["started"] = false;
+        unwind["unwind"] = outcome;
+        unwind["dialog"] = BasicDialogSummary();
+        Json::Value@ err;
+        if (outcome == "dialog") {
+            string kind = string(unwind["dialog"]["dialogKind"]);
+            @err = MakeError(tool + " stopped before acting: leaving the current map raised a dialog ("
+                + kind + "), usually the unsaved-changes prompt. Nothing was queued; the dialog is still up.",
+                "DIALOG_BLOCKING", false, "",
+                DialogNextCallHint(kind) + " Answering it finishes the return to the menu; then call " + tool + " again.");
         } else {
-            output["note"] = "BackToMainMenu() complete; menu module on top of stack.";
+            @err = MakeError(tool + " stopped before acting: the game did not reach the main menu.",
+                "UNWIND_TIMEOUT", true, "Menu", "Poll GetMode until it returns Menu, then call " + tool + " again.");
+        }
+        err["output"] = unwind;
+        return err;
+    }
+
+    // DispatchTool: refuse map/module changes and test starts while a dialog
+    // needs an answer, before the tool does anything (DialogPolicy.as).
+    Json::Value@ RefuseWhileDialogBlocks(const string &in name, Json::Value &in input) {
+        string action = input.HasKey("action") && input["action"].GetType() == Json::Type::String
+            ? string(input["action"]) : "";
+        if (!ToolNeedsDialogClear(name, action)) return null;
+        auto dialog = BasicDialogSummary();
+        if (!dialog.HasKey("blocking") || !bool(dialog["blocking"])) return null;
+        string kind = string(dialog["dialogKind"]);
+        string frame = dialog.HasKey("frameIdName") ? string(dialog["frameIdName"])
+            : (dialog.HasKey("menuFrameIdName") ? string(dialog["menuFrameIdName"]) : "");
+        auto err = MakeError(name + " refused: a game dialog is up (" + kind
+            + (frame.Length > 0 ? ", frame " + frame : "") + "). Nothing was done.",
+            "DIALOG_BLOCKING", false, "", DialogNextCallHint(kind) + " Then call " + name + " again.");
+        Json::Value output = Json::Object();
+        output["started"] = false;
+        output["dialog"] = dialog;
+        err["output"] = output;
+        return err;
+    }
+
+    Json::Value@ BackToMainMenu(Json::Value &in input) {
+        auto app = cast<CGameManiaPlanet>(GetApp());
+        if (app is null) return MakeError("app not available", "UNKNOWN", true);
+        Json::Value output = Json::Object();
+        string outcome = _UnwindToMenu(output);
+        if (outcome == "dialog") {
+            output["note"] = "BackToMainMenu() stalled on a dialog (typically unsaved changes). Answer it; the game then finishes returning to the menu.";
+        } else if (outcome != "menu") {
+            output["note"] = "BackToMainMenu() issued but the main menu was not reached (10s idle); poll GetMode manually.";
+        } else {
+            output["note"] = "BackToMainMenu() complete; at the main menu.";
         }
         _AttachLeaveDialogWarning(output);
         return MakeSuccess(output);
@@ -1938,6 +2017,8 @@ namespace TmMcp {
         if (input.HasKey("sizeY")) mapSize.y = uint(int(input["sizeY"]));
         if (input.HasKey("sizeZ")) mapSize.z = uint(int(input["sizeZ"]));
         string sizeStr = mapSize.x + "x" + mapSize.y + "x" + mapSize.z;
+        auto pre = _PrepareModuleChange("EditNewMap");
+        if (pre !is null) return pre;
         startnew(function(ref@ ctx) {
             auto args = cast<array<string>>(ctx);
             auto p = args[5].Split("x");
@@ -2067,6 +2148,8 @@ namespace TmMcp {
         string path = string(input["path"]);
         if (path.Length == 0) return MakeError("path is empty");
         if (!Permissions::OpenAdvancedMapEditor()) return MakeError("advanced map editor permission unavailable");
+        auto pre = _PrepareModuleChange("OpenMapInEditor");
+        if (pre !is null) return pre;
 
         auto spec = Json::Object();
         spec["path"] = path;
@@ -2151,6 +2234,8 @@ namespace TmMcp {
             error["output"] = rejected;
             return error;
         }
+        auto pre = _PrepareModuleChange("PlayMap", true);
+        if (pre !is null) return pre;
 
         Json::Value spec = Json::Object();
         spec["path"] = path;
