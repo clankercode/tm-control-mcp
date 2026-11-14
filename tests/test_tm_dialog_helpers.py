@@ -88,11 +88,21 @@ def test_only_identified_confirmation_is_cancelled_and_verified(helpers, monkeyp
     assert all(kwargs["timeout"] == 20 for _, kwargs in calls)
 
 
+@pytest.mark.parametrize("kind", ["none", "askYesNo"])
+def test_confirmation_is_identified_with_old_and_new_kind(helpers, monkeypatch, kind):
+    # Older bridges report the AskYesNo frame with dialogKind none.
+    guard, _ = helpers
+    assert guard.dialog_state(dialog("FrameAskYesNo", kind=kind, blocking=True)) == "confirm"
+
+
 @pytest.mark.parametrize("state", [
     dialog("FrameDialogSaveAs"), dialog(kind="message"), dialog(kind="wait"),
     dialog("UnexpectedFrame"),
     dialog(activeMenus=[{"frameIdName": "FrameAskYesNo"}]),
     dialog(activeMenus=[{"frameIdName": "FrameDialogEditorChallengeCard"}]),
+    dialog("FrameDialogSaveAs", kind="saveAs"), dialog("UnexpectedFrame", kind="frameDialog"),
+    dialog(kind="menuDialog", menuFrameIdName="FrameDialogEditorChallengeCard",
+           activeMenus=[{"frameIdName": "FrameDialogEditorChallengeCard"}]),
 ])
 def test_unrelated_dialogs_are_blocked_without_cancelling(helpers, monkeypatch, state, capsys):
     guard, _ = helpers

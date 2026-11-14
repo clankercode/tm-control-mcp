@@ -508,6 +508,19 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
+    // First modal-looking frame on app.ActiveMenus ("" when none). Ordinary
+    // menu pages are not dialogs.
+    string _ModalMenuFrameName(CTrackMania@ app) {
+        if (app is null) return "";
+        for (uint i = 0; i < app.ActiveMenus.Length; i++) {
+            auto menu = app.ActiveMenus[i];
+            if (menu is null || menu.CurrentFrame is null) continue;
+            string id = menu.CurrentFrame.IdName;
+            if (IsModalDialogFrameName(id)) return id;
+        }
+        return "";
+    }
+
     Json::Value BasicDialogSummary() {
         auto app = cast<CTrackMania>(GetApp());
         Json::Value output = Json::Object();
@@ -518,10 +531,15 @@ namespace TmMcp {
 
         auto bd = app.BasicDialogs;
         auto frame = bd.Dialogs is null ? null : bd.Dialogs.CurrentFrame;
+        string menuFrame = _ModalMenuFrameName(app);
+        // dialog is the raw BasicDialogs enum; dialogKind also covers the
+        // AskYesNo/SaveAs frames the enum reports as None (DialogPolicy.as).
+        string kind = ClassifyDialogKind(int(bd.Dialog), frame is null ? "" : string(frame.IdName), menuFrame);
         output["available"] = true;
         output["dialog"] = int(bd.Dialog);
-        output["dialogKind"] = bd.Dialog == CGameDialogs::EDialog::None ? "none"
-            : (bd.Dialog == CGameDialogs::EDialog::Message ? "message" : "wait");
+        output["dialogKind"] = kind;
+        output["blocking"] = DialogKindBlocks(kind);
+        if (menuFrame.Length > 0) output["menuFrameIdName"] = menuFrame;
         output["hasFrame"] = frame !is null;
         if (frame !is null) {
             output["frameIdName"] = frame.IdName;

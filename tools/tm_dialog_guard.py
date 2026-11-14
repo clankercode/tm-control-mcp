@@ -18,6 +18,9 @@ import time
 
 CALL = [sys.executable, str(Path(__file__).resolve().with_name("call.py"))]
 DEFAULT_CALL_TIMEOUT = 20.0
+# Older bridges report only none/message/wait (AskYesNo shows as none plus a
+# frame); newer ones classify frames too (src/DialogPolicy.as).
+DIALOG_KINDS = ("none", "message", "wait", "askYesNo", "saveAs", "frameDialog", "menuDialog")
 
 
 class HelperError(RuntimeError):
@@ -65,7 +68,7 @@ def dialog_state(output):
         raise HelperError("dialog state unavailable")
     has_frame = output.get("hasFrame")
     kind = output.get("dialogKind")
-    if type(has_frame) is not bool or kind not in ("none", "message", "wait"):
+    if type(has_frame) is not bool or kind not in DIALOG_KINDS:
         raise HelperError("malformed dialog state")
     frame = output.get("frameIdName", "")
     if not isinstance(frame, str) or (has_frame and not frame) or (not has_frame and frame):

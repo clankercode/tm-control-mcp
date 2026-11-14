@@ -144,8 +144,7 @@ namespace TmMcp {
         o["waitLooksLikeLm"] = waitLm;
         auto app = GetApp();
         if (app !is null && app.BasicDialogs !is null) {
-            o["dialogKind"] = app.BasicDialogs.Dialog == CGameDialogs::EDialog::WaitMessage ? "wait"
-                : (app.BasicDialogs.Dialog == CGameDialogs::EDialog::Message ? "message" : "none");
+            o["dialogKind"] = string(BasicDialogSummary()["dialogKind"]);
             o["waitText"] = string(app.BasicDialogs.WaitMessage_LabelText);
             o["waitProgress"] = app.BasicDialogs.WaitMessage_Progress;
         } else {
