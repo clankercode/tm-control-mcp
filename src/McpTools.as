@@ -1292,7 +1292,7 @@ namespace TmMcp {
         if (name == "ScanKinematicItems") return ScanKinematicItems(input);
         Json::Value@ packResult = DispatchPackTool(name, input);
         if (packResult !is null) return packResult;
-        return MakeError("unknown tool: " + name, "unknown_tool", false, "", "");
+        return UnknownToolError(name);
     }
 
     // Tool-list cache. GetToolList() rebuilt ~90 tool schemas (a Json::Parse

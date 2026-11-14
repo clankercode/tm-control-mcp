@@ -45,6 +45,7 @@ Versions follow `info.toml` `[meta] version`.
 
 ### Changed
 
+- 2026-11-15: unknown tool names get help: the error names the tool asked for (only when it is name-shaped; logs still get a placeholder), `suggestions` lists up to 5 real tools (built-in and pack) by case, shared words (Reload→Control) and edit distance, and the hint says the list is the `catalog` route (`python3 tools/call.py catalog`), not a tool. `call.py` prints the suggestions on stderr (`src/ToolNameSuggest.as`, `src/ToolCalls.as`, `tools/call.py`).
 - Request traces record sizes only; raw arguments/responses are never logged. Metadata lines are bounded to 512 characters plus marker.
 
 - `GetMode` and `GetServerInfo` now include `curGameModeStr` from `app.Network.ServerInfo` (`TM_PlayMap_Local`, hotseat, matchmaking, …). Empty when ServerInfo is null (typical outside a map).

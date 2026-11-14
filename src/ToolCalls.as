@@ -99,12 +99,30 @@ namespace TmMcp {
         // shared_exports and a genuine reload creates a fresh instance.
     }
 
+    // Names the closest real tools (ToolNameSuggest.as). The caller's own name is
+    // echoed back only when it is name-shaped; it never reaches a log sink.
+    Json::Value@ UnknownToolError(const string &in name) {
+        bool echo = IsEchoableToolName(name);
+        auto suggestions = SuggestToolNames(name, g_schemaToolNames);
+        string message = echo ? "unknown tool '" + name + "'" : "unknown tool";
+        auto list = Json::Array();
+        for (uint i = 0; i < suggestions.Length; i++) {
+            message += (i == 0 ? "; did you mean " : ", ") + suggestions[i];
+            list.Add(suggestions[i]);
+        }
+        if (suggestions.Length > 0) message += "?";
+        auto err = MakeError(message, "unknown_tool", false, "", UNKNOWN_TOOL_HINT);
+        if (echo) err["tool"] = name;
+        err["suggestions"] = list;
+        return err;
+    }
+
     Json::Value@ ValidateToolCallName(const string &in name) {
         if (FindSchema(name) >= 0 || IsToolName(name)) return null;
         // Never interpolate an unrecognized caller-controlled name into either
-        // sink or the diagnostic result. It may contain secrets or newlines.
+        // log sink. It may contain secrets or newlines.
         ToolCallEvent("tool rejected <unknown> unknown_tool");
-        return MakeError("unknown tool", "unknown_tool");
+        return UnknownToolError(name);
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {

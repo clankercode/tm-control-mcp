@@ -13,7 +13,7 @@ namespace TmMcp {
     // the result in g_PendingRequests. Returns {request_id, status:"pending"}.
     Json::Value@ DispatchAsync(const string &in toolName, Json::Value@ input) {
         if (!IsToolName(toolName)) {
-            return MakeError("unknown tool: " + toolName, "unknown_tool", false, "", "");
+            return UnknownToolError(toolName);
         }
         if (input is null) {
             @input = Json::Object();

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import csv
+import difflib
 import json
 import os
 from pathlib import Path
@@ -725,6 +726,7 @@ def main() -> int:
             try:
                 schema, err = preflight_schema(args.host, args.port, args.timeout,
                                                args.refresh_schemas, args.route_or_tool, input_data)
+                known = [] if schema is not None else list(load_schemas(args.host, args.port, args.timeout, False))
             except (ConnectionRefusedError, TimeoutError, socket.timeout, OSError, RuntimeError, json.JSONDecodeError) as exc:
                 return socket_failure(
                     f"Could not load tool schemas from {args.host}:{args.port}: {exc}",
@@ -734,7 +736,8 @@ def main() -> int:
                 print_json_error(
                     f"unknown tool '{args.route_or_tool}' (not in fetched schema list)",
                     args.pretty,
-                    hint="Run with --refresh-schemas if you recently added a tool, or check 'python3 tools/call.py tools' for the current list.",
+                    suggestions=difflib.get_close_matches(args.route_or_tool, known, n=5, cutoff=0.6),
+                    hint="Run with --refresh-schemas if you recently added a tool. List names with 'python3 tools/call.py catalog' (data.tools[].name).",
                 )
                 return 8
             if err:
@@ -844,6 +847,9 @@ def main() -> int:
                     if hint:
                         bits.append(f"hint={hint}")
                     print("[tm-control-mcp] " + " ".join(bits), file=sys.stderr)
+                suggestions = result.get("suggestions")
+                if isinstance(suggestions, list) and suggestions:
+                    print("[tm-control-mcp] did you mean: " + ", ".join(map(str, suggestions)), file=sys.stderr)
         notice = dialog_notice(response)
         if notice:
             print(notice, file=sys.stderr)
