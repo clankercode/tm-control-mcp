@@ -1451,7 +1451,7 @@ namespace TmMcp {
         tools.Add(MakeTool("SetMoodTimeOfDay", "Set CGameCtnEditorFree.MoodTimeOfDay01 (0..1). Optional dynamic sets MoodIsDynamicTime. Returns previous+new timeOfDay01/timeOfDayStr. Change time of day before a second ComputeShadows — the game refuses a rebake when shadows are already cached for that mood.", '{"type":"object","properties":{"timeOfDay01":{"type":"number"},"dynamic":{"type":"boolean"}},"required":["timeOfDay01"],"additionalProperties":false}'));
         tools.Add(MakeTool("ComputeShadows", "Start editor.PluginMapType.ComputeShadows1 (does not wait; use WaitUntil condition=shadowsClear). quality is CGameEditorPluginMap::EShadowsQuality name or 0..5 (default Default). bustCache (default true) zeros CHmsLightMapCache.m_Quality so a bake actually starts.", '{"type":"object","properties":{"quality":{"type":["string","integer"]},"bustCache":{"type":"boolean"}},"additionalProperties":false}'));
 
-        tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx. Response includes dialogPre and a warning when a dialog was up (the save may have been blocked; TM has several dialog systems, so check GetDialog first).", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx. Fails with DIALOG_BLOCKING (saved:false, dialog left up) when the game answers the save with a prompt, e.g. a map holding an item it will not embed. Response includes dialogPre and a warning when a dialog was already up (the save may have been blocked).", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("SaveMapFlow", "Drive the whole save-dialog chain in one call: answers 'save changes?' (yes, or no when save=false), fills + validates the SaveAs dialog (optional name), answers the overwrite confirm per overwrite (default false -> cancel), waits through WaitMessage, and dismisses the post-save challenge card (dismissCard default true). Returns a step log, final dialog state, and map name/file. Use after OpenMapInEditor warns about a save prompt, or standalone.", '{"type":"object","properties":{"name":{"type":"string"},"save":{"type":"boolean"},"overwrite":{"type":"boolean"},"dismissCard":{"type":"boolean"},"maxIters":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("UndoRedo", "Undo or redo editor actions (CGameEditorPluginMapMapType Undo/Redo). action: undo (default) | redo; count: repeat N times (default 1).", '{"type":"object","properties":{"action":{"type":"string"},"count":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetDialog", "Inspect Trackmania's current dialog state across the dialog systems: BasicDialogs (kind/frame), SaveAs frame filename, menu modals, and editor interface frames (where e.g. the 'map saved' temp message lives). dialogKind: askYesNo|saveAs|message|wait|frameDialog|menuDialog|none; blocking=true when it needs an answer. dialog is the raw BasicDialogs enum (None for AskYesNo/SaveAs). Every socket response also carries a compact data.dialog; see guide 'dialogs'.", '{"type":"object","properties":{},"additionalProperties":false}'));
@@ -2349,6 +2349,35 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
             editor.PluginMapType.SaveMap(wstring(fileName));
         } catch {
             return MakeError("SaveMap failed: " + getExceptionInfo());
+        }
+
+        // The game can answer a save with a prompt instead of saving (seen: a yes/no prompt when
+        // the map holds an item it will not embed). Give it a moment; a dialog that was not up
+        // before and needs an answer means nothing is known to be saved.
+        bool wasBlocking = dialogPre.HasKey("blocking") && bool(dialogPre["blocking"]);
+        Json::Value dialogPost = BasicDialogSummary();
+        uint64 saveT0 = Time::Now;
+        while (Time::Now - saveT0 < 1500) {
+            dialogPost = BasicDialogSummary();
+            bool blockingNow = dialogPost.HasKey("blocking") && bool(dialogPost["blocking"]);
+            string kindNow = string(dialogPost["dialogKind"]);
+            if (blockingNow && kindNow != "wait") break;
+            if (!blockingNow && kindNow != "wait" && Time::Now - saveT0 >= 300) break;
+            yield();
+        }
+        if (!wasBlocking && dialogPost.HasKey("blocking") && bool(dialogPost["blocking"])
+                && string(dialogPost["dialogKind"]) != "wait") {
+            string kind = string(dialogPost["dialogKind"]);
+            auto err = MakeError("SaveMapAs: the game answered the save with a dialog (" + kind
+                + "); the map is not known to be saved. The dialog is still up.",
+                "DIALOG_BLOCKING", false, "Editor", DialogNextCallHint(kind) + " Then check the file and save again.");
+            Json::Value eo = Json::Object();
+            eo["saved"] = false;
+            eo["fileName"] = fileName;
+            eo["dialogPre"] = dialogPre;
+            eo["dialog"] = dialogPost;
+            err["output"] = eo;
+            return err;
         }
 
         Json::Value output = Json::Object();
