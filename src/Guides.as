@@ -293,6 +293,12 @@ namespace TmMcp {
             + "Other answers: RespondDialog {action:ok} (message), {action:frame-ok} (menu modal),"
             + " WaitUntil {condition:dialogClear} (wait). Full detail: GetDialog.\n"
             + "\n"
+            + "Classic menu cards (app.ActiveMenus; GetMenuFrameTree {menuIndex} lists the ids):"
+            + " ClickClassicMenuControl {id} clicks one. Server join card (FrameDialogJoin):"
+            + " {id:ButtonJoin}, {id:ButtonSpectator} or {id:ButtonCancel}; JoinServer {link} opens"
+            + " and confirms one in a single call. frame-ok refuses a frame of several cards with no"
+            + " ButtonOk (AMBIGUOUS_FRAME, nothing clicked); frame-ok/cancel report output.frameClosed.\n"
+            + "\n"
             + "ControlValidation testFromStart/testFromCoord wait for the playground (waitMs,"
             + " default 10000) and fail with PLAYGROUND_NOT_STARTED if it never starts. Seen in"
             + " the stock game: one tool-driven test start per map load; reload the map to test again.\n"
@@ -453,6 +459,21 @@ namespace TmMcp {
             + "- Old builtin names (PlaceBlockViaEditorPlusPlus, named-macroblock suite, tags,\n"
             + "  inventory control, ControlEditMode, ControlItemEditor, ...) return a\n"
             + "  moved_to_pack error with the pack id in hint.\n");
+
+        _RegisterGuide("plugins",
+            "Reloading plugins and finding tool names",
+            "Reload a plugin: ControlPlugin {action:reload, id}. There is no ReloadPlugin tool."
+            + " That includes RemoteBuild when its own reloads are stuck:"
+            + " ControlPlugin {action:reload, id:RemoteBuild}. Reloading tm-control-mcp itself drops"
+            + " the socket until it is back (poll the status route).\n"
+            + "ControlPlugin {action:load, id} loads Plugins/<id>/ or <id>.op from disk (unloading it"
+            + " first if loaded); {action:getLogs, id} tails Openplanet.log for compile errors."
+            + " Disabling or unloading tm-control-mcp itself is refused.\n"
+            + "\n"
+            + "Tool names: the list is a socket route, not a tool: {\"route\":\"catalog\"}"
+            + " (python3 tools/call.py catalog; names at data.tools[].name). Pack tools are"
+            + " packId.Name (ListToolPacks). Names are case-sensitive; an unknown name answers"
+            + " unknown_tool with suggestions, the closest real names.");
     }
 
     Json::Value@ ListGuides(Json::Value &in input) {

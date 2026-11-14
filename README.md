@@ -202,6 +202,10 @@ python3 tools/call.py SetPluginSetting '{"varName":"S_TmMcpEnableSocket","value"
 `ControlPlugin` refuses **disable/unload/rebuild of itself** so agents cannot brick the
 control channel by accident. `reload` of self is allowed but drops the socket.
 
+There is no `ReloadPlugin` tool. Reload any plugin with
+`ControlPlugin {"action":"reload","id":"<plugin id>"}`; that includes RemoteBuild
+itself when its own reloads are stuck (`{"action":"reload","id":"RemoteBuild"}`).
+
 `load` is RemoteBuild-compatible: pass `{action:"load", id:"my-plugin"}` to load
 `Plugins/my-plugin/` (or `my-plugin.op`). If that plugin is already loaded it is
 unloaded then loaded from disk (required for `.op` archives — Openplanet locks
@@ -222,8 +226,14 @@ One JSON object per connection, newline-terminated. Response is one JSON object 
 **List tools**
 
 ```json
-{"route":"tools"}
+{"route":"catalog"}
 ```
+
+`{"route":"tools"}` is the older bare list. Listing is a route, not a tool:
+`python3 tools/call.py catalog` (names at `data.tools[].name`); `call.py ListTools`
+is an unknown tool. An unknown tool name answers `code:"unknown_tool"` with
+`suggestions` (the closest real names, built-in and pack) and a hint;
+`call.py` prints them on stderr.
 
 **Call a tool**
 
@@ -339,7 +349,7 @@ python3 tools/call.py EditNewMap '{"environment":"Stadium","decoration":"48x48Da
 ## Current tools (104 release / 111 DEV)
 
 Ground truth: every `MakeTool("…")` registration in `src/McpTools.as`.
-Prefer `{"route":"tools"}` at runtime if this list drifts.
+Prefer `{"route":"catalog"}` at runtime if this list drifts.
 
 ### Mode / map / dialogs
 
@@ -380,7 +390,10 @@ checklist: [`docs/dialogs.md`](docs/dialogs.md); in game: `GetGuide {topic:dialo
 | `ControlMapObjectives` | Get/set race objectives: `nbClones`, `nbLaps`, `isLapRace` (E++). |
 | `SaveMapAs` | Save under user Maps (`name`+`folder` or `fileName`; `overwrite`). |
 | `GetDialog` | Full dialog state: `dialogKind`, `blocking`, frames, menu modals. |
-| `RespondDialog` | Respond: `yes`, `no`, `cancel`, `ok`, `validate`, `hide`, … |
+| `RespondDialog` | Respond: `yes`, `no`, `cancel`, `ok`, `validate`, `hide`, `frame-ok`, `frame-cancel`, … `frame-ok` refuses (`AMBIGUOUS_FRAME`, nothing clicked) a menu frame of several cards with no `ButtonOk`, e.g. the server join card; frame-ok/cancel report `output.frameClosed`. |
+| `GetMenuFrameTree` | Control tree of a classic engine menu frame (`app.ActiveMenus[menuIndex]`: map-saved card, server join card); the ids `ClickClassicMenuControl` takes. |
+| `ClickClassicMenuControl` | Click a control or card on a classic menu frame by id, e.g. `{id:"ButtonJoin"}` on `FrameDialogJoin` (`ButtonSpectator`, `ButtonCancel`). Not for ManiaLink pages. |
+| `JoinServer` | From the main menu: open a `#join=host:password:port` link (or `#spectate=`), confirm the server card, wait for the playground (`JOIN_FAILED` on timeout). |
 
 ### Readiness / agent provenance / assert
 
@@ -509,7 +522,7 @@ Only registered when the plugin is built with `defines = ["DEV"]`
 | `ControlFids` | `Fids::` drives/get/list/preload/updateTree/extract/getFullPath/fromNod. |
 | `ListPlugins` | Loaded plugins (`query`, `includeDisabled`, `includeUnloaded`). |
 | `GetPlugin` | One plugin by id/name; `includeSettings` optional. |
-| `ControlPlugin` | enable/disable/reload/unload/load/openSettings/getLogs (no self-disable/unload/rebuild). |
+| `ControlPlugin` | enable/disable/reload/unload/load/openSettings/getLogs (no self-disable/unload/rebuild). Reload a plugin (RemoteBuild too): `{action:"reload", id}`. |
 | `ListPluginSettings` | Settings for a plugin (default: this MCP plugin). |
 | `GetPluginSetting` / `SetPluginSetting` / `ResetPluginSetting` | Typed get/set/reset. |
 | `SavePluginSettings` | Persist settings to disk. |
