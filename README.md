@@ -501,6 +501,12 @@ Menu stack is **landed**. Clicks use `CControlBase::OnAction` — **not**
 | `RunManialinkScript` | MLHook inject (`menu`/`in-map`/`in-editor`/`current`); optional `collectMs`/`resultEvent`. |
 | `ListGuides` / `GetGuide` | In-plugin documentation topics. |
 
+### Input devices / bindings
+
+| Tool | Summary |
+|------|---------|
+| `GetInputBindings` | Read-only. Every device the game sees (`devices`: `InputPort.ConnectedDevices`) and every pad (`pads`: `InputPort.Script_Pads`, with idle time and what it is pressing now), each pad with one binding row per action (`{index, action, player, display, raw}`, the Settings > Controls list for that controller), `noDevice` (the list for Device=null), and per-pad `named` race bindings for `actionIds` (default `GiveUp`, `Respawn`, `SecondaryRespawn`). `filter` matches the action name or its binding (`{"filter":"delete"}` finds every action bound to Delete); `boundOnly` drops unbound rows. The shared binding list it refills is put back (`sharedList.restored`). |
+
 ### DEV / RE diagnostics
 
 Only registered when the plugin is built with `defines = ["DEV"]`

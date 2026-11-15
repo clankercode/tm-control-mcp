@@ -41,6 +41,7 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
 - `ListPlugins`, `ControlPlugin`, `ListPluginSettings`, `SetPluginSetting`, `ListToolPacks`.
 - **Type info:** `GetTypeInfo {className}` — class + all members via Openplanet Reflection. `ownOnly` / `member` / `query` / `from=app|editor|challenge|cursor|pluginMap`. No member type names (live API limit).
 - **Fids:** `ControlFids` — `drives` / `get` / `list` / `preload` / `updateTree` / `extract` / `getFullPath` / `fromNod`. Drive `game|user|fake|resource|programData`, path drive-relative. `fromNod` takes `from_ptr` (nod pointer from `nod.ptr` or another tool), not `from=app|editor`. `updateTree` on empty game path needs `force`. `extract` writes to disk. Guide: `fids`.
+- **Input bindings:** `GetInputBindings` (read-only) lists devices, pads and each pad's bindings; `{filter:"delete"}` finds every action bound to Delete. Per-pad lists come from `InputBindings_UpdateList`, a list shared with Settings > Controls; the tool puts it back, but avoid calling it mid-rebind.
 - **Tool packs:** other plugins register via `TmMcp::ToolPackBuilder` + `RegisterToolPack`. Names are `packId.FuncName`. Optional `ToolPackBuilder("id")` / `SetPackId` sets the prefix (default = plugin id). See `docs/tool-packs.md`.
 - **Guides:** `ListGuides` / `GetGuide`.
 

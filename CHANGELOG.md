@@ -9,6 +9,7 @@ Versions follow `info.toml` `[meta] version`.
 
 ### Added
 
+- 2026-11-15: `GetInputBindings` (read-only): input devices (`InputPort.ConnectedDevices`), pads (`Script_Pads`) with live held buttons/axes, each pad's per-action bindings via `InputBindings_UpdateList(All, pad)` (as Settings > Controls), the Device=null list, and per-pad `GetActionBinding(pad, "Vehicle", id)` for GiveUp/Respawn/SecondaryRespawn; puts back the shared binding list it refills (`src/InputBindings.as`, `src/InputBindingsPolicy.as`).
 - 2026-11-15: classic (engine `CGameMenuFrame`) menu tools: `ClickClassicMenuControl {id}` clicks a named control or card on `app.ActiveMenus`, and `JoinServer {link}` opens a `#join=` link, confirms the server card and waits for the playground (`src/ClassicMenus.as`). `RespondDialog frame-ok` picks the first `ButtonSelection`, which on the join card is a map row, not Join.
 - 2026-11-15: `SaveMapAs` fails with `DIALOG_BLOCKING` (`saved:false`, dialog left up) when the game answers the save with a prompt instead of saving; it used to report success (`src/McpTools.as`).
 - 2026-11-15: every socket response has compact `data.dialog`; `dialogKind` no longer says `none` for the save prompt (`askYesNo`, `saveAs`, `menuDialog`, …, plus `blocking`); map switches and test starts refuse behind a dialog (`DIALOG_BLOCKING`) and stop on the save prompt instead of queueing; EditNewMap can no longer leave its decoration swap behind (the "EditNewMap does nothing until restart" bug); `testFrom*` fail with `PLAYGROUND_NOT_STARTED`. See `docs/dialogs.md`.

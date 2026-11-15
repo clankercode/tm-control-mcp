@@ -1118,6 +1118,7 @@ namespace TmMcp {
             || name == "GetRaceData"
             || name == "GetPlayers"
             || name == "GetServerInfo"
+            || name == "GetInputBindings"
             || name == "GetVehicleState"
             || name == "ListVehicleVis"
             || name == "GetVehicleVis"
@@ -1275,6 +1276,7 @@ namespace TmMcp {
         if (name == "GetRaceData") return GetRaceData(input);
         if (name == "GetPlayers") return GetPlayers(input);
         if (name == "GetServerInfo") return GetServerInfo(input);
+        if (name == "GetInputBindings") return GetInputBindings(input);
         if (name == "GetVehicleState") return GetVehicleState(input);
         if (name == "ListVehicleVis") return ListVehicleVis(input);
         if (name == "GetVehicleVis") return GetVehicleVis(input);
@@ -1541,6 +1543,7 @@ namespace TmMcp {
         tools.Add(MakeTool("GetRaceData", "Get live race data via MLFeed::GetRaceData_V4. Requires an active playground (Race mode). Returns map name, CP count, lap count, and sorted players.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetPlayers", "Get live player data via MLFeed::GetRaceData_V4. Richer than GetRaceData: includes login, currentLap, teamNum, isMVP, respawnRank. Requires Race mode.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetServerInfo", "Get current server connection info from CTrackManiaNetwork. Returns serverName, connected, playerCount, maxPlayers, curGameModeStr.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetInputBindings", "Read-only: the input devices the game sees and every pad's bindings. devices = app.InputPort.ConnectedDevices (class, instance/model name, disabled/unplugged flags). pads = app.InputPort.Script_Pads (type Keyboard/Mouse/Generic/XBox/PlayStation, modelName, idleMs, buttons held and axes off-centre now), each with bindings: one row per action {index, action, player, display, raw} from InputBindings_UpdateList(All, pad), the list Settings > Controls shows for that controller; noDevice is the same list for Device=null. named: per-pad GetActionBinding(pad, actionMap, id) for actionIds (default GiveUp, Respawn, SecondaryRespawn; actionMap default Vehicle), the binding the race UI shows; needs a playground or the main menu. filter: case-insensitive substring of the action name or its binding ('delete' finds every action bound to Delete). boundOnly drops unbound rows. Changes no binding or setting; the shared InputBindings_* list it refills (also read by Settings > Controls and other plugins) is put back and re-read; sharedList.restored says so.", '{"type":"object","properties":{"filter":{"type":"string"},"boundOnly":{"type":"boolean"},"actionMap":{"type":"string"},"actionIds":{"type":"array","items":{"type":"string"},"maxItems":32}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetVehicleState", "VehicleState:: viewing dump: GetViewingPlayer + ViewingPlayerState plus RPM/sideSpeed/turbo/reactor/cruise/vehicleType/wheel dirt+falling. Needs Race/replay vis.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("ListVehicleVis", "VehicleState::GetAllVis — all vehicle vis in GameScene. limit default 32.", '{"type":"object","properties":{"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetVehicleVis", "VehicleState::GetSingularVis, GetVisFromId (entityId), or GetVis(player) via name/login.", '{"type":"object","properties":{"entityId":{"type":"integer"},"name":{"type":"string"},"login":{"type":"string"}},"additionalProperties":false}'));
