@@ -507,6 +507,12 @@ Menu stack is **landed**. Clicks use `CControlBase::OnAction` — **not**
 |------|---------|
 | `GetInputBindings` | Read-only. Every device the game sees (`devices`: `InputPort.ConnectedDevices`) and every pad (`pads`: `InputPort.Script_Pads`, with idle time and what it is pressing now), each pad with one binding row per action (`{index, action, player, display, raw}`, the Settings > Controls list for that controller), `noDevice` (the list for Device=null), and per-pad `named` race bindings for `actionIds` (default `GiveUp`, `Respawn`, `SecondaryRespawn`). `filter` matches the action name or its binding (`{"filter":"delete"}` finds every action bound to Delete); `boundOnly` drops unbound rows. The shared binding list it refills is put back (`sharedList.restored`). |
 
+### MwIds
+
+| Tool | Summary |
+|------|---------|
+| `ResolveMwIds` | MwId values to names and names to values, in batches. `values` (ints, `-1`, or `"0x..."`) → `{value, hex, tag, defined, name, table, slot, problem}`; a tag-01 (`0x40000000`) id is named only after its intern slot is read and found occupied, since `GetName()` on an unknown one can crash the game. `internIndex` ORs `0x40000000` into bare `table<<16\|slot` indexes. `names` → `{value, hex, tag, existed}` by a read-only intern-table lookup, checked against the live tables first (`lookup.verified`); `register:true` uses `MwId.SetName` instead, which **adds** missing names to the game's id table and reports `registered`. DEV builds: `ptr` (+`offset`/`offsets`, `count`, `stride`) reads u32 ids from memory and names them (`read`). |
+
 ### DEV / RE diagnostics
 
 Only registered when the plugin is built with `defines = ["DEV"]`
