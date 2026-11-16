@@ -72,3 +72,36 @@ void RunTests() {
 ''')
     result = subprocess.run([str(as_runner), str(case)], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_rebind_only_when_the_wanted_endpoint_changes(as_runner, tmp_path):
+    """2026-11-17: comparing bound with wanted re-listened every loop pass whenever they differ for
+    the listener's whole life (a port.override, or a fallback port because the wanted one was busy)."""
+    case = tmp_path / "rebind.as"
+    case.write_text('''
+void RunTests() {
+    string h = "127.0.0.1";
+    Check(!TmMcp::ShouldRebindListener(false, "", h, 0, 30006), "not listening: nothing to rebind");
+    Check(!TmMcp::ShouldRebindListener(true, h, h, 30006, 30006), "plain setting, unchanged");
+    Check(!TmMcp::ShouldRebindListener(true, h, h, 30400, 30400), "override bound and still wanted");
+    Check(!TmMcp::ShouldRebindListener(true, h, h, 30400, 30400), "bound a fallback (30401) while 30400 is still wanted");
+    Check(TmMcp::ShouldRebindListener(true, h, h, 30006, 30400), "setting or override changed");
+    Check(TmMcp::ShouldRebindListener(true, h, h, 30400, 30006), "override removed");
+    Check(TmMcp::ShouldRebindListener(true, h, "0.0.0.0", 30006, 30006), "host changed");
+}
+''')
+    result = subprocess.run([str(as_runner), str(ROOT / "src/ServerPolicy.as"), str(case)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_listener_loop_never_compares_bound_port_with_wanted_port():
+    text = (ROOT / "src/Server.as").read_text()
+    loop = text[text.index("void ServerLoop("):text.index("int TmMcpResolveWantedPort(")]
+    assert "ShouldRebindListener(g_listening, g_boundHost, S_TmMcpHost, g_wantedPortAtBind, TmMcpWantedPort())" in loop
+    assert "g_boundPort !=" not in loop and "g_boundPort ==" not in loop
+    listen = text[text.index("bool EnsureListening("):]
+    bound = listen[listen.index("g_boundPort = boundPort;"):]
+    assert bound.index("g_wantedPortAtBind = wantPort;") < bound.index("trace(")
+    close = text[text.index("void CloseListener("):text.index("void CloseListener(") + 400]
+    assert "g_wantedPortAtBind = 0;" in close
+

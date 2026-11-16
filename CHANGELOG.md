@@ -60,6 +60,10 @@ Versions follow `info.toml` `[meta] version`.
 - `GetMode` (and `GetMenuPage` / `GetReadiness` / `WaitUntil` mode) now reports specific editor kinds: `MapEditor`, `ItemEditor`, `MediatrackerEditor`, `MeshEditor`, `SkinEditor`, `ModuleEditor`. In-editor drive states are `MapEditor_Validate`, `MapEditor_Test`, `MapEditor_Playground` (not `Race`). `WaitUntil equals=Editor` matches any editor; `equals=MapEditor` matches `MapEditor` and `MapEditor_*`. Unknown editor classes still return `Editor`.
 - `GetToolList()` now caches the built tool array and rebuilds only when a pack is registered, unregistered, or swept. Callers (e.g. tm-agent's chat UI) were paying ~1–2 ms per call to re-parse ~90 schemas every frame.
 
+### Fixed
+
+- 2026-11-17: socket listener no longer closes and re-listens on every loop pass when the bound port differs from the wanted one for the listener's whole life: a `PluginStorage/tm-control-mcp/port.override` (bound 30400 against the default setting 30006 gave about 30 ms churn and reset every client connection), or a fallback port taken because the wanted one was busy. The loop now rebinds only when the wanted host or port changes since bind time (`ShouldRebindListener` in `ServerPolicy.as`, tested in stock AngelScript).
+
 ## [0.4.0] — 2026-08-16
 
 ### Changed

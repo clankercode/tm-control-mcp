@@ -18,6 +18,7 @@ namespace TmMcp {
     const uint CLIENT_READ_TIMEOUT_MS = 10000;
     const uint CLIENT_MAX_REQUEST_BYTES = 16 * 1024 * 1024;
     const uint CLIENT_READ_CHUNK_BYTES = 1024;
+    const int PORT_FALLBACK_SPAN = 100;
 
     Net::Socket@ g_socket = null;
     bool g_running = false;
@@ -26,6 +27,8 @@ namespace TmMcp {
     uint g_activeClients = 0;
     string g_boundHost = "";
     int g_boundPort = 0;
+    int g_portOverride = 0;
+    int g_wantedPortAtBind = 0;  // what was asked for when g_boundPort was bound (may differ: fallback)
     awaitable@ g_serverWorker;
     awaitable@ g_serverSupervisor;
     string g_serverWorkerError = "";
@@ -56,6 +59,7 @@ namespace TmMcp {
         g_listening = false;
         g_boundHost = "";
         g_boundPort = 0;
+        g_wantedPortAtBind = 0;
         if (g_socket !is null) {
             try {
                 g_socket.Close();
@@ -121,7 +125,7 @@ namespace TmMcp {
                 continue;
             }
 
-            if (g_listening && (g_boundHost != S_TmMcpHost || g_boundPort != S_TmMcpPort)) {
+            if (ShouldRebindListener(g_listening, g_boundHost, S_TmMcpHost, g_wantedPortAtBind, TmMcpWantedPort())) {
                 trace("TM Control MCP host/port changed; rebinding listener");
                 CloseListener();
             }
@@ -155,6 +159,38 @@ namespace TmMcp {
         CloseListener();
     }
 
+    // Per-instance port override for multibox hosts (tmc writes
+    // PluginStorage/tm-control-mcp/port.override per game prefix).
+    // Returns the setting port when no valid override file exists.
+    int TmMcpResolveWantedPort() {
+        g_portOverride = 0;
+        string path = IO::FromStorageFolder("port.override");
+        if (!IO::FileExists(path)) return S_TmMcpPort;
+        try {
+            IO::File f(path, IO::FileMode::Read);
+            string raw = f.ReadToEnd().Trim();
+            f.Close();
+            if (raw.Length == 0) return S_TmMcpPort;
+            int parsed = Text::ParseInt(raw);
+            if (parsed >= 1 && parsed <= 65535 - PORT_FALLBACK_SPAN) {
+                g_portOverride = parsed;
+                trace("TM Control MCP port.override -> " + parsed);
+                return parsed;
+            }
+            error("TM Control MCP ignoring invalid port.override '" + raw + "'");
+        } catch {
+            error("TM Control MCP failed reading port.override: " + getExceptionInfo());
+        }
+        return S_TmMcpPort;
+    }
+
+    // Wanted port = valid override (cached when EnsureListening last read
+    // port.override) else the setting. The loop asks ShouldRebindListener
+    // (ServerPolicy.as) whether this differs from what was wanted at bind time.
+    int TmMcpWantedPort() {
+        return g_portOverride != 0 ? g_portOverride : S_TmMcpPort;
+    }
+
     bool EnsureListening() {
         if (g_listening && g_socket !is null) return true;
 
@@ -176,33 +212,54 @@ namespace TmMcp {
             S_TmMcpHost = "127.0.0.1";
             return false;
         }
-        if (S_TmMcpPort < 1 || S_TmMcpPort > 65535) {
-            error("TM Control MCP refusing invalid port " + S_TmMcpPort);
+        int wantPort = TmMcpResolveWantedPort();
+        if (wantPort < 1 || wantPort > 65535 - PORT_FALLBACK_SPAN) {
+            error("TM Control MCP refusing invalid port " + wantPort);
             return false;
         }
 
         int prevPort = g_boundPort;
-        trace("TM Control MCP attempting listen on 127.0.0.1:" + S_TmMcpPort);
+        trace("TM Control MCP attempting listen on 127.0.0.1:" + wantPort);
         bool ok = false;
-        try {
-            ok = g_socket.Listen("127.0.0.1", uint16(S_TmMcpPort));
-        } catch {
-            error("TM Control MCP listen exception on 127.0.0.1:" + S_TmMcpPort + ": " + getExceptionInfo());
+        int boundPort = 0;
+        for (int attempt = 0; attempt < PORT_FALLBACK_SPAN; attempt++) {
+            int tryPort = wantPort + attempt;
+            try {
+                ok = g_socket.Listen("127.0.0.1", uint16(tryPort));
+            } catch {
+                error("TM Control MCP listen exception on 127.0.0.1:" + tryPort + ": " + getExceptionInfo());
+                try { g_socket.Close(); } catch {}
+                @g_socket = null;
+                g_listening = false;
+                return false;
+            }
+            if (ok) {
+                boundPort = tryPort;
+                break;
+            }
+            trace("TM Control MCP port " + tryPort + " busy; trying next (fallback " + (attempt + 1) + "/" + (PORT_FALLBACK_SPAN - 1) + ")");
             try { g_socket.Close(); } catch {}
-            @g_socket = null;
-            g_listening = false;
-            return false;
+            @g_socket = Net::Socket();
+            if (g_socket is null) {
+                error("TM Control MCP: failed to recreate socket after busy port " + tryPort);
+                g_listening = false;
+                return false;
+            }
         }
-        g_listening = ok;
+        g_listening = ok && boundPort != 0;
         if (g_listening) {
             g_boundHost = "127.0.0.1";
-            g_boundPort = S_TmMcpPort;
-            if (prevPort != 0 && prevPort != S_TmMcpPort) {
-                print("TM Control MCP socket port changed " + prevPort + " -> " + S_TmMcpPort);
+            g_boundPort = boundPort;
+            g_wantedPortAtBind = wantPort;
+            if (prevPort != 0 && prevPort != g_boundPort) {
+                print("TM Control MCP socket port changed " + prevPort + " -> " + g_boundPort);
             }
-            trace("TM Control MCP listening on 127.0.0.1:" + S_TmMcpPort);
+            if (g_boundPort != wantPort) {
+                print("TM Control MCP wanted port " + wantPort + " busy; bound fallback 127.0.0.1:" + g_boundPort);
+            }
+            trace("TM Control MCP listening on 127.0.0.1:" + g_boundPort);
         } else {
-            error("TM Control MCP failed to listen on 127.0.0.1:" + S_TmMcpPort);
+            error("TM Control MCP failed to listen on 127.0.0.1:" + wantPort + " (+" + (PORT_FALLBACK_SPAN - 1) + " fallbacks)");
             try { g_socket.Close(); } catch {}
             @g_socket = null;
         }
@@ -247,6 +304,7 @@ namespace TmMcp {
         o["port"] = S_TmMcpPort;
         o["boundHost"] = g_boundHost;
         o["boundPort"] = g_boundPort;
+        if (g_portOverride != 0) o["portOverride"] = g_portOverride;
         o["activeClients"] = int(g_activeClients);
         o["workerRunning"] = g_serverWorker !is null && g_serverWorker.IsRunning();
         o["supervisorRunning"] = g_serverSupervisor !is null && g_serverSupervisor.IsRunning();
