@@ -348,6 +348,10 @@ namespace TmMcp {
                 if (string(nowSnap["kind"]) != kind) break;
             }
         }
+        // Settle: the router push after a confirm (RequestRestart ->
+        // /press-start) lands a few frames after the popup closes, and a
+        // snapshot taken in between would call menuReached prematurely.
+        for (int i = 0; i < 5; i++) yield();
         auto after = BuildBlockingScreenSnapshot();
         output["after"] = after;
         output["waitedMs"] = int(Time::Now - t0);
