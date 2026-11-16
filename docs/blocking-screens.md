@@ -101,13 +101,15 @@ just starts the connection immediately.
   `trackmania-pop-up-multi-choice_button-first-choice` (label "Ok" once the
   script runs; `\x92Play offline` etc. on PressStart buttons).
 - Post-change tool transcripts: see `docs/` in the lease repo
-  (`~/src/tm-ci-lease/docs/`) — `blocking-screens-validation.md`.
+  (`~/src/tm-ci-lease/docs/`) — `blocking-screens-lab-2026-11-17.md`.
 
 ## Open / follow-ups
 
-- `connection-failed` dismissal ("Play offline") validated by driving the
-  game's own pages (see validation note); an organic disconnect during a
-  lease remains the ideal end-to-end confirmation.
+- `connection-failed` dismissal ("Play offline") is the one action not
+  exercised live: the state needs a genuinely failed connect and the session
+  was healthy. Its detection shares the machinery validated above, and the
+  button subtree was read live while hidden. An organic disconnect during a
+  lease completes the matrix (plan in the lease-repo note).
 - Fallbacks when tm-control-mcp is down are out of scope here (lease-side
   concern; see the lease repo notes).
 - `ubi-connect` / `welcome-back` kinds share the PressStart machinery but
