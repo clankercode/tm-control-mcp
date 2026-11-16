@@ -255,7 +255,8 @@ namespace TmMcp {
             + " ~333ms is the 30fps cap, ~3000ms is a hitch.\n"
             + "conditions: mode (+equals), dialogClear, editorReady, pageVisible (+page),"
             + " shadowsClear (LM bake done), calculatingShadows (+equals true|false),"
-            + " mapItems/mapBlocks (+op eq|gte|lte, count), readiness (+want).\n"
+            + " mapItems/mapBlocks (+op eq|gte|lte, count), readiness (+want),"
+            + " menuReached (no blocking screen, mode Menu), blockingScreen (+equals kind).\n"
             + "timeoutMs is the idle budget (default 20000). Once a loading screen"
             + " (WaitMessage / LoadProgress) is up, the clock pauses and the wait"
             + " continues until the map finishes — big maps can take many minutes"
@@ -305,6 +306,37 @@ namespace TmMcp {
             + "EditNewMap returns output.status (requested/opened); EDITNEWMAP_FAILED means no map"
             + " was requested. 'standard decoration fid holds ...' means an earlier swap was not"
             + " undone: restart the game.");
+
+        _RegisterGuide("blocking-screens",
+            "Full-page blocking screens: GetBlockingScreen + DismissBlockingScreen",
+            "Two TM2020 menu screens stall menu-only agents and are invisible to GetDialog"
+            + " (ManiaLink pages, not BasicDialogs): the disconnection flow"
+            + " (Page_ConnectionError pop-up -> Confirm -> Page_PressStart -> 'Play offline' /"
+            + " 'Retry' / 'Quit game') and the PressStart start prompt (waits for input while"
+            + " online-services maintenance is planned; auto-connects otherwise).\n"
+            + "\n"
+            + "GetBlockingScreen reports kind start-screen|connecting|connection-failed|"
+            + "connection-error|ubi-connect|welcome-back|none, error/status text, and visible"
+            + " buttons with the action each maps to. Detection is page name + control id +"
+            + " EFFECTIVE visibility (button .Visible stays true under a hidden parent frame -"
+            + " never trust a leaf alone). Labels are set by the page script and are reported,"
+            + " not matched.\n"
+            + "\n"
+            + "DismissBlockingScreen {action} clicks the safe button via the game's own"
+            + " CControlBase::OnAction dispatch (nav-zone leaf for expendable buttons):"
+            + " start (button-start-click), confirm (connection-error pop-up), play-offline,"
+            + " retry, later. auto takes the suggested action per kind; never clicks Quit game."
+            + " waitMs waits for the screen state to change and reports after + menuReached.\n"
+            + "\n"
+            + "Lease loop: poll GetBlockingScreen (or GetReadiness want=menu, which now reports"
+            + " 'blocking screen: <kind>' as a blocking reason); when needsAction, call"
+            + " DismissBlockingScreen {action:auto}; after connection-error it lands on"
+            + " PressStart again - dismiss that too (auto handles each state); then"
+            + " WaitUntil {condition:menuReached}.\n"
+            + "\n"
+            + "Reached via normal menu tools too: SetMenuPage '/press-start' or"
+            + " '/connection-error' reproduce the pages for testing (the pages Nadeo's own"
+            + " disconnect detector pushes).");
 
         _RegisterGuide("agent-cleanup",
             "Provenance tags for safe multi-step cleanup",

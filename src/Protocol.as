@@ -10,6 +10,7 @@ namespace TmMcp {
             || name == "SaveMapAs"
             || name == "SaveMapFlow"
             || name == "RespondDialog"
+            || name == "DismissBlockingScreen"
             || name == "ControlValidation"
 #if DEV
             || name == "TriggerEditorControl"

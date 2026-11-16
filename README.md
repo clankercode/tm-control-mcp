@@ -93,7 +93,7 @@ Pointer peeks, safe memory reads, gizmo/fuzz helpers, macroblock header dumps �
 `.op` packages omit these tools from the registry.
 
 **Ground truth tool list:** `{"route":"tools"}` at runtime, or every
-`MakeTool("…")` in `src/McpTools.as` (**104 tools** (release; +7 DEV-only) at last count).
+`MakeTool("…")` in `src/McpTools.as` (**106 tools** (release; +7 DEV-only) at last count).
 
 ---
 
@@ -341,12 +341,13 @@ python3 tools/call.py EditNewMap '{"environment":"Stadium","decoration":"48x48Da
 2. Tag placements; clean with `RemoveByTag` instead of blind clear.
 3. Prefer E++ free placement and named macroblocks over one-by-one grid place.
 4. After menu nav: wait for `pageVisible` / mode change.
+5. **Leased / menu-only runs:** poll `GetBlockingScreen`; when `needsAction`, `DismissBlockingScreen {"action":"auto"}` (repeat — the disconnect flow lands on PressStart again), then `WaitUntil {"condition":"menuReached"}`.
 5. Stadium maps: empty `decoration=""` can trap the vista prompt — use a real deco or omit.
 6. Do not depend on old disabled library plugins (`mcp-tm` / `tm-mcptm`).
 
 ---
 
-## Current tools (104 release / 111 DEV)
+## Current tools (106 release / 113 DEV)
 
 Ground truth: every `MakeTool("…")` registration in `src/McpTools.as`.
 Prefer `{"route":"catalog"}` at runtime if this list drifts.
@@ -391,6 +392,8 @@ checklist: [`docs/dialogs.md`](docs/dialogs.md); in game: `GetGuide {topic:dialo
 | `SaveMapAs` | Save under user Maps (`name`+`folder` or `fileName`; `overwrite`). |
 | `GetDialog` | Full dialog state: `dialogKind`, `blocking`, frames, menu modals. |
 | `RespondDialog` | Respond: `yes`, `no`, `cancel`, `ok`, `validate`, `hide`, `frame-ok`, `frame-cancel`, … `frame-ok` refuses (`AMBIGUOUS_FRAME`, nothing clicked) a menu frame of several cards with no `ButtonOk`, e.g. the server join card; frame-ok/cancel report `output.frameClosed`. |
+| `GetBlockingScreen` | Detect the full-page menu screens `GetDialog` cannot see (ManiaLink pages): `kind` start-screen\|connecting\|connection-failed\|connection-error\|ubi-connect\|welcome-back\|none, error/status text, visible buttons with the `action` each maps to. `blocking` / `needsAction` / `suggestedAction`. |
+| `DismissBlockingScreen` | Click the safe button of a blocking screen through the game's own click dispatch. `action` auto\|start\|confirm\|play-offline\|retry\|later (explicit must fit the kind, `WRONG_KIND`); `waitMs` waits for the state to change and reports `after` + `menuReached`. Never clicks Quit game. |
 | `GetMenuFrameTree` | Control tree of a classic engine menu frame (`app.ActiveMenus[menuIndex]`: map-saved card, server join card); the ids `ClickClassicMenuControl` takes. |
 | `ClickClassicMenuControl` | Click a control or card on a classic menu frame by id, e.g. `{id:"ButtonJoin"}` on `FrameDialogJoin` (`ButtonSpectator`, `ButtonCancel`). Not for ManiaLink pages. |
 | `JoinServer` | From the main menu: open a `#join=host:password:port` link (or `#spectate=`), confirm the server card, wait for the playground (`JOIN_FAILED` on timeout). |
@@ -399,8 +402,8 @@ checklist: [`docs/dialogs.md`](docs/dialogs.md); in game: `GetGuide {topic:dialo
 
 | Tool | Summary |
 |------|---------|
-| `GetReadiness` | Composite preflight (`want=editor\|menu\|any\|race`). |
-| `WaitUntil` | Poll mode/dialog/editorReady/pageVisible/map counts/readiness/shadowsClear (`timedOut` on budget). |
+| `GetReadiness` | Composite preflight (`want=editor\|menu\|any\|race`). `menu`/`any` also report a blocking screen (`Page_PressStart` / `Page_ConnectionError`) as a blocking reason; `checks.menuBlockingScreen` names the kind. |
+| `WaitUntil` | Poll mode/dialog/editorReady/pageVisible/map counts/readiness/shadowsClear/menuReached/blockingScreen (`timedOut` on budget). |
 | `GetLightmapComputeState` | Whether the editor is computing shadows / lightmap. |
 | `SetAgentTag` | Default provenance tag for subsequent `Place*` calls (empty clears). |
 | `ListTagged` | List tracked tagged placements (`prefix` / `tag:` prefix). |
