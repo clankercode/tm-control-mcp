@@ -412,10 +412,52 @@ def wait_until_ready(host: str, port: int, timeout: float, want: str, budget_s: 
     )
 
 
-def openplanet_log_path() -> Path:
+PROC_ROOT = Path("/proc")
+
+
+def _listener_wine_prefix(port: int, proc_root: Path) -> str:
+    """WINEPREFIX of the local process listening on TCP `port` (Linux /proc), or ''."""
+    inodes = set()
+    for name in ("tcp", "tcp6"):
+        try:
+            rows = (proc_root / "net" / name).read_text().splitlines()[1:]
+        except OSError:
+            continue
+        for row in rows:
+            cols = row.split()
+            if len(cols) > 9 and cols[3] == "0A" and cols[1].rsplit(":", 1)[-1].upper() == f"{port:04X}":
+                inodes.add(f"socket:[{cols[9]}]")
+    if not inodes:
+        return ""
+    for pid_dir in proc_root.iterdir() if proc_root.is_dir() else ():
+        if not pid_dir.name.isdigit():
+            continue
+        try:
+            if not any(os.readlink(fd) in inodes for fd in (pid_dir / "fd").iterdir()):
+                continue
+            environ = (pid_dir / "environ").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        for item in environ:
+            if item.startswith(b"WINEPREFIX="):
+                return item[len(b"WINEPREFIX="):].decode(errors="replace")
+        return ""
+    return ""
+
+
+def openplanet_log_path(port: int | None = None, proc_root: Path | None = None) -> Path:
     configured = os.environ.get("TM_OPENPLANET_LOG")
     if configured:
         return Path(configured).expanduser()
+    # Multibox hosts run several games, each in its own Wine prefix; ~/OpenplanetNext
+    # belongs to at most one of them (on x-boss it is an NFS mount of another host's).
+    # Read the log of the game actually listening on the port we called.
+    if port:
+        prefix = _listener_wine_prefix(port, proc_root or PROC_ROOT)
+        if prefix:
+            own = Path(prefix) / "drive_c" / "users" / "steamuser" / "OpenplanetNext" / "Openplanet.log"
+            if own.is_file():
+                return own
     return Path.home() / "OpenplanetNext" / "Openplanet.log"
 
 
@@ -449,10 +491,10 @@ def line_looks_like_compile_fail(line: str) -> bool:
     )
 
 
-def collect_host_plugin_logs(plugin_id: str, max_lines: int = 80, compile_only: bool = True) -> dict:
+def collect_host_plugin_logs(plugin_id: str, max_lines: int = 80, compile_only: bool = True, port: int | None = None) -> dict:
     """RemoteBuild-style: read Openplanet.log from the host (game holds an exclusive lock)."""
-    path = openplanet_log_path()
-    report: dict = {"logPathBase": "Openplanet.log", "source": "host"}
+    path = openplanet_log_path(port)
+    report: dict = {"logPathBase": "Openplanet.log", "source": "host", "logPath": str(path)}
     if not path.is_file():
         report["error"] = f"Openplanet.log not found: {path}"
         report["lines"] = []
@@ -572,7 +614,7 @@ def _clamp_max_lines(value: object, default: int = 80) -> int:
     return max(1, min(400, n))
 
 
-def enrich_control_plugin_logs(response: dict, tool: str, input_data: object) -> None:
+def enrich_control_plugin_logs(response: dict, tool: str, input_data: object, port: int | None = None) -> None:
     """Fill compile/getLogs from the host log when the in-game reader is locked out."""
     if tool != "ControlPlugin" or not isinstance(response, dict) or not isinstance(input_data, dict):
         return
@@ -612,13 +654,13 @@ def enrich_control_plugin_logs(response: dict, tool: str, input_data: object) ->
             compile_only = input_data.get("compileOnly", True)
             if not isinstance(compile_only, bool):
                 compile_only = True
-            host = collect_host_plugin_logs(plugin_id, max_lines=max_lines, compile_only=compile_only)
+            host = collect_host_plugin_logs(plugin_id, max_lines=max_lines, compile_only=compile_only, port=port)
             output["log"] = host
             output["logSource"] = "host"
     elif action in {"load", "reload"}:
         compile_blob = output.get("compile")
         if needs_host(compile_blob):
-            host = collect_host_plugin_logs(plugin_id, max_lines=40, compile_only=True)
+            host = collect_host_plugin_logs(plugin_id, max_lines=40, compile_only=True, port=port)
             output["compile"] = host
             output["compileSource"] = "host"
 
@@ -830,7 +872,7 @@ def main() -> int:
         attach_screenshot_path(response, find_new_screenshot(screenshot_before, screenshot_ext, args.timeout))
 
     if args.route_or_tool not in {"status", "tools", "catalog", "recover"}:
-        enrich_control_plugin_logs(response, args.route_or_tool, input_data)
+        enrich_control_plugin_logs(response, args.route_or_tool, input_data, port=args.port)
 
     # Surface structured tool errors on stderr lightly when present
     if isinstance(response, dict):

@@ -7,6 +7,10 @@ Versions follow `info.toml` `[meta] version`.
 
 ## [Unreleased]
 
+### Fixed
+
+- 2026-11-17: `tools/call.py` host-log fallback for `ControlPlugin` load/reload/getLogs now reads the `Openplanet.log` of the game listening on `--port` (its wineserver's `WINEPREFIX`), not `~/OpenplanetNext`; on multibox hosts (x-boss, where `~/OpenplanetNext` is an NFS mount of xsm's) it returned another game's stale lines. `TM_OPENPLANET_LOG` still wins; reports now include `logPath`.
+
 ### Added
 
 - 2026-11-17: `GetBlockingScreen` + `DismissBlockingScreen`: detect and dismiss the two full-page menu screens that stall menu-only agents and that `GetDialog` cannot see — the disconnection flow (`Page_ConnectionError` pop-up → Confirm → `Page_PressStart` → Play offline / Retry / Quit game) and the PressStart start prompt (waits for input while online-services maintenance is planned). Detection is page name + control id + effective visibility (button `.Visible` stays true under a hidden parent frame; labels are set by the page script and only reported). Dismissal clicks through `CControlBase::OnAction` (nav-zone leaf for expendable buttons), whitelisted per action, never clicks Quit game; `waitMs` waits for the state to change and reports `after` + `menuReached`. `GetReadiness` (`menu`/`any`) now reports these screens as a blocking reason (`checks.menuBlockingScreen`); `WaitUntil` gains `menuReached` and `blockingScreen` (`docs/blocking-screens.md`, `src/BlockingScreens.as`, `src/BlockingScreensPolicy.as`).
