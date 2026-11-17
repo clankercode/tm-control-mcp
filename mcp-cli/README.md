@@ -10,11 +10,14 @@ tm-control-mcp
 # Check native status and catalog
 tm-control-mcp doctor
 
-# Streamable HTTP on loopback
+# Streamable HTTP on loopback (also serves the read-only audit endpoint)
 tm-control-mcp serve --transport http --listen 127.0.0.1:30007
 
-# HTTP plus a terminal monitor
-tm-control-mcp monitor --events-jsonl /tmp/tm-control-events.jsonl
+# Terminal monitor auditing that already-running server (no second listener)
+tm-control-mcp monitor --attach 127.0.0.1:30007
+
+# Or start an auditable HTTP server plus the monitor in one process
+tm-control-mcp monitor --serve --events-jsonl /tmp/tm-control-events.jsonl
 ```
 
 The native bridge remains the authority for tool names, descriptions, and raw
@@ -42,10 +45,11 @@ All options are command-line options so a stdio launcher can keep its config
 small:
 
 ```text
-serve --transport stdio|http | monitor | doctor
---native-host 127.0.0.1
+serve --transport stdio|http | monitor [--attach ADDR] | monitor --serve | doctor
+--attach 127.0.0.1:30007            existing server to audit (monitor default)
+--native-host 127.0.0.1             server modes (stdio, serve, monitor --serve, doctor)
 --native-port 30006
---listen 127.0.0.1:30007
+--listen 127.0.0.1:30007            serve --transport http, monitor --serve
 --poll-ms 2000
 --events-jsonl /path/to/events.jsonl
 --origin http://localhost:30007
@@ -59,15 +63,48 @@ rotates through five 10 MiB files. Payload export is explicit with
 
 ## Terminal monitor
 
-The monitor uses the same HTTP dispatcher as MCP clients. Its call history shows
+By default `monitor` **attaches** to an already-running Streamable HTTP
+listener and audits its traffic through the read-only
+`GET /monitor/snapshot` endpoint — the calls your MCP clients are actually
+making. It never starts an MCP server of its own in this mode: no listener,
+no native bridge connection, no catalog poller. Point it at a specific
+server with `--attach ADDR` (default `127.0.0.1:30007`). The attach probe
+runs before the terminal opens, so an unreachable address, a foreign
+service, or an older binary without the audit endpoint exits with the
+command that starts an auditable server instead of an empty TUI. An
+attached monitor that loses its server keeps the last snapshot (frozen
+elapsed timers), shows `RECONNECTING <address>`, and re-attaches
+automatically; if the server process was replaced rather than the connection
+merely dropping, the snapshot's instance nonce changes and the selection is
+reset instead of silently retargeting to reused invocation ids. Because
+there is nothing to keep alive without a terminal, attach mode never falls
+back to headless serving. Server-only options (`--listen`, `--native-*`, `--poll-ms`,
+`--origin`, `--events-jsonl`, `--screenshots-dir`) are rejected in attach
+mode with a pointer to `--serve`.
+
+`monitor --serve` restores the one-process behaviour: it binds
+`--listen` (default `127.0.0.1:30007`), serves MCP Streamable HTTP plus the
+same audit endpoint, and runs the terminal monitor against that dispatcher.
+`serve --transport http` exposes the identical audit endpoint, which is
+what makes it attachable. The endpoint reports an `ETag` keyed on store
+counters and serves unchanged snapshots from a cached body, so an idle
+attached monitor costs the server almost nothing; its `Origin` check is an
+exact `scheme://host:port` string match (stricter than rmcp's normalised
+matching on `/mcp`), and its `Host` check accepts only the listener's own
+spellings.
+
+In serve mode the monitor observes the same HTTP dispatcher MCP clients
+call; in attach mode it renders the attached server's dispatcher. Its call
+history shows
 tool names, outcomes and elapsed times; selecting a call opens its metadata and
 separate, syntax-colored argument/result panels. Failures have a tinted result
 panel, and a selected row keeps its own marker as well as the outcome icon.
 Long pack tool names wrap so their function suffix remains readable.
 
-`LIVE` describes the monitor's refresh mode. The displayed HTTP address is the
-actual listener; the interface does not infer native bridge health from an old
-successful call. The active filter and follow/history mode remain visible.
+`LIVE` describes the monitor's refresh mode. The displayed address is the
+actual listener (`HTTP …/mcp`) or the audited server (`ATTACHED …` /
+`RECONNECTING …`); the interface does not infer native bridge health from an
+old successful call. The active filter and follow/history mode remain visible.
 Pausing freezes the displayed events, elapsed times and snapshot counters.
 
 | Key | Action |
@@ -82,7 +119,7 @@ Pausing freezes the displayed events, elapsed times and snapshot counters.
 | `[` / `]` | Scroll the selected call's wrapped details |
 | Tab | Switch full-width calls/details in terminals narrower than 100 columns |
 | `e` | Export the selected retained, sanitized payload when `--export-dir` is configured |
-| `q`, Escape outside filtering, Ctrl-C | Quit the monitor and HTTP listener |
+| `q`, Escape outside filtering, Ctrl-C | Quit the monitor (serve mode also stops its HTTP listener; attach mode leaves the audited server running) |
 
 Filters support `tool:SummarizeMap`, `status:tool_error`, `errors`, or ordinary
 text matched against tool/method, status, connection and request identity.

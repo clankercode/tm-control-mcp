@@ -9,7 +9,7 @@ use tracing_subscriber::EnvFilter;
 
 use tm_control_mcp_cli::{
     Core, DEFAULT_HTTP_ADDR, DEFAULT_NATIVE_HOST, DEFAULT_NATIVE_PORT, McpAdapter, MonitorStore,
-    NativeTcpClient,
+    NativeTcpClient, audit,
 };
 
 mod tui;
@@ -34,6 +34,11 @@ struct Config {
     ascii: bool,
     export_dir: Option<PathBuf>,
     screenshots_dir: Option<PathBuf>,
+    /// `monitor --serve`: bind an auditable HTTP listener instead of
+    /// attaching to an existing server.
+    monitor_serve: bool,
+    /// `monitor --attach ADDR`: the existing server to audit.
+    attach_addr: Option<SocketAddr>,
 }
 
 enum ParseResult {
@@ -45,6 +50,10 @@ enum ParseResult {
 impl Config {
     fn parse() -> Result<ParseResult> {
         let args: Vec<String> = env::args().skip(1).collect();
+        Self::parse_from(args)
+    }
+
+    fn parse_from(args: Vec<String>) -> Result<ParseResult> {
         if args.len() == 1 && matches!(args[0].as_str(), "--version" | "-V") {
             return Ok(ParseResult::Version);
         }
@@ -62,6 +71,8 @@ impl Config {
             ascii: false,
             export_dir: None,
             screenshots_dir: None,
+            monitor_serve: false,
+            attach_addr: None,
         };
         let mut command: Option<String> = None;
         let mut transport: Option<String> = None;
@@ -198,6 +209,31 @@ impl Config {
                     anyhow::ensure!(!config.ascii, "--ascii may only be specified once");
                     config.ascii = true;
                 }
+                "--serve" => {
+                    anyhow::ensure!(
+                        command.as_deref() == Some("monitor"),
+                        "--serve is only valid with monitor"
+                    );
+                    anyhow::ensure!(!config.monitor_serve, "--serve may only be specified once");
+                    config.monitor_serve = true;
+                }
+                "--attach" => {
+                    anyhow::ensure!(
+                        command.as_deref() == Some("monitor"),
+                        "--attach is only valid with monitor"
+                    );
+                    anyhow::ensure!(
+                        config.attach_addr.is_none(),
+                        "--attach may only be specified once"
+                    );
+                    index += 1;
+                    config.attach_addr = Some(
+                        args.get(index)
+                            .context("--attach needs an address")?
+                            .parse()
+                            .context("invalid attach address")?,
+                    );
+                }
                 "--export-dir" => {
                     anyhow::ensure!(
                         command.as_deref() == Some("monitor"),
@@ -252,12 +288,47 @@ impl Config {
         {
             anyhow::bail!("doctor accepts native connection options only");
         }
+        if config.monitor_serve && config.attach_addr.is_some() {
+            anyhow::bail!("--serve starts a listener and --attach audits one; pick either");
+        }
+        // Validation is post-parse so flag order never changes the contract.
+        if matches!(config.mode, Mode::Monitor) && !config.monitor_serve {
+            let serving = "use `monitor --serve` to start an auditable HTTP listener";
+            anyhow::ensure!(
+                config.http_addr == DEFAULT_HTTP_ADDR.parse()?,
+                "--listen configures the monitor's own HTTP server; {serving}"
+            );
+            anyhow::ensure!(
+                config.events_jsonl.is_none(),
+                "--events-jsonl is written by the server process; {serving}"
+            );
+            anyhow::ensure!(
+                config.allowed_origins.is_empty(),
+                "--origin configures the HTTP server; {serving}"
+            );
+            anyhow::ensure!(
+                config.screenshots_dir.is_none(),
+                "--screenshots-dir configures the HTTP server; {serving}"
+            );
+            anyhow::ensure!(
+                config.native_host == DEFAULT_NATIVE_HOST,
+                "--native-host configures the server's native bridge connection; {serving}"
+            );
+            anyhow::ensure!(
+                config.native_port == DEFAULT_NATIVE_PORT,
+                "--native-port configures the server's native bridge connection; {serving}"
+            );
+            anyhow::ensure!(
+                config.poll_ms == 2000,
+                "--poll-ms configures the server's catalog poller; {serving}"
+            );
+        }
         Ok(ParseResult::Config(config))
     }
 }
 
 fn usage() -> &'static str {
-    "tm-control-mcp [--version]\n\nCommands:\n  (default)                         MCP stdio\n  serve [--transport stdio|http]   MCP stdio or loopback Streamable HTTP\n  monitor                           HTTP plus terminal telemetry monitor\n  doctor                            check native bridge status and catalog\n\nOptions:\n  --native-host HOST --native-port PORT --poll-ms MS\n  --listen ADDR --origin ORIGIN --events-jsonl PATH\n  --ascii --export-dir PATH (monitor)\n  --screenshots-dir PATH (serve/monitor)\n"
+    "tm-control-mcp [--version]\n\nCommands:\n  (default)                         MCP stdio\n  serve [--transport stdio|http]    MCP stdio or loopback Streamable HTTP\n  monitor [--attach ADDR]           terminal monitor auditing an existing\n                                    MCP HTTP server (default 127.0.0.1:30007)\n  monitor --serve [--listen ADDR]   start an auditable HTTP MCP server plus\n                                    the terminal monitor\n  doctor                            check native bridge status and catalog\n\nOptions:\n  --native-host HOST --native-port PORT --poll-ms MS (server modes)\n  --listen ADDR --origin ORIGIN --events-jsonl PATH\n      --screenshots-dir PATH (serve, monitor --serve)\n  --ascii --export-dir PATH (monitor)\n"
 }
 
 #[tokio::main]
@@ -280,33 +351,74 @@ async fn main() -> Result<()> {
         ParseResult::Config(config) => config,
     };
     let cancellation = CancellationToken::new();
-    let monitor = MonitorStore::new(config.events_jsonl.clone());
-    let backend = Arc::new(NativeTcpClient::new(
-        config.native_host.clone(),
-        config.native_port,
-    ));
-    let core = Core::new(backend, monitor.clone());
-    let adapter = McpAdapter::with_media_root(core.clone(), config.screenshots_dir.clone())?;
-    core.start_catalog_poller(
-        Duration::from_millis(config.poll_ms.max(100)),
-        cancellation.clone(),
-    );
-    let result = match config.mode {
-        Mode::Doctor => run_doctor(&core).await,
-        Mode::Stdio => run_stdio(adapter).await,
-        Mode::Http => {
-            run_http(
-                adapter,
-                config.http_addr,
-                config.allowed_origins,
-                cancellation.clone(),
-            )
-            .await
-        }
-        Mode::Monitor => run_monitor(core, adapter, config, cancellation.clone()).await,
+    let result = if matches!(config.mode, Mode::Monitor) && !config.monitor_serve {
+        // Attach mode is a pure observer: no MCP listener, no native client.
+        run_monitor_attach(&config, cancellation.clone()).await
+    } else {
+        let monitor = MonitorStore::new(config.events_jsonl.clone());
+        let backend = Arc::new(NativeTcpClient::new(
+            config.native_host.clone(),
+            config.native_port,
+        ));
+        let core = Core::new(backend, monitor.clone());
+        let adapter = McpAdapter::with_media_root(core.clone(), config.screenshots_dir.clone())?;
+        core.start_catalog_poller(
+            Duration::from_millis(config.poll_ms.max(100)),
+            cancellation.clone(),
+        );
+        let result = match config.mode {
+            Mode::Doctor => run_doctor(&core).await,
+            Mode::Stdio => run_stdio(adapter).await,
+            Mode::Http => {
+                run_http(
+                    adapter,
+                    config.http_addr,
+                    config.allowed_origins,
+                    cancellation.clone(),
+                )
+                .await
+            }
+            Mode::Monitor => run_monitor(core, adapter, config, cancellation.clone()).await,
+        };
+        monitor.shutdown(Duration::from_secs(2)).await;
+        result
     };
-    monitor.shutdown(Duration::from_secs(2)).await;
     result
+}
+
+/// Attach the terminal monitor to an already-running MCP HTTP server and
+/// audit its traffic. The process never creates an MCP listener, a native
+/// bridge client, or a catalog poller; it only reads `/monitor/snapshot`.
+async fn run_monitor_attach(config: &Config, cancellation: CancellationToken) -> Result<()> {
+    let target = config
+        .attach_addr
+        .unwrap_or_else(|| DEFAULT_HTTP_ADDR.parse().expect("default attach address"));
+    // Probe before touching the terminal so an unreachable or foreign server
+    // surfaces an actionable error instead of an empty TUI.
+    let probe = tokio::time::timeout(audit::PROBE_TIMEOUT, audit::fetch_snapshot(target))
+        .await
+        .map_err(|_| audit::FetchError::Timeout(target))
+        .and_then(|probe| probe);
+    let first = probe.map_err(|error| anyhow::anyhow!("{}", error.attach_hint(target)))?;
+    let remote = Arc::new(audit::RemoteMonitor::new());
+    remote.update(first);
+    let mut poller = audit::spawn_poller(remote.clone(), target, cancellation.clone());
+    let tui_result = tui::run_attached(
+        remote,
+        target,
+        cancellation.clone(),
+        config.ascii,
+        config.export_dir.clone(),
+    )
+    .await;
+    cancellation.cancel();
+    if tokio::time::timeout(Duration::from_secs(1), &mut poller)
+        .await
+        .is_err()
+    {
+        poller.abort();
+    }
+    tui_result
 }
 
 async fn run_doctor(core: &Arc<Core>) -> Result<()> {
@@ -354,16 +466,25 @@ fn http_router(
             address.ip().to_string(),
             format!("localhost:{}", address.port()),
         ])
-        .with_allowed_origins(origins)
+        .with_allowed_origins(origins.clone())
         .enforce_origin_validation()
         .with_legacy_session_mode(true)
         .with_json_response(true)
         .with_cancellation_token(cancellation);
+    // Every Streamable HTTP listener also serves the read-only audit
+    // endpoint `tm-control-mcp monitor` attaches to by default.
+    let audit_state = audit::AuditState::new(
+        adapter.core.monitor(),
+        audit::allowed_hosts(address),
+        origins,
+    );
     let service = rmcp::transport::streamable_http_server::StreamableHttpService::<
         McpAdapter,
         rmcp::transport::streamable_http_server::session::local::LocalSessionManager,
     >::new(move || Ok(adapter.clone()), Default::default(), config);
-    Router::new().nest_service("/mcp", service)
+    Router::new()
+        .nest_service("/mcp", service)
+        .merge(audit::audit_router(audit_state))
 }
 
 async fn serve_http(
@@ -460,9 +581,97 @@ async fn run_monitor(
 mod tests {
     use super::*;
 
+    fn parse(args: &[&str]) -> Result<Config> {
+        match Config::parse_from(args.iter().map(|arg| arg.to_string()).collect())? {
+            ParseResult::Config(config) => Ok(config),
+            ParseResult::Help | ParseResult::Version => anyhow::bail!("expected a config"),
+        }
+    }
+
     #[test]
     fn usage_names_only_supported_modes() {
         assert!(usage().contains("monitor"));
+        assert!(usage().contains("--attach"));
+        assert!(usage().contains("--serve"));
         assert!(!usage().contains("--tui"));
+    }
+
+    #[test]
+    fn monitor_defaults_to_attaching_an_existing_server() {
+        let config = parse(&["monitor"]).unwrap();
+        assert!(matches!(config.mode, Mode::Monitor));
+        assert!(!config.monitor_serve);
+        assert!(
+            config.attach_addr.is_none(),
+            "default target resolves at run time"
+        );
+        let config = parse(&["monitor", "--ascii", "--export-dir", "/tmp"]).unwrap();
+        assert!(config.ascii);
+        assert_eq!(config.export_dir, Some(PathBuf::from("/tmp")));
+    }
+
+    #[test]
+    fn monitor_serve_and_attach_parse_and_stay_mutually_exclusive() {
+        let config = parse(&["monitor", "--serve"]).unwrap();
+        assert!(config.monitor_serve);
+        let config = parse(&["monitor", "--attach", "127.0.0.1:30100"]).unwrap();
+        assert_eq!(config.attach_addr, Some("127.0.0.1:30100".parse().unwrap()));
+        let error = parse(&["monitor", "--serve", "--attach", "127.0.0.1:30007"])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("pick either"), "{error}");
+    }
+
+    #[test]
+    fn attach_mode_rejects_server_only_flags_with_a_serve_hint() {
+        for args in [
+            vec!["monitor", "--listen", "127.0.0.1:30110"],
+            vec!["monitor", "--native-host", "127.0.0.2"],
+            vec!["monitor", "--native-port", "1234"],
+            vec!["monitor", "--poll-ms", "500"],
+            vec!["monitor", "--origin", "https://example.invalid"],
+            vec!["monitor", "--events-jsonl", "/tmp/events.jsonl"],
+            vec!["monitor", "--screenshots-dir", "/tmp/Trackmania"],
+        ] {
+            let error = parse(&args).unwrap_err().to_string();
+            assert!(error.contains("--serve"), "{args:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn serve_mode_keeps_every_previous_monitor_flag() {
+        parse(&[
+            "monitor",
+            "--serve",
+            "--listen",
+            "127.0.0.1:30111",
+            "--native-port",
+            "1234",
+            "--poll-ms",
+            "500",
+            "--events-jsonl",
+            "/tmp/events.jsonl",
+            "--origin",
+            "http://localhost:30111",
+            "--ascii",
+        ])
+        .unwrap();
+        parse(&[
+            "serve",
+            "--transport",
+            "http",
+            "--listen",
+            "127.0.0.1:30112",
+        ])
+        .unwrap();
+    }
+
+    #[test]
+    fn attach_and_serve_flags_require_the_monitor_subcommand() {
+        assert!(parse(&["--attach", "127.0.0.1:30007"]).is_err());
+        assert!(parse(&["serve", "--attach", "127.0.0.1:30007"]).is_err());
+        assert!(parse(&["doctor", "--serve"]).is_err());
+        assert!(parse(&["monitor", "--attach"]).is_err());
+        assert!(parse(&["monitor", "--attach", "not-an-address"]).is_err());
     }
 }

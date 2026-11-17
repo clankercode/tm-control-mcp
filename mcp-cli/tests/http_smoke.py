@@ -56,7 +56,7 @@ def main():
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
         events = Path(temporary) / "events.jsonl"
-        process = subprocess.Popen([args.binary, "monitor", "--native-port", str(backend.server_address[1]),
+        process = subprocess.Popen([args.binary, "monitor", "--serve", "--native-port", str(backend.server_address[1]),
             "--listen", f"127.0.0.1:{port}", "--events-jsonl", str(events), "--ascii"],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         errors = []
@@ -90,6 +90,44 @@ def main():
                 status, _, listed = post(url, "tools/list", {}, version=version, session=session)
                 assert status == 200 and listed["result"]["tools"], (status, listed)
             print("PASS HTTP modern discover/list/call, both legacy sessions, Origin rejection, monitor headless fallback")
+            snapshot_url = f"http://127.0.0.1:{port}/monitor/snapshot"
+            with urllib.request.urlopen(snapshot_url, timeout=5) as response:
+                assert response.headers.get("Cache-Control") == "no-store"
+                snapshot = json.load(response)
+            assert snapshot["server"] == "tm-control-mcp", snapshot.get("server")
+            assert snapshot["instance"], snapshot
+            echoed = [row for row in snapshot["events"] if row.get("tool") == "Echo"]
+            assert echoed and any(row["status"] == "ok" and row["arguments"] for row in echoed), snapshot["events"]
+            assert snapshot["stats"]["events"] >= 1, snapshot["stats"]
+            etags = []
+            for _ in range(2):
+                with urllib.request.urlopen(snapshot_url, timeout=5) as response:
+                    etags.append(response.headers.get("ETag"))
+            assert etags[0] and etags[0] == etags[1], etags
+            for header_name, header_value in (("Origin", "https://example.invalid"), ("Host", "evil.example")):
+                request = urllib.request.Request(snapshot_url, headers={header_name: header_value})
+                try:
+                    urllib.request.urlopen(request, timeout=5)
+                    raise AssertionError(f"audit endpoint accepted {header_name}: {header_value}")
+                except urllib.error.HTTPError as error:
+                    assert error.code == 403, (header_name, error.code)
+            print("PASS audit snapshot endpoint served with Origin and Host rejection")
+            # Default monitor mode attaches to an existing server instead of binding.
+            with socket.socket() as closed:
+                closed.bind(("127.0.0.1", 0))
+                free_port = closed.getsockname()[1]
+            dead = subprocess.run([args.binary, "monitor", "--attach", f"127.0.0.1:{free_port}"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=30)
+            assert dead.returncode != 0, dead.stderr
+            assert "serve --transport http" in dead.stderr or "monitor --serve" in dead.stderr, dead.stderr
+            # Attached monitors refuse to run headless: without a terminal there
+            # is nothing to keep alive, so it must exit instead of serving.
+            tty_less = subprocess.run([args.binary, "monitor", "--attach", f"127.0.0.1:{port}"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                timeout=30, start_new_session=True)
+            assert tty_less.returncode != 0, tty_less.stderr
+            assert "terminal" in tty_less.stderr.lower(), tty_less.stderr
+            print("PASS monitor attach mode exits with guidance, never serves headless")
         finally:
             process.send_signal(signal.SIGINT)
             try:

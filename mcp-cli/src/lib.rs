@@ -34,6 +34,7 @@ pub const DEFAULT_NATIVE_PORT: u16 = 30006;
 pub const DEFAULT_HTTP_ADDR: &str = "127.0.0.1:30007";
 pub const MAX_NATIVE_FRAME: usize = 16 * 1024 * 1024;
 pub const NATIVE_TIMEOUT: Duration = Duration::from_secs(30);
+pub mod audit;
 pub mod media;
 pub mod monitor;
 pub use monitor::{CoreEvent, Event, MAX_EVENT_COPY, MAX_EVENTS, MonitorStats, MonitorStore};

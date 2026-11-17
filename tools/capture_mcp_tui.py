@@ -308,7 +308,7 @@ def capture(args, scratch):
             reservation.bind(("127.0.0.1", 0))
             port = reservation.getsockname()[1]
         client = McpClient(port)
-        command = [str(args.binary), "monitor", "--native-host", "127.0.0.1",
+        command = [str(args.binary), "monitor", "--serve", "--native-host", "127.0.0.1",
                    "--native-port", str(fixture.server_address[1]), "--listen", f"127.0.0.1:{port}",
                    "--poll-ms", "500", "--events-jsonl", str(events)]
         if args.ascii:

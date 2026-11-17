@@ -27,7 +27,7 @@ use ratatui::{
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use tm_control_mcp_cli::{Core, Event, MonitorStats};
+use tm_control_mcp_cli::{Core, Event, MonitorStats, audit::RemoteMonitor};
 
 const TICK: Duration = Duration::from_millis(100);
 const MAX_DETAILS_LINES: usize = 4096;
@@ -36,6 +36,15 @@ const MAX_DETAILS_LINES: usize = 4096;
 pub enum FilterMode {
     None,
     Input,
+}
+
+/// What the header reports about the audited traffic source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceView {
+    /// This process serves MCP HTTP at the address.
+    Serving(SocketAddr),
+    /// The monitor audits an existing server at the target.
+    Attached { target: SocketAddr, healthy: bool },
 }
 
 /// Snapshot and interaction state. Selection is reconciled by invocation id, never by ring slot.
@@ -53,12 +62,17 @@ pub struct App {
     pub status: String,
     pub status_until: Option<Instant>,
     pub stats: MonitorStats,
-    http_address: Option<SocketAddr>,
+    source: Option<SourceView>,
     filter_draft: String,
     selected_id: Option<String>,
     history_start: usize,
     snapshot_ms: u128,
     paused_ms: Option<u128>,
+    /// Frozen display time while the audited server is unreachable, so
+    /// in-flight calls from the last snapshot stop accruing elapsed time.
+    unhealthy_ms: Option<u128>,
+    /// Instance nonce of the audited server; a change restarts its id space.
+    generation: Option<String>,
     details_max_offset: usize,
     details_cache: Option<DetailsCache>,
     show_details: bool,
@@ -79,29 +93,67 @@ impl App {
             status: String::new(),
             status_until: None,
             stats: MonitorStats::default(),
-            http_address: None,
+            source: None,
             filter_draft: String::new(),
             selected_id: None,
             history_start: 0,
             snapshot_ms: tm_control_mcp_cli::monitor::now_ms(),
             paused_ms: None,
+            unhealthy_ms: None,
+            generation: None,
             details_max_offset: 0,
             details_cache: None,
             show_details: false,
         }
     }
 
-    pub fn set_http_address(&mut self, address: SocketAddr) {
-        self.http_address = Some(address);
+    pub fn set_source(&mut self, source: SourceView) {
+        self.source = Some(source);
+    }
+
+    pub fn set_attach_health(&mut self, healthy: bool) {
+        if let Some(SourceView::Attached { healthy: slot, .. }) = &mut self.source {
+            if *slot != healthy {
+                *slot = healthy;
+                self.unhealthy_ms = (!healthy).then(tm_control_mcp_cli::monitor::now_ms);
+            }
+        }
     }
 
     pub fn update(&mut self, events: Vec<Arc<Event>>, stats: MonitorStats) {
+        self.update_inner(events, stats, true);
+    }
+
+    /// Refresh from an attached server. Invocation ids are only meaningful
+    /// within one server instance, so a nonce change (restart) drops the
+    /// id-pinned selection and its details instead of silently retargeting
+    /// it to an unrelated call that reused the same id.
+    pub fn update_remote(&mut self, events: Vec<Arc<Event>>, stats: MonitorStats, instance: &str) {
+        let restarted = self
+            .generation
+            .as_deref()
+            .is_some_and(|previous| previous != instance);
+        if restarted {
+            self.selected_id = None;
+            self.details_offset = 0;
+            self.details_max_offset = 0;
+            self.details_cache = None;
+            self.notice("Audited server restarted; history replaced, selection reset");
+        }
+        self.generation = Some(instance.to_owned());
+        self.update_inner(events, stats, !restarted);
+    }
+
+    fn update_inner(&mut self, events: Vec<Arc<Event>>, stats: MonitorStats, pin: bool) {
         if self.paused {
             return;
         }
-        let previous = self
-            .selected_event()
-            .map(|event| event.invocation_id.clone());
+        let previous = if pin {
+            self.selected_event()
+                .map(|event| event.invocation_id.clone())
+        } else {
+            None
+        };
         self.events = events;
         self.stats = stats;
         self.snapshot_ms = tm_control_mcp_cli::monitor::now_ms();
@@ -142,8 +194,7 @@ impl App {
         self.selected = if self.follow && self.filter_mode != FilterMode::Input {
             visible.len().saturating_sub(1)
         } else {
-            previous_position
-                .unwrap_or_else(|| self.selected.min(visible.len().saturating_sub(1)))
+            previous_position.unwrap_or_else(|| self.selected.min(visible.len().saturating_sub(1)))
         };
         self.sync_selection(&visible);
         // Announce refresh-driven identity changes, without notices for follow or draft edits.
@@ -156,7 +207,9 @@ impl App {
                 };
                 self.notice(format!(
                     "Selected {id} {reason}; now {}",
-                    self.selected_id.as_deref().unwrap_or("no matching invocation")
+                    self.selected_id
+                        .as_deref()
+                        .unwrap_or("no matching invocation")
                 ));
             }
         }
@@ -179,6 +232,8 @@ impl App {
     fn display_ms(&self) -> u128 {
         if self.paused {
             self.paused_ms.unwrap_or(self.snapshot_ms)
+        } else if let Some(frozen) = self.unhealthy_ms {
+            frozen
         } else {
             tm_control_mcp_cli::monitor::now_ms()
         }
@@ -211,7 +266,8 @@ impl App {
                         .styled_graphemes(Style::default())
                         .last()
                         .map_or(0, |grapheme| grapheme.symbol.len());
-                    self.filter_draft.truncate(self.filter_draft.len().saturating_sub(last_bytes));
+                    self.filter_draft
+                        .truncate(self.filter_draft.len().saturating_sub(last_bytes));
                 }
                 KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.filter_draft.push(ch);
@@ -328,6 +384,14 @@ pub enum Action {
     Quit,
 }
 
+/// Where the draw loop sources snapshots from: this process's dispatcher or a
+/// polled remote audit stream.
+#[derive(Clone)]
+pub enum Feed {
+    Local(Arc<Core>),
+    Remote(Arc<RemoteMonitor>),
+}
+
 pub async fn run(
     core: Arc<Core>,
     cancellation: CancellationToken,
@@ -335,34 +399,87 @@ pub async fn run(
     export_dir: Option<PathBuf>,
     http_address: SocketAddr,
 ) -> Result<()> {
+    run_with_feed(
+        Feed::Local(core),
+        SourceView::Serving(http_address),
+        cancellation,
+        ascii,
+        export_dir,
+    )
+    .await
+}
+
+/// Audit an existing MCP HTTP server; the terminal renders polled snapshots.
+pub async fn run_attached(
+    remote: Arc<RemoteMonitor>,
+    target: SocketAddr,
+    cancellation: CancellationToken,
+    ascii: bool,
+    export_dir: Option<PathBuf>,
+) -> Result<()> {
+    run_with_feed(
+        Feed::Remote(remote),
+        SourceView::Attached {
+            target,
+            healthy: true,
+        },
+        cancellation,
+        ascii,
+        export_dir,
+    )
+    .await
+}
+
+async fn run_with_feed(
+    feed: Feed,
+    source: SourceView,
+    cancellation: CancellationToken,
+    ascii: bool,
+    export_dir: Option<PathBuf>,
+) -> Result<()> {
     let terminal = TerminalGuard::enter().context("enter terminal monitor")?;
     let result = tokio::task::spawn_blocking(move || {
-        draw_loop(
-            core,
-            cancellation.clone(),
-            terminal,
-            ascii,
-            export_dir,
-            http_address,
-        )
+        draw_loop(feed, source, cancellation, terminal, ascii, export_dir)
     })
     .await?;
     result
 }
 
 fn draw_loop(
-    core: Arc<Core>,
+    feed: Feed,
+    source: SourceView,
     cancellation: CancellationToken,
     mut terminal: TerminalGuard,
     ascii: bool,
     export_dir: Option<PathBuf>,
-    http_address: SocketAddr,
 ) -> Result<()> {
     let mut app = App::new(ascii, export_dir);
-    app.set_http_address(http_address);
+    app.set_source(source);
+    let mut attach_healthy = matches!(source, SourceView::Attached { healthy: true, .. });
     loop {
-        if !app.paused {
-            app.update(core.monitor().snapshot_shared(), core.monitor().stats());
+        match &feed {
+            Feed::Local(core) => {
+                if !app.paused {
+                    app.update(core.monitor().snapshot_shared(), core.monitor().stats());
+                }
+            }
+            Feed::Remote(remote) => {
+                // Stream health is live connection state, not part of the
+                // frozen snapshot: it must update even while paused.
+                let observed = remote.snapshot();
+                if observed.healthy != attach_healthy {
+                    attach_healthy = observed.healthy;
+                    app.set_attach_health(observed.healthy);
+                    if observed.healthy {
+                        app.notice("Audit stream reconnected");
+                    } else if let Some(error) = &observed.error {
+                        app.notice(format!("Audit stream lost ({error}); retrying"));
+                    }
+                }
+                if !app.paused {
+                    app.update_remote(observed.events, observed.stats, &observed.instance);
+                }
+            }
         }
         terminal
             .draw(|frame| render(frame, &mut app))
@@ -649,10 +766,20 @@ fn mode_line(app: &App) -> Line<'static> {
     ])
 }
 
-fn endpoint(app: &App) -> String {
-    app.http_address
-        .map(|address| format!("HTTP {address}/mcp"))
-        .unwrap_or_else(|| "HTTP address not supplied".into())
+fn endpoint_line(app: &App) -> Line<'static> {
+    match app.source {
+        Some(SourceView::Serving(address)) => {
+            Line::styled(format!("HTTP {address}/mcp"), fg(theme::MUTED))
+        }
+        Some(SourceView::Attached { target, healthy }) => {
+            if healthy {
+                Line::styled(format!("ATTACHED {target}"), fg(theme::MUTED))
+            } else {
+                Line::styled(format!("RECONNECTING {target}"), fg(theme::AMBER))
+            }
+        }
+        None => Line::styled("HTTP address not supplied", fg(theme::MUTED)),
+    }
 }
 
 fn filter_line(app: &App, matches: usize, width: usize) -> Line<'static> {
@@ -723,11 +850,7 @@ fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App, matches:
         put(
             frame,
             row(inner, 0),
-            pair(
-                mode,
-                Line::styled(endpoint(app), fg(theme::MUTED)),
-                inner.width as usize,
-            ),
+            pair(mode, endpoint_line(app), inner.width as usize),
         );
         put(
             frame,
@@ -741,7 +864,7 @@ fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App, matches:
         row(inner, 0),
         pair(
             Line::styled("tm-control-mcp monitor", bold(theme::TEXT)),
-            Line::styled(endpoint(app), fg(theme::MUTED)),
+            endpoint_line(app),
             inner.width as usize,
         ),
     );
@@ -762,7 +885,11 @@ fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App, matches:
         format!(
             "[q] quit  [p] {}  [f] follow  [/] filter{}",
             if app.paused { "resume" } else { "pause" },
-            if app.export_dir.is_some() { "  [e] export" } else { "" }
+            if app.export_dir.is_some() {
+                "  [e] export"
+            } else {
+                ""
+            }
         )
     };
     put(
@@ -892,11 +1019,7 @@ fn render_tiny(
     now: u128,
 ) {
     put(frame, row(area, 0), mode_line(app));
-    put(
-        frame,
-        row(area, 1),
-        Line::styled(endpoint(app), fg(theme::MUTED)),
-    );
+    put(frame, row(area, 1), endpoint_line(app));
     put(
         frame,
         row(area, 2),
@@ -1776,7 +1899,7 @@ mod tests {
 
     fn app(events: Vec<Arc<Event>>, ascii: bool) -> App {
         let mut app = App::new(ascii, None);
-        app.set_http_address("127.0.0.1:47123".parse().unwrap());
+        app.set_source(SourceView::Serving("127.0.0.1:47123".parse().unwrap()));
         let stats = MonitorStats {
             events: events.len(),
             active: events.iter().filter(|e| e.is_active()).count(),
@@ -1940,7 +2063,10 @@ mod tests {
         app.update(vec![event("b", "started", "Two")], MonitorStats::default());
         assert_eq!(app.selected_event().unwrap().invocation_id, "b");
         assert_eq!(app.details_offset, 0);
-        assert!(app.status.contains("Selected d left retained history; now b"));
+        assert!(
+            app.status
+                .contains("Selected d left retained history; now b")
+        );
     }
 
     #[test]
@@ -1966,9 +2092,15 @@ mod tests {
         for ch in "tool:Two".chars() {
             press(&mut app, KeyCode::Char(ch));
         }
-        assert!(app.status.is_empty(), "intentional previews must not announce fallbacks");
+        assert!(
+            app.status.is_empty(),
+            "intentional previews must not announce fallbacks"
+        );
         app.update(vec![event("a", "ok", "One")], MonitorStats::default());
-        assert!(app.status.is_empty(), "draft refreshes must not spam selection notices");
+        assert!(
+            app.status.is_empty(),
+            "draft refreshes must not spam selection notices"
+        );
     }
 
     #[test]
@@ -2007,9 +2139,18 @@ mod tests {
     fn scrollbar_reaches_both_track_endpoints_and_hides_when_content_fits() {
         let capture = |length, offset, viewport, ascii| {
             let mut terminal = Terminal::new(TestBackend::new(3, 10)).unwrap();
-            terminal.draw(|frame| {
-                render_scrollbar(frame, Rect::new(1, 1, 1, 8), length, offset, viewport, ascii);
-            }).unwrap();
+            terminal
+                .draw(|frame| {
+                    render_scrollbar(
+                        frame,
+                        Rect::new(1, 1, 1, 8),
+                        length,
+                        offset,
+                        viewport,
+                        ascii,
+                    );
+                })
+                .unwrap();
             terminal.backend().buffer().clone()
         };
         for ascii in [false, true] {
@@ -2277,6 +2418,89 @@ mod tests {
         }
         let mut empty = App::new(true, None);
         assert!(text(&draw(&mut empty, 120, 36)).contains("No invocations observed"));
+    }
+
+    fn attached(ascii: bool, healthy: bool) -> App {
+        let mut app = app(vec![event("a", "ok", "Echo")], ascii);
+        app.set_source(SourceView::Attached {
+            target: "127.0.0.1:30007".parse().unwrap(),
+            healthy,
+        });
+        app
+    }
+
+    #[test]
+    fn attached_header_names_the_audited_server_and_reconnect_state() {
+        let mut app = attached(false, true);
+        let output = text(&draw(&mut app, 120, 36));
+        assert!(output.contains("ATTACHED 127.0.0.1:30007"));
+        assert!(!output.contains("RECONNECTING"));
+        assert!(output.contains("LIVE"));
+        let mut app = attached(false, false);
+        let output = text(&draw(&mut app, 120, 36));
+        assert!(output.contains("RECONNECTING 127.0.0.1:30007"));
+        assert!(!output.contains("ATTACHED 127"));
+        // Tiny and ascii layouts must disclose the reconnect state too, not a
+        // stale ATTACHED label or a bind address.
+        for (width, height, ascii) in [(40, 10, false), (80, 24, true)] {
+            let mut view = attached(ascii, false);
+            let output = text(&draw(&mut view, width, height));
+            assert!(output.contains("RECONNECTING"), "{width}x{height}");
+            assert!(!output.contains("ATTACHED"), "{width}x{height}");
+        }
+    }
+
+    #[test]
+    fn losing_the_stream_freezes_elapsed_time_until_reconnect() {
+        let mut app = attached(true, true);
+        app.update(vec![event("a", "started", "Echo")], MonitorStats::default());
+        app.set_attach_health(false);
+        let frozen = app.display_ms();
+        std::thread::sleep(Duration::from_millis(5));
+        assert_eq!(
+            app.display_ms(),
+            frozen,
+            "an unreachable server must not keep accruing elapsed time"
+        );
+        app.set_attach_health(true);
+        assert!(
+            app.display_ms() >= frozen + 4,
+            "the display clock resumes after reconnect"
+        );
+    }
+
+    #[test]
+    fn server_restart_resets_the_id_pinned_selection_and_details() {
+        let mut app = app(
+            vec![event("inv-3", "ok", "One"), event("inv-4", "ok", "Two")],
+            true,
+        );
+        press(&mut app, KeyCode::Home);
+        app.update_remote(app.events.clone(), app.stats, "instance-1");
+        assert_eq!(app.selected_event().unwrap().invocation_id, "inv-3");
+        app.details_offset = 7;
+        // The restarted server reuses the same ids for different calls.
+        app.update_remote(
+            vec![event("inv-3", "ok", "Other"), event("inv-4", "ok", "Two")],
+            MonitorStats::default(),
+            "instance-2",
+        );
+        assert!(app.status.contains("Audited server restarted"));
+        assert_eq!(app.details_offset, 0);
+        assert_eq!(
+            app.selected_event().unwrap().invocation_id,
+            "inv-3",
+            "position is kept but the stale id pin and details are dropped"
+        );
+        assert!(app.details_cache.is_none());
+        // Same instance keeps normal id reconciliation.
+        app.status.clear();
+        app.update_remote(
+            vec![event("inv-4", "ok", "Two"), event("inv-5", "ok", "New")],
+            MonitorStats::default(),
+            "instance-2",
+        );
+        assert!(!app.status.contains("restarted"));
     }
 
     #[test]

@@ -80,7 +80,7 @@ pub enum CoreEvent {
     CatalogChanged(String),
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MonitorStats {
     pub events: usize,
     pub active: usize,
@@ -390,7 +390,7 @@ pub fn bounded_json(value: &Value) -> String {
     .unwrap_or_else(|_| "null".into())
 }
 
-fn safe_payload(payload: &str) -> String {
+pub(crate) fn safe_payload(payload: &str) -> String {
     if payload.is_empty() {
         return String::new();
     }

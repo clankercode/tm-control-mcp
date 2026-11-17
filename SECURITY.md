@@ -69,6 +69,26 @@ If that is unacceptable for your environment, **do not load the plugin**.
 
 ---
 
+## MCP adapter (`mcp-cli`)
+
+The Rust adapter is a separate, optional surface layered on the socket:
+
+- Streamable HTTP binds loopback only and validates `Origin`: a present but
+  unallowed `Origin` is rejected, missing `Origin` (plain local clients) is
+  accepted, and `--origin` adds explicit allowances.
+- The same listener serves a read-only audit endpoint (`GET /monitor/snapshot`)
+  used by `monitor` attach mode. It returns the same sanitized, bounded
+  monitor events the TUI renders — secrets are redacted and payloads capped
+  at record time — behind the MCP route's loopback bind and `Host` allowlist;
+  its `Origin` check is an exact `scheme://host:port` match, which is stricter
+  than (never looser than) the `/mcp` route's normalised matching. Error and
+  payload text crossing the attach link is control-stripped again on arrival
+  before any terminal rendering.
+- `monitor` attach mode only reads that endpoint; it never opens the native
+  socket and never starts an MCP listener.
+
+---
+
 ## Reporting issues
 
 This is a small public-domain project. Prefer:
