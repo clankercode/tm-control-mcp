@@ -29,6 +29,7 @@ namespace TmMcp {
     int g_boundPort = 0;
     int g_portOverride = 0;
     int g_wantedPortAtBind = 0;  // what was asked for when g_boundPort was bound (may differ: fallback)
+    uint g_lastPortFileCheck = 0;
     awaitable@ g_serverWorker;
     awaitable@ g_serverSupervisor;
     string g_serverWorkerError = "";
@@ -123,6 +124,23 @@ namespace TmMcp {
                 g_starting = false;
                 yield();
                 continue;
+            }
+
+            // A port.override written AFTER bind is otherwise invisible until
+            // the next bind (the cache refreshes only inside EnsureListening),
+            // which stranded an instance on the default port for a whole
+            // session. Re-resolve the file periodically; the churn-safe
+            // ShouldRebindListener comparison then rebinds only on a real
+            // wanted-port change.
+            if (Time::Now - g_lastPortFileCheck > 5000) {
+                g_lastPortFileCheck = Time::Now;
+                int before = TmMcpWantedPort();
+                TmMcpResolveWantedPort();
+                if (TmMcpWantedPort() != before) {
+                    trace("TM Control MCP port.override changed " + before
+                          + " -> " + TmMcpWantedPort()
+                          + "; rebinding on next comparison");
+                }
             }
 
             if (ShouldRebindListener(g_listening, g_boundHost, S_TmMcpHost, g_wantedPortAtBind, TmMcpWantedPort())) {
