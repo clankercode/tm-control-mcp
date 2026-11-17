@@ -115,6 +115,16 @@ Pack dispatch may call `TmMcp::CallTool` from a coroutine. Each call now runs in
   latestReleaseUrl, latestVersion, updateAvailable, updateStatus, ...}` for each
   pack, plus `output.bridge` for the bridge's own update status. Inspect
   `updateStatus` and `updateStale` before treating a false update flag as current.
+- Builtin `ListTools` (`{pack?, includeSchemas?}`): every tool as `{name, pack,
+  plugin, description}`. `pack` is `core` for built-ins; `plugin` is the
+  Openplanet plugin id, as in `[plugin-id]` log tags. `output.packs` maps each
+  pack to `{plugin, generation, toolCount, definedAt}`.
+- `definedAt` (`ListTools` and `ListToolPacks`) is `{file, line, function}` of
+  the pack's `RegisterToolPack` call, as the game sees the path. Registration
+  runs on the pack's own script context, so the bridge prints that context's
+  stack to `Openplanet.log` and reads the frames back: a marker line plus one
+  line per frame, once per registration. It is absent when the log cannot be
+  read or parsed. Packs need no change.
 
 See `tools/fixtures/tm-mcp-pack-fixture/` for a working Ping / Echo / GetMode pack.
 

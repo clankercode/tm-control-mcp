@@ -33,7 +33,7 @@ namespace Tests {
     void ToolNameSuggest_CaseAndTypos(Tests::Context@ ctx) {
         ctx.AssertSame(ToolNameSuggest_First("getmode"), "GetMode", "case");
         ctx.AssertSame(ToolNameSuggest_First("GetMdoe"), "GetMode", "transposed letters");
-        ctx.AssertSame(ToolNameSuggest_First("ListTools"), "ListToolPacks", "no ListTools tool");
+        ctx.AssertSame(ToolNameSuggest_First("ListPacks"), "ListToolPacks", "near miss");
     }
 
     [Test]

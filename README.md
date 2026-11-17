@@ -229,9 +229,10 @@ One JSON object per connection, newline-terminated. Response is one JSON object 
 {"route":"catalog"}
 ```
 
-`{"route":"tools"}` is the older bare list. Listing is a route, not a tool:
-`python3 tools/call.py catalog` (names at `data.tools[].name`); `call.py ListTools`
-is an unknown tool. An unknown tool name answers `code:"unknown_tool"` with
+`{"route":"tools"}` is the older bare list. `python3 tools/call.py catalog` has the
+full descriptors (names at `data.tools[].name`); the `ListTools` tool is the compact
+view: each tool's pack and owning plugin id, plus where each pack registers itself.
+An unknown tool name answers `code:"unknown_tool"` with
 `suggestions` (the closest real names, built-in and pack) and a hint;
 `call.py` prints them on stderr.
 

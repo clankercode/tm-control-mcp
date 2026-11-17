@@ -61,6 +61,7 @@ namespace TmMcp {
     void InvalidateToolList() { revision++; }
     Json::Value@ CloneJsonValue(Json::Value@ value) { return Json::Parse(Json::Write(value)); }
     string PackUpdateUrlError(const string &in) { return ""; }
+    Json::Value@ CapturePackLocation(const string &in, const string &in) { return null; }
     void AppendPackUpdateStatus(Json::Value@, const string &in, const string &in) {}
     Json::Value@ BridgeUpdateStatus() { return Json::Object(); }
     Json::Value@ GetToolList() { auto tools = Json::Array(); AppendPackTools(tools); return tools; }

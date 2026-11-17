@@ -13,6 +13,7 @@ namespace TmMcp {
         array<Json::Value@> metadata;
         bool retired = false;
         uint running = 0;
+        Json::Value@ definedAt;  // {file, line, function} of the registering call, or null
 
         RegisteredPack() {}
     }
@@ -312,6 +313,7 @@ namespace TmMcp {
         g_schemaToolNames = names; g_schemaRecords = schemas; g_Packs = packs;
         g_NextPackGeneration++;
         InvalidateToolList();
+        @pack.definedAt = CapturePackLocation(packId, pack.generation);
         string updateWarning = PackUpdateUrlError(pack.latestReleaseUrl);
         if (updateWarning.Length > 0) warn("TM Control MCP pack '" + packId + "': " + updateWarning);
         auto output = Json::Object();
@@ -438,6 +440,7 @@ namespace TmMcp {
             o["toolCount"] = int(pack.toolNames.Length);
             auto p = Meta::GetPluginFromID(pack.pluginId);
             o["enabled"] = p !is null && p.Enabled;
+            if (pack.definedAt !is null) o["definedAt"] = pack.definedAt;
             AppendPackUpdateStatus(o, pack.pluginId, pack.latestReleaseUrl);
             packs.Add(o);
         }

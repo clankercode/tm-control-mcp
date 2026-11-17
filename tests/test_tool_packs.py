@@ -61,3 +61,23 @@ def test_register_resolves_custom_pack_id():
     assert "pack_bad_id" in text
     assert 'id == "core"' in text
     assert "UnregisterOwnedPacks" in text
+
+
+def test_list_tools_reports_owner_and_pack_location():
+    packs = (ROOT / "src" / "ToolPacks.as").read_text()
+    listing = (ROOT / "src" / "ToolListing.as").read_text()
+    tools = (ROOT / "src" / "McpTools.as").read_text()
+    assert 'tools.Add(MakeTool("ListTools"' in tools
+    assert '|| name == "ListTools"' in tools
+    assert 'if (name == "ListTools") return ListTools(input);' in tools
+    assert "Json::Value@ ListTools(Json::Value &in input)" in listing
+    assert 't["plugin"] = idx < 0 ? selfId : g_Packs[uint(idx)].pluginId;' in listing
+    # Captured once, at registration, from the pack's own context stack.
+    assert packs.count("CapturePackLocation(") == 1
+    assert "PrintActiveContextStack();" in listing
+    # The game holds Openplanet.log open: a read without a share mode is denied.
+    assert "IO::FileMode::Read, IO::ShareMode::DenyNone" in listing
+    assert 'o["definedAt"] = pack.definedAt;' in packs
+    assert 'o["definedAt"] = pack.definedAt;' in listing
+    doc = (ROOT / "docs" / "tool-packs.md").read_text()
+    assert "ListTools" in doc and "definedAt" in doc
