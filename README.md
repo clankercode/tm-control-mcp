@@ -578,23 +578,48 @@ is its own in-game (ESC) menu, and that only stops time where the mode script
 runs in this game: solo and local play. `ControlPause {action:pause}` opens the
 menu with `ShowInGameMenu()` and then requires three clocks
 (`PlaygroundClientScriptAPI.GameTime`, `GetCmdBufferCore().SimulationTime` and
-`.GameTime`) to stand still for `holdMs` (default 300). It judges on the clocks,
-never on the menu flag: online the menu shows while the game keeps running.
-It refuses before opening anything when online (`ONLINE_NOT_PAUSABLE`), and if
-the menu opens but the clocks keep moving it closes the menu again
-(`NOT_PAUSED`). `resume` closes the menu with `CloseInGameMenu(Resume)` only,
-never Quit or a sub-menu, and reports `jumpMs` per clock. Both are idempotent.
+`.GameTime`) to be read and unchanged for `holdMs` (default 300); any unreadable
+sample or loading frame restarts that window. It judges on the clocks, never on
+the menu flag: online the menu shows while the game keeps running. It refuses
+before opening anything when online (`ONLINE_NOT_PAUSABLE`) or behind a dialog
+(`DIALOG_BLOCKING`), and re-checks locality, loading and the playground after
+every frame, stopping with `CONTEXT_CHANGED` / `LOADING` rather than acting on
+a different map. If the menu opens but the clocks keep moving it closes the
+menu again (`NOT_PAUSED`, `menuClosedAgain` only once it saw it close); if the
+close cannot be seen it returns `CLEANUP_FAILED` with the real `menuShown`,
+keeps ownership and keeps retrying Resume in the background. `resume` closes
+the menu with `CloseInGameMenu(Resume)` only, never Quit or a sub-menu, and
+reports `jumpMs` per clock. Both are idempotent. Every call has one deadline
+(`output.budgetMs` = 3×holdMs + timeoutMs + 2 s, at most 18 s; `tools/call.py`
+waits that plus 5 s). If a client still times out, the call finishes on its own
+within `budgetMs`: check `GetPauseState` before calling again.
 `autoResumeAfterMs` (default off) undoes a pause the tool made if the agent
-never comes back. `GetPauseState` reads all of this without changing anything.
+never comes back; it is bound to that menu and map, and is dropped as soon as
+the menu closes for any reason or the map changes. Pausing while already paused
+updates the timer of a pause the tool made, and refuses (`AUTO_RESUME_NOT_OWNED`)
+to set one on someone else's. Disabling or unloading the plugin closes a menu
+it still owns. `GetPauseState` reads all of this without changing anything.
 
 **Bloom.** `SetDisplaySetting {bloom:none|medium|high}` writes the user's own
-setting, which the game saves to its config. The prior value goes to
-`display-restore.json` in the plugin storage folder before any write, and the
+setting, which the game saves to its config. Before writing, it refuses while
+the graphics settings page (or anything else) has the `DisplaySettings` wrapper
+loaded (`WRAPPER_BUSY`: that wrapper may hold unsaved edits and is never
+applied by this tool), and it validates any existing restore record
+(`RESTORE_RECORD_INVALID` changes nothing). The prior value, every value the
+tool applied and an install identity (a SHA-256 of the user, app and storage
+folders, the config profile name and the instance's `port.override`) go to
+`display-restore.txt` in the plugin storage folder, written to a side file,
+read back, moved into place and read back again before any bloom write; the
 oldest value is kept across repeated calls. `RestoreDisplaySetting` puts it
-back, and so do plugin start, disable and unload. The write goes through the
-`DisplaySettings` script wrapper (`LoadCurrent` / set / `Apply` / `Unload`),
-falling back to `Viewport.SystemConfig.Display`. `output.mechanism` says which
-path ran, and `sideEffects` lists any window or display-mode change.
+back and deletes the record only when every readable source reads the prior.
+Plugin start, disable and unload restore it too, but only on the same install
+and only while bloom still holds a value the tool set: a record from another
+instance (plugin storage can show through x-boss overlay prefixes) or a value
+someone changed since is reported as `RESTORE_CONFLICT` and left alone;
+`RestoreDisplaySetting {force:true}` applies it on request. The write goes
+through the `DisplaySettings` script wrapper (`LoadCurrent` / set / `Apply` /
+`Unload`), falling back to `Viewport.SystemConfig.Display`. `output.mechanism`
+says which path ran, and `sideEffects` lists any window or display-mode change.
 
 **Unproven live (2026-11-18):** Q1, whether a programmatic menu freezes the
 clocks the way ESC does (ESC in solo was measured to); Q2, whether bloom none
