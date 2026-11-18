@@ -366,6 +366,7 @@ def test_p2_locality_or_context_change_before_show_never_shows(as_runner, tmp_pa
         g.At(1100, what[i], value[i]);
         auto r = ControlPauseCore(g, PauseInput("pause"));
         Check(Code(r) == code[i] && g.shows == 0 && !g.menu, what[i] + " mid-sample: " + Code(r));
+        Check(g.now <= 1100 + 16, what[i] + ": stopped on the first frame after the change, at " + g.now);
         auto g2 = FakePauseGame();
         g2.At(sampleEnd, what[i], value[i]);
         auto r2 = ControlPauseCore(g2, PauseInput("pause"));
@@ -434,6 +435,7 @@ def test_p2_context_change_after_show_never_resumes_into_new_playground(as_runne
     auto r = ControlPauseCore(g, PauseInput("pause"));
     Check(!Ok(r) && Code(r) == "CONTEXT_CHANGED", "stopped on context change: " + Code(r));
     Check(g.closes == 0 && !OutBool(r, "resumeSent"), "no Resume sent into another playground");
+    Check(g.now <= 1500 + 16, "stopped on the first frame after the change, at " + g.now);
     Check(OutBool(r, "menuShownAfter") == g.menu, "menuShownAfter is the truth");
     """)
 

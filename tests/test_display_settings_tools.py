@@ -602,9 +602,12 @@ def test_only_the_live_host_touches_the_game():
 def test_live_wrapper_owner_predicate_contract():
     """Review 2 F3 survivor: the live 'loaded by someone else' predicate, pinned to the policy."""
     tools = _strip_comments(TOOLS)
-    owner = _fn(tools, "int WrapperOwner()", "bool WrapperLoad(")
-    assert "DisplayWrapperOwner(api.DisplaySettings !is null, ownWrapper !is null," in owner
-    assert "api.DisplaySettings is ownWrapper" in owner
+    owner = " ".join(_fn(tools, "int WrapperOwner()", "bool WrapperLoad(").split())
+    # The whole body, pinned: the pure policy (truth-tabled above) on the live handles.
+    assert owner == ("int WrapperOwner() { auto api = _DisplayScriptApi();"
+                     " if (api is null) return DISPLAY_WRAPPER_NONE;"
+                     " return DisplayWrapperOwner(api.DisplaySettings !is null, ownWrapper !is null,"
+                     " ownWrapper !is null && api.DisplaySettings is ownWrapper); }"), owner
     # Load refuses while anything is loaded and claims what it loaded at once.
     load = _fn(tools, "bool WrapperLoad(", "int WrapperRead()")
     assert load.index("api.DisplaySettings !is null") < load.index("DisplaySettings_LoadCurrent()")

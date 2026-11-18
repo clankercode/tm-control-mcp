@@ -114,7 +114,8 @@ def test_control_pause_long_explicit_timeout_is_kept(capsys):
 def test_control_pause_rejects_nonfinite_or_noninteger_input(payload, capsys):
     """Review 2 P3: 1e309 decodes to inf and int() raised OverflowError before any request."""
     with mock.patch.object(sys, "argv", ["call.py", "--skip-process-check", "ControlPause", payload]), \
-         mock.patch.object(client.socket, "create_connection") as connect:
+         mock.patch.object(client.socket, "create_connection",
+                           side_effect=AssertionError("must not connect")) as connect:
         assert client.main() == 2
     connect.assert_not_called()
     out = json.loads(capsys.readouterr().out)
