@@ -6,13 +6,16 @@ void Main() {
     TmMcp::StartToolCalls();
     TmMcp::InitToolSchemas();
     TmMcp::StartPackUpdates();
+    TmMcp::RestoreDisplaySettingOnLifecycle("start");
     TmMcp::Start();
 }
 
 void OnDestroyed() {
+    TmMcp::RestoreDisplaySettingOnLifecycle("unload");
     TmMcp::Shutdown();
 }
 
 void OnDisabled() {
+    TmMcp::RestoreDisplaySettingOnLifecycle("disable");
     TmMcp::Shutdown();
 }
