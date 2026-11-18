@@ -33,19 +33,22 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
   `set_position`. Pass `x,y,z` **and** `target{x,y,z}` for an exact camera point + look-at; angles alone do
   not rotate the view. `set_mode` can be silently dropped — check `switched`, not `success`. Editor camera is
   still `SetEditorCamera` / `ControlCamera`.
-- **Pause / bloom (live checks, no OS input):** `GetPauseState` (read-only; verdict from three clocks, never
-  from the menu flag) and `ControlPause {action:pause|resume|toggle}`, which opens and closes the game's own
-  in-game menu. Solo/local play only; it refuses online (`ONLINE_NOT_PAUSABLE`) and behind a dialog
-  (`DIALOG_BLOCKING`), and stops (`CONTEXT_CHANGED`, `LOADING`) if the map or locality changes mid-call.
-  If the clocks keep running it closes the menu again (`NOT_PAUSED`); if it cannot see the menu close it
-  says `CLEANUP_FAILED` (menuShown is the truth) and keeps retrying Resume. Resume only, never Quit. One
-  deadline per call (`budgetMs`, max 18 s); after a client timeout check `GetPauseState` before retrying.
-  `SetDisplaySetting {bloom}` refuses `WRAPPER_BUSY` while the graphics settings page is open, and records the
-  prior value (plus the install identity) before writing. **Always** `RestoreDisplaySetting` afterwards; plugin
-  start, disable and unload also restore it, but only on the same install and only while bloom still holds a
-  value the tool set (otherwise `RESTORE_CONFLICT`, record kept; `{force:true}` overrides on request).
-  UNPROVEN live: Q1 programmatic pause freezes like ESC, Q2 bloom none applies without a restart, Q3 Apply
-  has no window/device side effects, Q4 local hosted play pauses. Guide: `pause-bloom`.
+- **Pause / bloom (live checks on a leased instance, no OS input):** nothing runs on its own -- no
+  timer, no watcher, no automatic restore; the agent resumes and restores itself. `GetPauseState`
+  (read-only, samples online too; verdict from three clocks, never from the menu flag) and
+  `ControlPause {action:pause|resume|toggle}`, which opens and closes the game's own in-game menu.
+  Solo/local play only; it refuses online (`ONLINE_NOT_PAUSABLE`) and behind a dialog
+  (`DIALOG_BLOCKING`), and stops (`CONTEXT_CHANGED`, `LOADING`) if the map or locality changes. A failed
+  pause sends one Resume (only for the menu it saw open) and reports `menuShownAfter`;
+  `CLEANUP_FAILED` = still up, `lateShowPossible` = a Show may land later: call `GetPauseState`, then
+  `ControlPause resume` if the menu is up. Resume uses Resume only, never Quit, whoever opened the menu.
+  `budgetMs` (max 18 s) is checked once per frame, so a hitch can overrun it.
+  `SetDisplaySetting {bloom}` needs a `port.override` (`IDENTITY_UNKNOWN` on the primary), keeps one
+  record it never overwrites (`RESTORE_PENDING` until Restore), refuses `WRAPPER_BUSY` while the graphics
+  page is open. **Always** `RestoreDisplaySetting` afterwards; it is explicit only and keeps the record
+  on `RESTORE_CONFLICT` (`{force:true}` overwrites the user's current value). `persisted` is "assumed".
+  UNPROVEN live: Q1 programmatic pause freezes like ESC, Q2 bloom none applies without a restart, Q3
+  Apply has no window/device side effects and saves the config, Q4 local hosted play pauses. Guide: `pause-bloom`.
 - **Cursor:** `GetCursor` / `ControlCursor` relative/cardinal — absolute optional.
 - **Item delete:** `RemoveRecentItems` / `RemoveItemsByIndex` → E++ `DeleteItems`. Prefer **`SetAgentTag` + `RemoveByTag`** for agent smoke cleanup.
 - **Inventory:** browse tools + **`ControlInventory`**. Path-place still preferred for headless placement.
