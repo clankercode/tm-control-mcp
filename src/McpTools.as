@@ -1717,7 +1717,7 @@ namespace TmMcp {
     Json::Value@ RefuseWhileDialogBlocks(const string &in name, Json::Value &in input) {
         string action = input.HasKey("action") && input["action"].GetType() == Json::Type::String
             ? string(input["action"]) : "";
-        if (!ToolNeedsDialogClear(name, action)) return null;
+        if (!ToolNeedsDialogClear(name, action) && !ToolMutatesEditor(name)) return null;
         auto dialog = BasicDialogSummary();
         if (!dialog.HasKey("blocking") || !bool(dialog["blocking"])) return null;
         string kind = string(dialog["dialogKind"]);
@@ -1736,15 +1736,13 @@ namespace TmMcp {
     Json::Value@ BackToMainMenu(Json::Value &in input) {
         auto app = cast<CGameManiaPlanet>(GetApp());
         if (app is null) return MakeError("app not available", "UNKNOWN", true);
+        // Failure is an error, not a success with a note: callers that only check success
+        // otherwise carry on as if they were at the menu.
+        auto err = _PrepareModuleChange("BackToMainMenu");
+        if (err !is null) return err;
         Json::Value output = Json::Object();
-        string outcome = _UnwindToMenu(output);
-        if (outcome == "dialog") {
-            output["note"] = "BackToMainMenu() stalled on a dialog (typically unsaved changes). Answer it; the game then finishes returning to the menu.";
-        } else if (outcome != "menu") {
-            output["note"] = "BackToMainMenu() issued but the main menu was not reached (10s idle); poll GetMode manually.";
-        } else {
-            output["note"] = "BackToMainMenu() complete; at the main menu.";
-        }
+        output["reachedMenu"] = true;
+        output["note"] = "BackToMainMenu() complete; at the main menu.";
         _AttachLeaveDialogWarning(output);
         return MakeSuccess(output);
     }

@@ -9,6 +9,9 @@ Versions follow `info.toml` `[meta] version`.
 
 ### Fixed
 
+- 2026-11-19: `BackToMainMenu` returns an error when it does not reach the main menu: `DIALOG_BLOCKING` when leaving raised a dialog (usually the unsaved-changes prompt), `UNWIND_TIMEOUT` (retryable) otherwise, same as the map-switch tools. It used to return success with a `note`, so callers that only checked `success` carried on as if at the menu.
+- 2026-11-19: editor-mutating tools are refused with `DIALOG_BLOCKING` while a blocking dialog is up (`PlaceBlock`, `RemoveBlock`, `Clear*`, `Undo`/`Redo`/`UndoRedo`, `CopyPasteSelection`, `SetMoodTimeOfDay`, the E++ place/remove and named-macroblock tools; `ToolMutatesEditor` in `src/DialogPolicy.as`). Live case: a script kept editing behind "save changes?" after its `OpenMapInEditor` was refused. Answering, saving, reads and camera tools stay allowed.
+
 - 2026-11-17: `tools/call.py` host-log fallback for `ControlPlugin` load/reload/getLogs now reads the `Openplanet.log` of the game listening on `--port` (its wineserver's `WINEPREFIX`), not `~/OpenplanetNext`; on multibox hosts (x-boss, where `~/OpenplanetNext` is an NFS mount of xsm's) it returned another game's stale lines. `TM_OPENPLANET_LOG` still wins; reports now include `logPath`.
 
 ### Added
