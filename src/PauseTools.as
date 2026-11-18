@@ -68,11 +68,13 @@ namespace TmMcp {
             return g;
         }
 
-        bool MenuShown() {
+        bool TryMenuShown(bool &out shown) {
             auto api = _PauseClientApi();
-            if (api !is null) return api.IsInGameMenuDisplayed;
+            if (api !is null) { shown = api.IsInGameMenuDisplayed; return true; }
             auto h = _PauseHandler();
-            return h !is null && h.IsInGameMenuDisplayed;
+            if (h is null) return false;
+            shown = h.IsInGameMenuDisplayed;
+            return true;
         }
 
         bool ReadClock(uint idx, uint &out value) {
@@ -141,7 +143,10 @@ namespace TmMcp {
                 "Call GetPauseState; if the in-game menu is up, ControlPause resume closes it.");
             Json::Value o = Json::Object();
             o["menuShown"] = "unknown";
-            try { o["menuShown"] = g_livePauseHost.MenuShown(); } catch {}
+            try {
+                bool shown;
+                if (g_livePauseHost.TryMenuShown(shown)) o["menuShown"] = shown;
+            } catch {}
             r["output"] = o;
         }
         try {

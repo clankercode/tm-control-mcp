@@ -152,6 +152,9 @@ namespace TmMcp {
                 s.wrapperUnreadableKnown = s.wrapper < 0;
                 @s.watch = host.WrapperWatch();
             } else {
+                // A failed load can still attach a wrapper. Releasing it
+                // does not verify the value it held.
+                s.wrapperUnreadableKnown = host.WrapperOwner() != DISPLAY_WRAPPER_NONE;
                 s.wrapperError = err;
             }
             string rerr;

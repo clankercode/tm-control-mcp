@@ -92,10 +92,12 @@ namespace TmMcp {
         bool showThrowsAfterDispatch = false, resumeThrowsAfterDispatch = false;
         // Go online on the Nth clock report (ExtraState runs between a sample
         // and the read that follows it, with no yield in between).
-        int goOnlineOnReport = -1;
+        int goOnlineOnReport = -1, closeMenuOnReport = -1;
         int reports = 0;
         // Flip locality off on gate read number N (counted from 1), no yield needed.
         int goOnlineOnGateRead = -1;
+        bool transientOnlineAfterShow = false;
+        bool loseMenuReadersAfterShow = false, loseMenuReadersAfterResume = false;
         // A dialog comes up on DialogBlocking read number N, no yield needed.
         int dialogOnRead = -1;
         int dialogReads = 0;
@@ -150,16 +152,23 @@ namespace TmMcp {
             gateReads++;
             if (goOnlineOnGateRead > 0 && int(gateReads) == goOnlineOnGateRead) local = false;
             auto g = PauseGate();
-            g.inPlayground = inPlayground; g.loading = loading; g.local = local;
+            bool readersLost = MenuReadersLost();
+            g.inPlayground = inPlayground && !readersLost; g.loading = loading; g.local = local;
+            if (transientOnlineAfterShow && shows == 1 && gateReads == gateReadsAtFirstShow + 1) g.local = false;
             g.serverLoginSet = loginSet; g.spectatorClient = spectator;
             auto c = cast<FakePauseContext>(ctx);
             g.sameContext = c !is null && inPlayground && c.playground != 0
                 && c.playground == playgroundId && c.handler == handlerId;
             return g;
         }
-        bool MenuShown() {
+        bool MenuReadersLost() {
+            return (loseMenuReadersAfterShow && shows > 0) || (loseMenuReadersAfterResume && closes > 0);
+        }
+        bool TryMenuShown(bool &out shown) {
             if (menuThrowsAfterResume && closes > 0) { array<int> a; a[3] = 1; }
-            return menu;
+            if (MenuReadersLost()) return false;
+            shown = menu;
+            return true;
         }
         bool ReadClock(uint i, uint &out v) {
             if (clockThrowsAfterShow && shows > 0) { array<int> a; a[3] = 1; }
@@ -190,6 +199,7 @@ namespace TmMcp {
         Json::Value@ ExtraState() {
             reports++;
             if (reports == goOnlineOnReport) local = false;
+            if (reports == closeMenuOnReport) menu = false;
             return null;
         }
         // Frames with nobody calling (after a call returned).
@@ -253,6 +263,7 @@ namespace TmMcp {
         int otherPendingMode = 0;   // an edit someone else's wrapper holds
         // how LoadCurrent behaves
         int loadValue = -1;         // -1: copies systemConfig
+        bool partialLoad = false;   // attaches the wrapper but returns failure
         bool loadNeedsFrame = false;// LoadCurrent leaves DisplaySettings null this frame
         bool wrapperApplyFails = false;
         bool applyThrows = false;
@@ -284,6 +295,7 @@ namespace TmMcp {
         // window between the record and the write, where review 2 F11 let a
         // Restore in. A hook that throws models a crash there.
         FakeDisplayHook@ onBeforeBloomWrite = null;
+        FakeDisplayHook@ onRelease = null;
         uint hookRuns = 0;
 
         void Yield() {
@@ -328,6 +340,7 @@ namespace TmMcp {
             ownWrapper = apiWrapper;
             apiWrapperValue = loadValue >= 0 ? loadValue : (systemConfigAvailable ? systemConfig : 2);
             apiWrapperReadable = true;
+            if (partialLoad) { err = "LoadCurrent threw after exposing a wrapper"; return false; }
             return true;
         }
         int WrapperRead() {
@@ -346,6 +359,11 @@ namespace TmMcp {
             return true;
         }
         bool WrapperRelease(string &out err) {
+            if (onRelease !is null) {
+                FakeDisplayHook@ hook = onRelease;
+                @onRelease = null;
+                hookRuns++; hook(this);
+            }
             if (ownWrapper == 0) return true;
             if (apiWrapper != ownWrapper) { ownWrapper = 0; return true; }
             if (releaseThrows) { array<int> a; a[3] = 1; }

@@ -636,11 +636,16 @@ current value **only within the same identity and config**. A user's same-value
 edit cannot be distinguished from the tool's write (limitation). Startup,
 disable and unload only report records, never apply or delete them.
 
-After a map reload or game restart where `GetDisplaySetting` still shows the
-prior, call `RestoreDisplaySetting {retire:true}` to remove the record. Retire
-checks the same identity/config, every readable source at prior, and no known
-unreadable source or busy display call. It never writes bloom and cannot be
-combined with `force:true`. Don't retire on immediate read-back alone.
+Before retiring, `GetDisplaySetting` must show the same matching pending record
+and the prior on every readable source, with none known unreadable, after
+an in-instance map reload or a same-prefix restart that preserves the upper dir.
+The default `tmc stop` wipe destroys the record; it is not a confirmation step.
+A map reload does not prove the setting was saved or that a deferred Apply finished.
+If Apply is unresolved, keep the record. Otherwise call
+`RestoreDisplaySetting {retire:true}`. Only `retired:true` confirms retirement;
+`no record` is not confirmation. Retire rechecks the identity, config and sources,
+refuses if a display call is busy, never writes bloom and cannot combine with
+`force:true`. Don't retire on immediate read-back alone.
 
 **What the record binds to.** The hash covers the prefix's user, app and plugin
 storage paths, active profile and display/safe config, and the tmc port marker.

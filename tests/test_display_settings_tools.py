@@ -12,6 +12,7 @@ UNPROVEN live (2026-11-18): that FxBloomHdr=None applied at runtime removes
 bloom without a restart (Q2), and that DisplaySettings_Apply neither resets the
 window/device nor saves Default.json at once (Q3): persistence is "assumed".
 """
+import hashlib
 import itertools
 import json
 import re
@@ -623,7 +624,8 @@ def test_live_wrapper_owner_predicate_contract():
     # Release drops the claim only after the wrapper is seen gone, and never unloads someone else's.
     rel = _fn(tools, "bool WrapperRelease(", "DisplayWatch@ WrapperWatch()")
     unload_at = rel.index("DisplaySettings_Unload()")
-    assert rel.index("if (api.DisplaySettings !is ownWrapper) {") < unload_at
+    assert re.search(r"if \(api\.DisplaySettings !is ownWrapper\) \{\s*@ownWrapper = null;\s*return true;\s*\}",
+                     rel[:unload_at])
     tail = rel[unload_at:]
     attached = tail.split("if (api.DisplaySettings is ownWrapper) {", 1)[1].split("}", 1)[0]
     assert "return false;" in attached and "@ownWrapper" not in attached
@@ -674,6 +676,8 @@ namespace IO {
     string contents;
     enum FileMode { Read }
     string FromStorageFolder(const string &in name) { return "storage/" + name; }
+    string FromUserGameFolder(const string &in name) { return "user/" + name; }
+    string FromAppFolder(const string &in name) { return "app/" + name; }
     bool FileExists(const string &in path) { return present && path == "storage/port.override"; }
     class File {
         File(const string &in path, FileMode mode) {}
@@ -701,8 +705,8 @@ def test_r3_listener_and_set_share_marker_validation(as_runner, tmp_path):
                                 'string mark; if (!_PortMark(mark, why)) return false;')
     assert fake != DISPLAY_FAKE
     run_core(as_runner, tmp_path, ["PortOverride.as", "DisplaySettingsPolicy.as", "DisplaySettingsCore.as"], fake, r'''
-    array<string> raw = {"not-a-port", "0", "70000", "\t \r\n", "30009junk", "65436", " 65435\n", " 30009\n"};
-    array<int> expected = {0, 0, 0, 0, 0, 0, 65435, 30009};
+    array<string> raw = {"not-a-port", "0", "70000", "\t \r\n", "30009junk", "65436", " 65435\n", " 30009\n", "1", " 00001 "};
+    array<int> expected = {0, 0, 0, 0, 0, 0, 65435, 30009, 1, 1};
     for (uint i = 0; i < raw.Length + 2; i++) {
         IO::present = i != raw.Length;
         IO::throwRead = i == raw.Length + 1;
@@ -719,6 +723,52 @@ def test_r3_listener_and_set_share_marker_validation(as_runner, tmp_path):
         else Check(Ok(r) && g.HasRecord() && mark == raw[i].Trim(), "valid marker: case " + i);
     }
     ''', prelude=PORT_STUBS + "\nnamespace TmMcp {\n" + listener + "\n}\n")
+
+
+def test_live_identity_retains_v2_preimage_and_leading_zero_digest(as_runner, tmp_path):
+    # Stub the host inputs, not the live InstallIdentity implementation. The
+    # hash stub recognizes the independently hashed pre-fix fixture only.
+    legacy = b"tm-control-mcp display identity v2\nuser/\napp/\nstorage/\nFixture\n00001\nsafe"
+    digest = hashlib.sha256(legacy).hexdigest()
+    ident = _fn(TOOLS, "bool InstallIdentity(", "Json::Value@ IdentityJson()")
+    prelude = PORT_STUBS + "\nnamespace TmMcp {\n" + ident + r'''
+    string _ProfileName() { return "Fixture"; }
+    bool SafeMode() { return true; }
+    }
+    namespace Text { int ParseInt(const string &in text) { return 1; } }
+    namespace Crypto {
+        bool matchedPreimage = false;
+        class Digest { string ToLower() { return matchedPreimage ? "DIGEST" : ""; } }
+        Digest@ Sha256(const string &in preimage) {
+            matchedPreimage = preimage == "PREIMAGE";
+            return Digest();
+        }
+    }
+    '''.replace("PREIMAGE", legacy.decode().replace("\n", r"\n")).replace("DIGEST", digest)
+    run_core(as_runner, tmp_path, ["PortOverride.as", "DisplaySettingsPolicy.as"], "", r'''
+    IO::contents = " \t00001 \r\n";
+    string identity, why;
+    Check(InstallIdentity(identity, why), "valid zero-padded marker");
+    Check(Crypto::matchedPreimage, "v2 preimage with leading zeroes");
+    Check(identity == "fa0c9bbc18b1d0b5b601e2df35fa37bf717223eac039cbfff7f58df6cca96320", "pre-fix v2 digest");
+    ''', prelude=prelude)
+
+
+def test_partial_wrapper_load_cannot_make_prior_unanimous(as_runner, tmp_path):
+    run_display(as_runner, tmp_path, r'''
+    auto g = FakeDisplayGame();
+    Check(Ok(SetDisplaySettingCore(g, BloomInput("none"))) && g.persistedConfig == 0, "target saved");
+    string rec = g.Record();
+    g.systemConfig = 2; g.loadValue = 0; g.partialLoad = true;
+    uint releases = g.unloads;
+    auto restore = RestoreDisplaySettingTool(g, NoInput());
+    Check(Code(restore) == "RESTORE_CONFLICT" && g.Record() == rec && g.Clean() && g.unloads == releases + 1,
+          "ordinary Restore must not trust runtime prior after a partial load and successful release");
+    auto retire = RestoreDisplaySettingTool(g, RetireInput());
+    Check(Code(retire) == "RESTORE_CONFLICT" && g.Record() == rec && g.Clean() && g.unloads == releases + 2,
+          "retire must keep the exact record after a partial load and successful release");
+    Check(g.applies == 1 && g.scWrites == 0, "neither refusal writes bloom");
+    ''')
 
 
 def test_r1_runtime_only_restore_keeps_prior_through_restart(as_runner, tmp_path):
@@ -796,6 +846,26 @@ def test_retire_refuses_unverified_incompatible_or_unreadable_state(as_runner, t
     ''')
 
 
+def test_final_release_holds_display_lock(as_runner, tmp_path):
+    run_display(as_runner, tmp_path, r'''
+    auto g = FakeDisplayGame();
+    Check(Ok(SetDisplaySettingCore(g, BloomInput("none"))), "seed recovery");
+    g.watchThrows = true; // bypass the body release; the final release still owns the wrapper
+    @g.onRelease = ProbeBusy;
+    Check(Code(GetDisplaySettingCore(g)) == "tool_exception" && g.hookRuns == 1 && g.Clean(),
+          "one reentry at final cleanup, with lock released on return");
+    Check(reentryCode == "DISPLAY_BUSY", "final release still holds the lock");
+    ''', prelude=r'''
+    namespace TmMcp {
+        string reentryCode;
+        void ProbeBusy(FakeDisplayGame@ g) {
+            if (g.HasRecord() && g.ownWrapper != 0 && g.ownWrapper == g.apiWrapper)
+                reentryCode = Code(RestoreDisplaySettingTool(g, NoInput()));
+        }
+    }
+    ''')
+
+
 def test_r8_release_and_reporting_throw_without_stranding_busy(as_runner, tmp_path):
     run_display(as_runner, tmp_path, r'''
     auto g = FakeDisplayGame();
@@ -823,6 +893,19 @@ def test_r9_current_restore_and_retirement_leave_legacy_untouched(as_runner, tmp
     Check(Ok(RestoreDisplaySettingTool(g, RetireInput())) && !g.HasRecord() && g.disk.Get("display-restore.txt") == legacy,
           "only current record retired");
     ''')
+
+
+def test_retirement_instructions_preserve_and_confirm_the_matching_record():
+    guides = (SRC / "Guides.as").read_text().split('_RegisterGuide("pause-bloom",', 1)[1].split("_RegisterGuide(", 1)[0]
+    guide = "".join(re.findall(r'^\s*\+ "(.*)"$', guides, re.M))
+    readme = " ".join((ROOT / "README.md").read_text().replace("`", "").split())
+    for doc in (guide, readme):
+        assert "the same matching pending record" in doc
+        assert "an in-instance map reload or a same-prefix restart that preserves the upper dir" in doc
+        assert "The default tmc stop wipe destroys the record; it is not a confirmation step." in doc
+        assert "Only retired:true confirms retirement; no record is not confirmation." in doc
+        assert "A map reload does not prove the setting was saved or that a deferred Apply finished." in doc
+        assert "If Apply is unresolved, keep the record." in doc
 
 
 def test_r10_persistence_and_side_effects_are_qualified_and_legacy_log_is_manual(as_runner, tmp_path):

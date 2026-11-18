@@ -664,12 +664,23 @@ def test_guide_and_docs_mark_live_checks_unproven():
     guide = guides[start:guides.index("_RegisterGuide(", start + 1)]
     for name in ["GetPauseState", "ControlPause", "SetDisplaySetting", "RestoreDisplaySetting", "ONLINE_NOT_PAUSABLE"]:
         assert name in guide, name
+    assert re.search(
+        r"Require a measured jumpMs entry for every[^;]*?clock \(clientGameTime, coreSimulationTime, coreGameTime\)",
+        guide, re.S,
+    )
     for doc in [guide, (ROOT / "README.md").read_text(), (ROOT / "AGENTS.md").read_text(), (ROOT / "CHANGELOG.md").read_text()]:
         assert "nproven" in doc or "NPROVEN" in doc
         for q in ["Q1", "Q2", "Q3", "Q4"]:
             assert q in doc, q
     for doc in [guide, (ROOT / "README.md").read_text(), (ROOT / "AGENTS.md").read_text()]:
         assert "autoResumeAfterMs" not in doc
+
+
+def test_pause_catalog_distinguishes_observation_from_attribution():
+    text = next(line for line in MCP_TOOLS.splitlines() if 'MakeTool("ControlPause",' in line)
+    assert "openedByThisCall means observed open after a Show in this call, not who opened it" in text
+    assert "Before dispatch, refusals like NO_PLAYGROUND, LOADING, ONLINE_NOT_PAUSABLE" in text
+    assert "After Show, those same codes can be in-flight aborts; check cleanupSkipped and menuShownAfter" in text
 
 
 def test_r4_late_manual_menu_requires_fresh_continuous_hold(as_runner, tmp_path):
@@ -688,6 +699,15 @@ def test_r4_late_manual_menu_requires_fresh_continuous_hold(as_runner, tmp_path)
     g3.At(1160, "menu", 0); g3.At(1280, "menu", 1); g3.At(1360, "bump", 1);
     auto r3 = ControlPauseCore(g3, PauseInput("pause"));
     Check(Code(r3) == "NOT_PAUSED" && g3.shows == 0 && g3.closes == 0, "close/reopen requires a fresh frozen hold");
+    ''')
+
+
+def test_existing_menu_closes_at_final_observation(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, r'''
+    auto g = FakePauseGame(); g.menu = true; g.closeMenuOnReport = 2;
+    auto r = ControlPauseCore(g, PauseInput("pause"));
+    Check(Code(r) == "MENU_CLOSED" && g.shows == 0 && g.closes == 0 && !g.menu,
+          "menu closed after the full hold, before the final observation");
     ''')
 
 
@@ -731,6 +751,43 @@ def test_r6_failed_pause_does_not_resume_into_invalid_gate_or_wait_through_it(as
     g.goOnlineOnGateRead = int(probe.gateReadsAtFirstResume);
     auto r = ControlPauseCore(g, PauseInput("pause", 100, 100));
     Check(g.closes == 0 && OutStr(r, "cleanupSkipped") == "ONLINE_NOT_PAUSABLE", "fresh gate immediately before cleanup Resume");
+    ''')
+
+
+def test_cleanup_retains_first_gate_refusal_even_if_gate_recovers(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, r'''
+    auto g = FakePauseGame(); g.transientOnlineAfterShow = true;
+    auto r = ControlPauseCore(g, PauseInput("pause", 100, 100));
+    Check(g.gateReads > g.gateReadsAtFirstShow + 1 && g.shows == 1 && g.closes == 0 && g.menu,
+          "cleanup rechecked the gate but did not Resume");
+    Check(Code(r) == "ONLINE_NOT_PAUSABLE" && OutStr(r, "cleanupSkipped") == "ONLINE_NOT_PAUSABLE",
+          "retain the refusal from the first invalid frame");
+    ''')
+
+
+def test_menu_readers_lost_after_show(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, r'''
+    auto g = FakePauseGame(); g.loseMenuReadersAfterShow = true;
+    auto r = ControlPauseCore(g, PauseInput("pause", 100, 100));
+    Check(Code(r) == "NO_PLAYGROUND" && g.shows == 1 && g.closes == 0 && g.menu,
+          "readers disappeared after Show without closing the menu");
+    Check(OutStr(r, "menuShownAfter") == "unknown" && OutBool(r, "lateShowPossible")
+          && string(r["hint"]).IndexOf("GetPauseState") >= 0 && string(r["error"]).IndexOf("observed closed") < 0,
+          "unavailable after Show is unknown, not closed");
+    ''')
+
+
+def test_menu_readers_lost_after_cleanup_resume(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, r'''
+    auto g2 = FakePauseGame(); g2.menuFreezes = false; g2.closeLagFrames = -1;
+    g2.loseMenuReadersAfterResume = true;
+    auto r2 = ControlPauseCore(g2, PauseInput("pause", 100, 100));
+    Check(Code(r2) == "CLEANUP_FAILED" && OutStr(r2, "cause") == "NOT_PAUSED"
+          && g2.shows == 1 && g2.closes == 1 && g2.menu && OutBool(r2, "resumeSent"),
+          "dispatched cleanup Resume without verified closure");
+    Check(OutStr(r2, "menuShownAfter") == "unknown" && OutBool(r2, "lateShowPossible")
+          && string(r2["hint"]).IndexOf("GetPauseState") >= 0 && string(r2["error"]).IndexOf("observed closed") < 0,
+          "unavailable after cleanup Resume is unknown, not closed");
     ''')
 
 
@@ -784,4 +841,7 @@ def test_r11_pause_host_needs_no_logger(as_runner, tmp_path):
     auto g = FakePauseGame();
     Check(Ok(ControlPauseCore(g, PauseInput("pause"))), "pause without a logger");
     ''')
+    fake = _strip_comments((ROOT / "tests/as_core_fakes.py").read_text()).split("class FakePauseGame", 1)[1]
+    fake = fake.split("Json::Value@ PauseInput", 1)[0]
     assert "void Log(" not in _strip_comments(TOOLS)
+    assert "void Log(" not in fake
