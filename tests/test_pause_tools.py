@@ -481,6 +481,16 @@ def test_p2_deadline_after_a_slow_frame(as_runner, tmp_path):
     Check(double(r["output"]["longestFrameMs"]) >= 5000, "the hitch is reported");
     Check(OutBool(r, "lateShowPossible"), "the unanswered Show is reported as a possibility");
     Check(Code(r) == "DEADLINE", "the deadline is checked right after the yield: " + Code(r));
+    // A hitch that ends past the show deadline (timeoutMs) but before the call
+    // deadline: Step does not stop the call, the check before the next Show does.
+    auto g3 = FakePauseGame();
+    g3.showLagFrames = -1;
+    g3.slowAt = 1150; g3.slowMs = 3000;   // show phase ends ~3512, call deadline ~5700
+    uint64 t3 = g3.now;
+    auto r3 = ControlPauseCore(g3, PauseInput("pause", 100, 2400));
+    Check(g3.shows >= 1 && !g3.AnyShowAfter(1150 + 3000), "no Show after the hitch passed the show deadline");
+    Check(g3.now - t3 < uint64(PauseCallBudgetMs(100, 2400)), "ended before the call deadline");
+    Check(Code(r3) == "MENU_NOT_SHOWN", "reported as not shown: " + Code(r3));
     // A hitch during verification of a real (frozen) pause: no success past the
     // deadline; the one Resume closes the menu this call opened.
     auto g2 = FakePauseGame();
