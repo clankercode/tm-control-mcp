@@ -11,11 +11,13 @@ void Main() {
 }
 
 void OnDestroyed() {
+    TmMcp::ClosePauseOnLifecycle("unload");
     TmMcp::RestoreDisplaySettingOnLifecycle("unload");
     TmMcp::Shutdown();
 }
 
 void OnDisabled() {
+    TmMcp::ClosePauseOnLifecycle("disable");
     TmMcp::RestoreDisplaySettingOnLifecycle("disable");
     TmMcp::Shutdown();
 }

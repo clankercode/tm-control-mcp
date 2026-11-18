@@ -352,6 +352,37 @@ def tool_result_output(response: dict) -> dict | None:
     return output if isinstance(output, dict) else None
 
 
+# ControlPause: the plugin's PausePolicy.as clamps and one-deadline budget,
+# mirrored here (tests/test_call_timeouts.py checks the two agree).
+PAUSE_HOLD_MS = (300, 100, 2000)      # default, min, max
+PAUSE_TIMEOUT_MS = (3000, 100, 10000)
+PAUSE_CLEANUP_RESERVE_MS = 2000
+PAUSE_SOCKET_SLACK_S = 5.0
+
+
+def _pause_clamp(value: object, spec: tuple[int, int, int]) -> int:
+    default, lo, hi = spec
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return max(lo, min(hi, int(value)))
+
+
+def pause_socket_timeout(timeout: float, input_data: object) -> float:
+    """Socket deadline for ControlPause.
+
+    The plugin stops every ControlPause call at budgetMs = 3*holdMs +
+    timeoutMs + 2000 (clamped inputs; at most 18 s). The socket gets that plus
+    slack for the frames around it. If the client still times out, the plugin
+    worker finishes on its own within budgetMs; call GetPauseState before
+    pausing or resuming again.
+    """
+    data = input_data if isinstance(input_data, dict) else {}
+    hold = _pause_clamp(data.get("holdMs"), PAUSE_HOLD_MS) if "holdMs" in data else PAUSE_HOLD_MS[0]
+    wait = _pause_clamp(data.get("timeoutMs"), PAUSE_TIMEOUT_MS) if "timeoutMs" in data else PAUSE_TIMEOUT_MS[0]
+    budget_s = (3 * hold + wait + PAUSE_CLEANUP_RESERVE_MS) / 1000.0
+    return max(timeout, budget_s + PAUSE_SOCKET_SLACK_S)
+
+
 def wait_socket_timeout(timeout: float, timeout_ms: object) -> float:
     """Socket deadline for WaitUntil.
 
@@ -826,6 +857,8 @@ def main() -> int:
             call_timeout = max(call_timeout, 7.0)
     if args.route_or_tool == "ControlPlugin":
         call_timeout = max(call_timeout, 15.0)
+    if args.route_or_tool == "ControlPause":
+        call_timeout = pause_socket_timeout(call_timeout, input_data)
 
     try:
         with socket.create_connection((args.host, args.port), timeout=call_timeout) as sock:

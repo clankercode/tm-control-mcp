@@ -72,8 +72,13 @@ def test_only_map_module_and_test_starts_need_a_clear_dialog(as_runner, tmp_path
     for (uint i = 0; i < starts.Length; i++) Check(ToolNeedsDialogClear("ControlValidation", starts[i]), "start: " + starts[i]);
     Check(!ToolNeedsDialogClear("ControlValidation", "status"), "status reads");
     Check(!ToolNeedsDialogClear("ControlValidation", "requestLeavePlayground"), "leaving stays allowed");
-    // Answering and inspecting must never be refused.
-    string[] free = {"GetDialog", "RespondDialog", "SaveMapFlow", "GetMode", "WaitUntil", "ClickMenuButton", "TriggerControlOnAction"};
+    // The pause menu and display writes refuse behind a dialog (review 1 F9).
+    Check(ToolNeedsDialogClear("ControlPause", "pause"), "pause");
+    Check(ToolNeedsDialogClear("ControlPause", "resume"), "resume");
+    Check(ToolNeedsDialogClear("SetDisplaySetting", ""), "set bloom");
+    // Answering, inspecting and recovery must never be refused.
+    string[] free = {"GetDialog", "RespondDialog", "SaveMapFlow", "GetMode", "WaitUntil", "ClickMenuButton", "TriggerControlOnAction",
+                     "RestoreDisplaySetting", "GetDisplaySetting", "GetPauseState"};
     for (uint i = 0; i < free.Length; i++) Check(!ToolNeedsDialogClear(free[i], ""), "free: " + free[i]);
     ''')
 

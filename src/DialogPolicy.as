@@ -33,11 +33,14 @@ namespace TmMcp {
         return kind != "none" && kind != "wait" && kind != "unavailable" && kind.Length > 0;
     }
 
-    // Tools that leave the map, change module, or start a test. They refuse
-    // while a blocking dialog is up instead of queueing behind it.
+    // Tools that leave the map, change module, start a test, open the pause
+    // menu or change a display setting. They refuse while a blocking dialog
+    // is up instead of queueing behind it. Recovery and reads stay available:
+    // RestoreDisplaySetting, GetPauseState, GetDisplaySetting.
     bool ToolNeedsDialogClear(const string &in name, const string &in action) {
         if (name == "EditNewMap" || name == "OpenMapInEditor" || name == "PlayMap"
             || name == "BackToMainMenu" || name == "CreateMapViaMenu") return true;
+        if (name == "ControlPause" || name == "SetDisplaySetting") return true;
         if (name == "ControlValidation") {
             return action == "validate" || action == "requestEnterPlayground"
                 || action == "testFromStart" || action == "testFromCoord";

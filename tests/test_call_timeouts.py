@@ -45,3 +45,44 @@ def test_long_explicit_timeout_is_preserved(capsys):
          mock.patch.object(client.socket, "create_connection", return_value=sock) as connect:
         assert client.main() == 0
     assert connect.call_args.kwargs["timeout"] == 90
+
+
+PAUSE_POLICY = (Path(__file__).resolve().parents[1] / "src" / "PausePolicy.as").read_text()
+
+
+def _as_const(name):
+    import re
+    return int(re.search(rf"const int {name} = (\d+);", PAUSE_POLICY).group(1))
+
+
+def test_control_pause_clamps_match_the_plugin():
+    assert client.PAUSE_HOLD_MS == (_as_const("PAUSE_HOLD_MS_DEFAULT"), _as_const("PAUSE_HOLD_MS_MIN"),
+                                    _as_const("PAUSE_HOLD_MS_MAX"))
+    assert client.PAUSE_TIMEOUT_MS == (_as_const("PAUSE_TIMEOUT_MS_DEFAULT"), _as_const("PAUSE_TIMEOUT_MS_MIN"),
+                                       _as_const("PAUSE_TIMEOUT_MS_MAX"))
+    assert client.PAUSE_CLEANUP_RESERVE_MS == _as_const("PAUSE_CLEANUP_RESERVE_MS")
+    assert "return 3 * holdMs + timeoutMs + uint(PAUSE_CLEANUP_RESERVE_MS);" in PAUSE_POLICY
+
+
+@pytest.mark.parametrize("payload,budget_s", [
+    ({"action": "pause"}, 3 * 0.3 + 3.0 + 2.0),
+    ({"action": "pause", "holdMs": 2000, "timeoutMs": 10000}, 3 * 2.0 + 10.0 + 2.0),
+    ({"action": "pause", "holdMs": 99999, "timeoutMs": 99999}, 3 * 2.0 + 10.0 + 2.0),
+    ({"action": "resume", "holdMs": 1, "timeoutMs": 1}, 3 * 0.1 + 0.1 + 2.0),
+])
+def test_control_pause_socket_outlives_the_plugin_budget(payload, budget_s, capsys):
+    sock = mock.MagicMock()
+    sock.__enter__.return_value = sock
+
+    def recv(_):
+        # The plugin answers right at the end of its own budget.
+        if sock.settimeout.call_args.args[0] <= budget_s:
+            raise TimeoutError("socket gave up before the plugin's deadline")
+        return b'{"ok":true,"data":{"result":{"success":true,"output":{}}}}\n'
+
+    sock.recv.side_effect = recv
+    with mock.patch.object(sys, "argv", ["call.py", "--skip-process-check", "ControlPause", json.dumps(payload)]), \
+         mock.patch.object(client.socket, "create_connection", return_value=sock) as connect:
+        assert client.main() == 0
+    assert connect.call_args.kwargs["timeout"] >= budget_s + 5.0
+    assert json.loads(capsys.readouterr().out)["ok"] is True

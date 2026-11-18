@@ -141,7 +141,8 @@ namespace TmMcp {
 
     // After the menu has been opened by this call, the outcome code.
     // "" = success (paused). Anything else: the caller closes the menu it
-    // opened (Resume) and returns the code.
+    // opened (Resume) and returns the code, or CLEANUP_FAILED when it could
+    // not see the menu close.
     string PauseOutcomeCode(bool menuShownAfter, const string &in verdictAfter) {
         if (!menuShownAfter) return "MENU_NOT_SHOWN";
         if (verdictAfter == PAUSE_VERDICT_FROZEN) return "";
@@ -155,8 +156,79 @@ namespace TmMcp {
         return "RESUME_UNVERIFIED";
     }
 
-    // The auto-resume coroutine only acts on the pause it was started for.
-    bool AutoResumeShouldFire(uint scheduledToken, uint currentToken, bool openedByTool, bool menuShown) {
-        return scheduledToken == currentToken && openedByTool && menuShown;
+    // --- One deadline per call (review 1 F10) --------------------------------
+    // A failed pause keeps this much of the budget to close the menu it opened.
+    const int PAUSE_CLEANUP_RESERVE_MS = 2000;
+    // Resume is re-sent this often while a menu this tool opened stays up.
+    const int PAUSE_CLOSE_RETRY_MS = 500;
+    // Background Resume retries for one ownership before the watcher stops
+    // closing (it keeps watching).
+    const int PAUSE_CLOSE_ATTEMPTS_MAX = 10;
+    // After MENU_NOT_SHOWN the call watches this long for a menu that comes
+    // up late, so it can close it.
+    const int PAUSE_LATE_MENU_GRACE_MS = 1000;
+
+    // The initial sample can restart (a clock unreadable for a frame); it gets
+    // at most twice holdMs before the call goes on with what it has.
+    uint PauseInitialSampleLimitMs(uint holdMs) {
+        return 2 * holdMs;
+    }
+
+    // The whole ControlPause call, clamped inputs: the initial sample
+    // (<= 2*holdMs), timeoutMs for the show or close, holdMs for the
+    // verification window, then the cleanup reserve. Nothing in a call waits
+    // past this; tools/call.py gives the socket this plus slack.
+    uint PauseCallBudgetMs(uint holdMs, uint timeoutMs) {
+        return 3 * holdMs + timeoutMs + uint(PAUSE_CLEANUP_RESERVE_MS);
+    }
+
+    // GetPauseState: the window may restart, so it gets at most this long.
+    uint PauseStateSampleLimitMs(uint sampleMs) {
+        return 2 * sampleMs + 100;
+    }
+
+    // Why a call stopped part-way. Codes come from PauseRefusalCode, plus
+    // CONTEXT_CHANGED and DIALOG_BLOCKING.
+    string PauseStopMessage(const string &in code) {
+        if (code == "CONTEXT_CHANGED") return "the playground or its interface handler changed (map change, restart or reload)";
+        if (code == "LOADING") return "a loading screen started";
+        if (code == "NO_PLAYGROUND") return "the playground went away";
+        if (code == "ONLINE_NOT_PAUSABLE") return "the game is no longer solo/local play";
+        if (code == "DIALOG_BLOCKING") return "a game dialog came up";
+        return code;
+    }
+
+    // --- Ownership (review 1 F7/F8) -----------------------------------------
+    // What the ownership watcher does this frame. It runs every frame while
+    // this tool owns the menu, so ownership ends with the menu, whoever
+    // closed it, and with the context it was opened in. While a ControlPause
+    // call is still running on it (callActive), that call decides.
+    //  "stop"           nothing is owned
+    //  "skip"           a call is running: it decides this frame
+    //  "forget-context" the playground or its handler changed
+    //  "forget-closed"  the menu closed (anyone): ownership ends with it
+    //  "wait"           keep watching
+    //  "close"          a close is due: CloseInGameMenu(Resume)
+    //  "give-up"        closes went unanswered: stop closing, keep watching
+    string PauseWatchAction(bool owned, bool callActive, bool sameContext, bool menuShown,
+                            bool closeDue, uint closeAttempts) {
+        if (!owned) return "stop";
+        if (callActive) return "skip";
+        if (!sameContext) return "forget-context";
+        if (!menuShown) return "forget-closed";
+        if (!closeDue) return "wait";
+        if (closeAttempts >= uint(PAUSE_CLOSE_ATTEMPTS_MAX)) return "give-up";
+        return "close";
+    }
+
+    // pause while already paused (plan "noop") with autoResumeAfterMs:
+    //  not given          -> "keep" the timer as it is
+    //  this tool's pause  -> "update" it (0 cancels it)
+    //  someone else's     -> "refuse" a timer (AUTO_RESUME_NOT_OWNED): it would
+    //                        close a menu this tool did not open; 0 is "keep"
+    string PauseNoopTimerAction(bool given, int autoResumeMs, bool owned) {
+        if (!given) return "keep";
+        if (owned) return "update";
+        return autoResumeMs > 0 ? "refuse" : "keep";
     }
 }

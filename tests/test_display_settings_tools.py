@@ -1,23 +1,29 @@
-"""Get/Set/RestoreDisplaySetting (bloom): pure policy in stock AngelScript + source contracts.
+"""Get/Set/RestoreDisplaySetting (bloom): policy, orchestration and source contracts.
 
-No live game. DisplaySettingsPolicy.as runs in the stock AngelScript runner,
-checked against the Python port below.
+No live game. DisplaySettingsPolicy.as runs in the stock AngelScript runner
+against the Python port below. The production orchestration
+(DisplaySettingsCore.as: record IO, identity, wrapper ownership, restore) runs
+in the same runner against a fake game and a fake disk (tests/as_core_fakes.py),
+with a regression for each review-1 finding F1-F4 (test_f1_..., ...).
 
 UNPROVEN live (2026-11-18): that FxBloomHdr=None applied at runtime removes
 bloom without a restart (Q2), and that DisplaySettings_Apply neither resets the
 window/device nor saves Default.json at once (Q3).
 """
+import itertools
 import json
 import re
 import subprocess
 from pathlib import Path
 
 from test_pack_updates import as_runner  # noqa: F401  (pytest fixture)
+from as_core_fakes import run_display
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 POLICY = SRC / "DisplaySettingsPolicy.as"
 TOOLS = (SRC / "DisplaySettingsTools.as").read_text()
+CORE = (SRC / "DisplaySettingsCore.as").read_text()
 MCP_TOOLS = (SRC / "McpTools.as").read_text()
 MAIN = (SRC / "Main.as").read_text()
 
@@ -44,18 +50,29 @@ def index(name):
     return NAMES.index(n) if n else -1
 
 
-def restore_action(exists, recorded, current):
-    if not exists:
-        return "none"
-    if not normalize(recorded):
-        return "bad"
-    if normalize(recorded) == normalize(current):
+def restore_decision(identity_ok, sources, prior, applied, force):
+    readable = [v for v in sources if v in NAMES]
+    if not readable:
+        return "unavailable"
+    if not identity_ok and not force:
+        return "conflict-identity"
+    if all(v == prior for v in readable):
         return "clear"
+    if any(v != prior and v not in applied for v in readable) and not force:
+        return "conflict-value"
     return "apply"
 
 
-def mechanism(available, failed):
-    return "wrapper" if available and not failed else "systemConfig"
+def set_conflict(identity_ok, current, prior, applied):
+    if not identity_ok:
+        return "identity"
+    if current != prior and current not in applied:
+        return "value"
+    return ""
+
+
+def mechanism(available, busy, failed):
+    return "wrapper" if available and not busy and not failed else "systemConfig"
 
 
 def side_effects(db, da, mb, ma, xb, yb, xa, ya):
@@ -67,25 +84,6 @@ def side_effects(db, da, mb, ma, xb, yb, xa, ya):
     if xb != xa or yb != ya:
         out.append("windowSize")
     return ",".join(out)
-
-
-class RestoreRecordSim:
-    """Keep-oldest record, as SetDisplaySetting uses ShouldWriteRestoreRecord."""
-
-    def __init__(self):
-        self.record = None
-
-    def set(self, current, wanted):
-        if self.record is None:  # ShouldWriteRestoreRecord(recordExists)
-            self.record = current
-        return wanted
-
-    def restore(self, current):
-        act = restore_action(self.record is not None, self.record or "", current)
-        value = self.record if act == "apply" else current
-        if act in ("apply", "clear"):
-            self.record = None
-        return act, value
 
 
 # --- AngelScript runner --------------------------------------------------------
@@ -106,6 +104,10 @@ def b(v):
     return "true" if v else "false"
 
 
+def as_arr(values):
+    return "{" + ", ".join(s(v) for v in values) + "}"
+
+
 RAW = ["none", "None", "NONE", "off", "Off", "medium", "Medium", "MEDIUM", "high", "High", "HIGH",
        " high ", "", "low", "ultra", "1", "nOne"]
 
@@ -123,35 +125,55 @@ def test_bloom_names_and_indices(as_runner, tmp_path):
     run_policy(as_runner, tmp_path, "\n".join("    " + l for l in lines))
 
 
-def test_restore_record_keeps_oldest(as_runner, tmp_path):
-    sim = RestoreRecordSim()
-    cur = sim.set("high", "none")      # user's high recorded
-    cur = sim.set(cur, "medium")       # second Set must not record the tool's own "none"
-    assert sim.record == "high"
-    act, cur = sim.restore(cur)
-    assert (act, cur, sim.record) == ("apply", "high", None)
-    assert sim.restore(cur) == ("none", "high")
-    lines = [
-        "Check(ShouldWriteRestoreRecord(false), \"first Set writes the record\");",
-        "Check(!ShouldWriteRestoreRecord(true), \"later Sets keep the oldest\");",
-    ]
-    for exists in [False, True]:
-        for recorded in ["high", "none", "medium", "", "garbage"]:
-            for current in ["high", "none", "medium", ""]:
-                exp = restore_action(exists, recorded, current)
-                lines.append(f"Check(RestoreAction({b(exists)}, {s(recorded)}, {s(current)}) == {s(exp)}, "
-                             f"{s(f'restore {exists}/{recorded}/{current}')});")
-    lines.append('Check(RestoreAction(true, "garbage", "high") == "bad", "unreadable record is kept, nothing written");')
+def test_restore_decision_matrix(as_runner, tmp_path):
+    lines = []
+    values = ["none", "medium", "high", ""]
+    applied_sets = [["none"], ["none", "medium"]]
+    for ident, w, c, prior, applied, force in itertools.product(
+            [False, True], values, values, ["high", "none"], applied_sets, [False, True]):
+        exp = restore_decision(ident, [w, c], prior, applied, force)
+        lines.append(f"{{ array<string> src = {as_arr([w, c])}; array<string> ap = {as_arr(applied)};"
+                     f" Check(RestoreDecision({b(ident)}, src, {s(prior)}, ap, {b(force)}) == {s(exp)},"
+                     f" {s(f'decide {ident}/{w}/{c}/{prior}/{applied}/{force}')}); }}")
+    for ident, cur, prior, applied in itertools.product([False, True], ["none", "medium", "high"], ["high", "none"],
+                                                        applied_sets):
+        exp = set_conflict(ident, cur, prior, applied)
+        lines.append(f"{{ array<string> ap = {as_arr(applied)};"
+                     f" Check(SetRecordConflict({b(ident)}, {s(cur)}, {s(prior)}, ap) == {s(exp)},"
+                     f" {s(f'set {ident}/{cur}/{prior}/{applied}')}); }}")
     run_policy(as_runner, tmp_path, "\n".join("    " + l for l in lines))
+
+
+def test_record_format_round_trip_and_rejects(as_runner, tmp_path):
+    ident = "ab" * 32
+    run_policy(as_runner, tmp_path, rf'''
+    auto r = DisplayRecord();
+    r.prior = "high"; r.applied.InsertLast("none"); r.applied.InsertLast("medium");
+    r.identity = "{ident}"; r.setAt = "2026-11-18 19:00:00";
+    string text = DisplayRecordText(r);
+    string why;
+    auto back = ParseDisplayRecord(text, why);
+    Check(back !is null && DisplayRecordsEqual(back, r), "round trip: " + why);
+    Check(ParseDisplayRecord(text.SubStr(0, text.Length - 7), why) is null, "truncated: no end=ok");
+    Check(ParseDisplayRecord(text.SubStr(0, text.Length / 2), why) is null, "half a file");
+    Check(ParseDisplayRecord("", why) is null, "empty");
+    Check(ParseDisplayRecord(text.Replace("prior=high", "prior=ultra"), why) is null, "bad prior");
+    Check(ParseDisplayRecord(text.Replace("schema=2", "schema=1"), why) is null, "old schema");
+    Check(ParseDisplayRecord(text.Replace("applied=none,medium", "applied="), why) is null, "empty applied");
+    Check(ParseDisplayRecord(text.Replace("identity={ident}", "identity=C:/users/x"), why) is null, "raw path identity");
+    Check(ParseDisplayRecord(text + "prior=none\n", why) is null, "content after end");
+    Check(ParseDisplayRecord(text.Replace("setting=bloom", "setting=bloom\nprior=none"), why) is null, "duplicate key");
+    Check(ParseDisplayRecord("{{\"bloom\":\"high\"}}", why) is null, "the old JSON record is not valid here");
+    ''')
 
 
 def test_mechanism_and_verification(as_runner, tmp_path):
     lines = []
-    for avail in [False, True]:
-        for failed in [False, True]:
-            lines.append(f"Check(ChooseBloomMechanism({b(avail)}, {b(failed)}) == {s(mechanism(avail, failed))}, "
-                         f"\"mech {avail}/{failed}\");")
-    lines.append('Check(ChooseBloomMechanism(true, false) == "wrapper", "wrapper first");')
+    for avail, busy, failed in itertools.product([False, True], repeat=3):
+        lines.append(f"Check(ChooseBloomMechanism({b(avail)}, {b(busy)}, {b(failed)}) == {s(mechanism(avail, busy, failed))}, "
+                     f"\"mech {avail}/{busy}/{failed}\");")
+    lines.append('Check(ChooseBloomMechanism(true, false, false) == "wrapper", "wrapper first");')
+    lines.append('Check(ChooseBloomMechanism(true, true, false) == "systemConfig", "never someone else\'s wrapper");')
     for read in range(0, 3):
         for matching in range(0, read + 1):
             exp = read > 0 and matching == read
@@ -167,6 +189,205 @@ def test_mechanism_and_verification(as_runner, tmp_path):
         exp = side_effects(*c)
         lines.append(f"Check(DisplaySideEffects({', '.join(str(x) for x in c)}) == {s(exp)}, {s('side ' + str(c))});")
     run_policy(as_runner, tmp_path, "\n".join("    " + l for l in lines))
+
+
+# --- Production orchestration (DisplaySettingsCore.as) on a fake game + disk ----
+
+ID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+OTHER_ID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+
+def test_core_set_restore_round_trip_keeps_oldest(as_runner, tmp_path):
+    run_display(as_runner, tmp_path, r'''
+    auto g = FakeDisplayGame();               // user's bloom: high
+    auto r = SetDisplaySettingCore(g, BloomInput("none"));
+    Check(Ok(r) && g.systemConfig == 0 && OutStr(r, "restoreRecord") == "written", "set none: " + Code(r));
+    Check(g.unloads == g.loads, "every wrapper this tool loaded was unloaded");
+    auto r2 = SetDisplaySettingCore(g, BloomInput("medium"));
+    Check(Ok(r2) && g.systemConfig == 1 && OutStr(r2, "restoreTo") == "high", "second set keeps the oldest prior");
+    Check(g.Record().IndexOf("applied=none,medium") >= 0, "applied values recorded");
+    auto o = RestoreDisplaySettingCore(g, true, false);
+    Check(bool(o["restored"]) && string(o["action"]) == "apply" && g.systemConfig == 2, "restored to high");
+    Check(!g.HasRecord() && !g.disk.Has(DISPLAY_RESTORE_NEXT_FILE), "record and side file gone");
+    auto none = RestoreDisplaySettingCore(g, true, false);
+    Check(string(none["action"]) == "none", "nothing left to restore");
+    ''')
+
+
+def test_f1_corrupt_record_refuses_set_and_changes_nothing(as_runner, tmp_path):
+    """Review 1 F1: a truncated record must not become permission to write."""
+    run_display(as_runner, tmp_path, rf'''
+    auto g = FakeDisplayGame();
+    string good = MakeRecordText("medium", "none", "{ID}");
+    g.disk.Put(DISPLAY_RESTORE_FILE, good.SubStr(0, good.Length / 2));
+    string before = g.Record();
+    auto r = SetDisplaySettingCore(g, BloomInput("none"));
+    Check(!Ok(r) && Code(r) == "RESTORE_RECORD_INVALID", "refused: " + Code(r));
+    Check(g.systemConfig == 2 && g.applies == 0 && g.scWrites == 0, "bloom untouched");
+    Check(g.Record() == before, "the record is untouched for a person to inspect");
+    g.disk.Put(DISPLAY_RESTORE_FILE, "{{\"bloom\":\"high\",\"setAt\"");
+    auto r2 = SetDisplaySettingCore(g, BloomInput("none"));
+    Check(Code(r2) == "RESTORE_RECORD_INVALID" && g.systemConfig == 2, "truncated JSON too");
+    auto o = RestoreDisplaySettingCore(g, true, false);
+    Check(string(o["action"]) == "invalid" && !bool(o["restored"]) && g.HasRecord(), "restore keeps it");
+    ''')
+
+
+def test_f1_new_record_is_verified_before_the_bloom_write(as_runner, tmp_path):
+    run_display(as_runner, tmp_path, r'''
+    auto g = FakeDisplayGame();
+    g.disk.truncateWrites = true;             // the disk stores a short copy
+    auto r = SetDisplaySettingCore(g, BloomInput("none"));
+    Check(!Ok(r) && Code(r) == "RESTORE_RECORD_FAILED", "read-back caught it: " + Code(r));
+    Check(g.systemConfig == 2 && g.applies == 0 && g.scWrites == 0, "no bloom write");
+    Check(!g.HasRecord() && !g.disk.Has(DISPLAY_RESTORE_NEXT_FILE), "nothing half-written left behind");
+    auto g2 = FakeDisplayGame();
+    g2.disk.fail.InsertLast("write:" + DISPLAY_RESTORE_NEXT_FILE);
+    Check(Code(SetDisplaySettingCore(g2, BloomInput("none"))) == "RESTORE_RECORD_FAILED" && g2.systemConfig == 2, "write failure");
+    auto g3 = FakeDisplayGame();
+    g3.disk.fail.InsertLast("move:" + DISPLAY_RESTORE_NEXT_FILE);
+    Check(Code(SetDisplaySettingCore(g3, BloomInput("none"))) == "RESTORE_RECORD_FAILED" && g3.systemConfig == 2, "move failure");
+    // A crash after the old record was deleted but before the move: the checked
+    // side file is adopted, so recovery is not lost.
+    auto g4 = FakeDisplayGame();
+    g4.systemConfig = 0;
+    g4.disk.Put(DISPLAY_RESTORE_NEXT_FILE, MakeRecordText("high", "none", g4.identity));
+    auto o = RestoreDisplaySettingCore(g4, true, false);
+    Check(bool(o["restored"]) && g4.systemConfig == 2, "side file adopted and restored");
+    ''')
+
+
+def test_f2_record_from_another_install_is_never_applied_automatically(as_runner, tmp_path):
+    """Review 1 F2: plugin storage copied/overlaid from another install or profile."""
+    run_display(as_runner, tmp_path, rf'''
+    auto g = FakeDisplayGame();
+    g.systemConfig = 0;                       // this user's own choice: none
+    g.disk.Put(DISPLAY_RESTORE_FILE, MakeRecordText("high", "none", "{OTHER_ID}"));
+    auto o = RestoreDisplaySettingOnLifecycleCore(g, "start");
+    Check(string(o["action"]) == "conflict-identity" && !bool(o["restored"]), "conflict");
+    Check(g.systemConfig == 0 && g.scWrites == 0 && g.applies == 0, "this user's value untouched");
+    Check(g.HasRecord(), "record kept");
+    auto get = GetDisplaySettingCore(g);
+    Check(string(get["output"]["pendingRestore"]["restoreWouldDo"]) == "conflict-identity", "reported by Get");
+    auto t = RestoreDisplaySettingTool(g, NoInput());
+    Check(!Ok(t) && Code(t) == "RESTORE_CONFLICT" && g.systemConfig == 0, "explicit restore also refuses");
+    auto s1 = SetDisplaySettingCore(g, BloomInput("medium"));
+    Check(!Ok(s1) && Code(s1) == "RESTORE_CONFLICT" && g.systemConfig == 0, "set refuses too");
+    auto f = RestoreDisplaySettingTool(g, ForceInput(true));
+    Check(Ok(f) && g.systemConfig == 2 && !g.HasRecord(), "force:true applies it on request");
+    ''')
+
+
+def test_f2_value_changed_by_someone_else_is_a_conflict(as_runner, tmp_path):
+    run_display(as_runner, tmp_path, r'''
+    auto g = FakeDisplayGame();
+    Check(Ok(SetDisplaySettingCore(g, BloomInput("none"))), "set none");
+    g.systemConfig = 1;                       // the user picked medium in the settings page
+    auto o = RestoreDisplaySettingOnLifecycleCore(g, "unload");
+    Check(string(o["action"]) == "conflict-value" && g.systemConfig == 1, "never overwritten");
+    Check(g.HasRecord(), "record kept");
+    auto s1 = SetDisplaySettingCore(g, BloomInput("none"));
+    Check(Code(s1) == "RESTORE_CONFLICT" && g.systemConfig == 1, "set refuses on a changed value");
+    ''')
+
+
+def test_f2_lifecycle_restore_never_yields_on_callbacks(as_runner, tmp_path):
+    run_display(as_runner, tmp_path, r'''
+    auto g = FakeDisplayGame();
+    Check(Ok(SetDisplaySettingCore(g, BloomInput("none"))), "set");
+    uint y = g.yields;
+    auto o = RestoreDisplaySettingOnLifecycleCore(g, "disable");
+    Check(bool(o["restored"]) && g.systemConfig == 2, "restored on disable");
+    Check(g.yields == y, "disable/unload are callbacks: no yield");
+    Check(RestoreDisplaySettingOnLifecycleCore(g, "unload") is null, "nothing pending");
+    ''')
+
+
+def test_f3_wrapper_loaded_by_someone_else_is_never_applied(as_runner, tmp_path):
+    """Review 1 F3: the settings page has the wrapper loaded with unsaved edits."""
+    run_display(as_runner, tmp_path, r'''
+    auto g = FakeDisplayGame();
+    g.otherLoaded = true; g.otherWrapperValue = 2; g.otherPendingMode = 3;
+    auto r = SetDisplaySettingCore(g, BloomInput("none"));
+    Check(!Ok(r) && Code(r) == "WRAPPER_BUSY", "refused: " + Code(r));
+    Check(!g.applyOnOtherWrapper && g.appliedMode == 0 && g.scWrites == 0 && !g.HasRecord(), "nothing written");
+    // Restore while someone else holds it: the direct path, never their Apply.
+    g.otherLoaded = false;
+    Check(Ok(SetDisplaySettingCore(g, BloomInput("none"))), "set when free");
+    g.otherLoaded = true; g.otherWrapperValue = 2;   // their copy already shows high
+    auto o = RestoreDisplaySettingCore(g, true, false);
+    Check(!g.applyOnOtherWrapper && g.appliedMode == 0, "their wrapper was never applied");
+    Check(string(o["mechanism"]) == "systemConfig" && g.systemConfig == 2, "direct write used");
+    Check(bool(o["restored"]) && !g.HasRecord(), "both sources read high: done");
+    ''')
+
+
+def test_f3_restore_never_applies_a_busy_wrapper_even_if_load_would_allow(as_runner, tmp_path):
+    """The core's own rule, with no help from the host refusing the load."""
+    run_display(as_runner, tmp_path, r'''
+    auto g = FakeDisplayGame();
+    Check(Ok(SetDisplaySettingCore(g, BloomInput("none"))), "set none");
+    g.otherLoaded = true; g.otherWrapperValue = 2; g.otherPendingMode = 3;
+    g.strictLoad = false;                // LoadCurrent would not refuse here
+    uint appliesBefore = g.applies;      // Set's own apply ran before anyone else loaded it
+    auto o = RestoreDisplaySettingCore(g, true, false);
+    Check(!g.applyOnOtherWrapper && g.appliedMode == 0, "someone else's wrapper never applied");
+    Check(g.applies == appliesBefore && g.loads == g.unloads, "restore applied no wrapper at all");
+    Check(string(o["mechanism"]) == "systemConfig", "direct write only");
+    ''')
+
+
+def test_f3_wrapper_released_on_error_paths(as_runner, tmp_path):
+    run_display(as_runner, tmp_path, r'''
+    auto g = FakeDisplayGame();
+    g.wrapperApplyFails = true;
+    auto r = SetDisplaySettingCore(g, BloomInput("none"));
+    Check(g.loads == g.unloads && !g.ourLoaded, "unloaded after a failed apply");
+    Check(string(r["output"]["mechanism"]) == "systemConfig", "fell back");
+    ''')
+
+
+def test_f4_restore_keeps_record_until_every_source_agrees(as_runner, tmp_path):
+    """Review 1 F4: runtime already back but the loaded wrapper still holds the tool's value."""
+    run_display(as_runner, tmp_path, r'''
+    auto g = FakeDisplayGame();
+    Check(Ok(SetDisplaySettingCore(g, BloomInput("none"))), "set none");
+    g.systemConfig = 2;                        // runtime is back to high
+    g.otherLoaded = true; g.otherWrapperValue = 0;   // a loaded wrapper still says none
+    auto o = RestoreDisplaySettingCore(g, true, false);
+    Check(!bool(o["restored"]) && g.HasRecord(), "record kept while the wrapper disagrees");
+    Check(!g.applyOnOtherWrapper, "their wrapper never applied");
+    auto t = RestoreDisplaySettingTool(g, NoInput());
+    Check(!Ok(t) && Code(t) == "RESTORE_FAILED", "explicit restore reports RESTORE_FAILED: " + Code(t));
+    g.otherLoaded = false;                     // the settings page closed
+    auto o2 = RestoreDisplaySettingCore(g, true, false);
+    Check(bool(o2["restored"]) && string(o2["action"]) == "clear" && !g.HasRecord(), "now cleared");
+    // The write reads back, then a source reverts before the final check:
+    // the record must stay (only the last read decides the delete).
+    auto g3 = FakeDisplayGame();
+    Check(Ok(SetDisplaySettingCore(g3, BloomInput("none"))), "set none 3");
+    g3.revertTo = 0;
+    g3.revertSystemConfigOnReadsAfter = g3.scReads + 2;   // after the apply's own read-back
+    auto o4 = RestoreDisplaySettingCore(g3, true, false);
+    Check(!bool(o4["restored"]) && g3.HasRecord(), "record kept when the final read disagrees");
+    // A write that does not read back keeps the record too.
+    auto g2 = FakeDisplayGame();
+    Check(Ok(SetDisplaySettingCore(g2, BloomInput("none"))), "set none 2");
+    g2.applyWritesSystemConfig = false; g2.systemConfigWriteIgnored = true;
+    auto o3 = RestoreDisplaySettingCore(g2, true, false);
+    Check(!bool(o3["restored"]) && g2.HasRecord(), "unverified restore keeps the record");
+    ''')
+
+
+def test_get_display_setting_is_read_only(as_runner, tmp_path):
+    run_display(as_runner, tmp_path, r'''
+    auto g = FakeDisplayGame();
+    g.disk.Put(DISPLAY_RESTORE_NEXT_FILE, MakeRecordText("high", "none", g.identity));
+    auto r = GetDisplaySettingCore(g);
+    Check(Ok(r) && string(r["output"]["bloom"]) == "high", "read");
+    Check(g.disk.Has(DISPLAY_RESTORE_NEXT_FILE) && !g.HasRecord(), "Get moves no files");
+    Check(g.scWrites == 0 && g.applies == 0, "Get writes nothing");
+    ''')
 
 
 # --- Source contracts -----------------------------------------------------------
@@ -199,55 +420,37 @@ def test_schemas_are_closed():
     assert set(s_["properties"]) == {"bloom"}
     assert s_["properties"]["bloom"]["enum"] == ["none", "medium", "high"]
     assert _schema("GetDisplaySetting")["properties"] == {}
-    assert _schema("RestoreDisplaySetting")["properties"] == {}
+    assert _schema("RestoreDisplaySetting")["properties"] == {"force": {"type": "boolean"}}
 
 
-def test_restore_record_written_before_any_bloom_write():
-    body = _strip_comments(TOOLS)
-    fn = body[body.index("Json::Value@ SetDisplaySetting("):body.index("Json::Value@ RestoreDisplaySettingCore(")]
-    record = fn.index("_WriteDisplayRestoreRecord(")
-    write = fn.index("_ApplyBloom(")
-    assert record < write
-    # A failed record write returns before anything is changed.
-    between = fn[record:write]
-    assert "RESTORE_RECORD_FAILED" in between
-    # The only FxBloomHdr writes live in the two writer helpers, which only _ApplyBloom calls.
-    writes = re.findall(r"FxBloomHdr\s*=(?!=)", body)
-    assert len(writes) == 2, writes
-    for helper in ["_WriteBloomWrapper(", "_WriteBloomSystemConfig("]:
-        callers = [m.start() for m in re.finditer(re.escape(helper), body)]
-        defs = [m.start() for m in re.finditer(r"bool " + re.escape(helper), body)]
-        assert len(callers) - len(defs) == 1, helper  # called once, from _ApplyBloom
-    apply_fn = body[body.index("bool _ApplyBloom("):body.index("Json::Value@ _BloomStateJson(")]
-    assert "_WriteBloomWrapper(" in apply_fn and "_WriteBloomSystemConfig(" in apply_fn
+def test_only_the_live_host_touches_the_game():
+    core = _strip_comments(CORE)
+    for banned in ["GetApp", "CGame", "CSystem", "IO::", "yield", "Json::FromFile", "Json::ToFile", "Crypto::"]:
+        assert banned not in core, banned
+    tools = _strip_comments(TOOLS)
+    # The only FxBloomHdr writes live in the host's two writers.
+    assert len(re.findall(r"FxBloomHdr\s*=(?!=)", tools)) == 2
+    assert tools.count("DisplaySettings_Apply()") == 1
+    assert tools.count("DisplaySettings_LoadCurrent()") == 1
+    # Apply only on a wrapper this host loaded.
+    wa = tools[tools.index("bool WrapperWriteApply("):tools.index("void WrapperUnload()")]
+    assert "!loadedByUs" in wa.split("DisplaySettings_Apply()")[0]
+    wl = tools[tools.index("bool WrapperLoad("):tools.index("int WrapperRead()")]
+    assert wl.index("api.DisplaySettings !is null") < wl.index("DisplaySettings_LoadCurrent()")
 
 
-def test_wrapper_first_with_system_config_fallback():
-    body = _strip_comments(TOOLS)
-    apply_fn = body[body.index("bool _ApplyBloom("):body.index("Json::Value@ _BloomStateJson(")]
-    assert apply_fn.index("_WriteBloomWrapper(") < apply_fn.index("_WriteBloomSystemConfig(")
-    assert "ChooseBloomMechanism(" in apply_fn
-    assert 'output["mechanism"] = mechanism;' in body
+def test_record_written_flushed_and_closed():
+    tools = _strip_comments(TOOLS)
+    w = tools[tools.index("bool FileWrite("):tools.index("bool FileMove(")]
+    assert w.index("f.Write(text)") < w.index("f.Flush()") < w.index("f.Close()")
 
 
-def test_wrapper_apply_and_side_effect_watch():
-    body = _strip_comments(TOOLS)
-    w = body[body.index("bool _WriteBloomWrapper("):body.index("bool _WriteBloomSystemConfig(")]
-    assert w.index("_WrapperBegin(") < w.index("FxBloomHdr =") < w.index("DisplaySettings_Apply()") < w.rindex("_WrapperEnd(")
-    setfn = body[body.index("Json::Value@ SetDisplaySetting("):body.index("Json::Value@ RestoreDisplaySettingCore(")]
-    assert setfn.index("_ReadDisplayWatch()") < setfn.index("_ApplyBloom(") < setfn.rindex("_ReadDisplayWatch()")
-    for key in ["dirtyCounter", "displayMode", "windowSize"]:
-        assert f'"{key}"' in body
-    assert "DisplaySideEffects(" in setfn
-
-
-def test_wrapper_never_unloaded_under_another_user():
-    body = _strip_comments(TOOLS)
-    assert body.count("DisplaySettings_LoadCurrent()") == 1
-    assert body.count("DisplaySettings_Unload()") == 1
-    begin = body[body.index("bool _WrapperBegin("):body.index("void _WrapperEnd(")]
-    assert "if (!wasLoaded) api.DisplaySettings_LoadCurrent();" in begin
-    assert "if (!wasLoaded) api.DisplaySettings_Unload();" in body
+def test_identity_is_hashed_and_includes_instance_mark():
+    tools = _strip_comments(TOOLS)
+    ident = tools[tools.index("string InstallIdentity()"):tools.index("Json::Value@ IdentityJson()")]
+    for part in ["IO::FromUserGameFolder(", "IO::FromAppFolder(", "IO::FromStorageFolder(", "_ProfileName()",
+                 '"port.override"', "Crypto::Sha256("]:
+        assert part in ident, part
 
 
 def test_restore_called_on_start_disable_and_unload():
@@ -261,18 +464,14 @@ def test_restore_called_on_start_disable_and_unload():
     assert 'RestoreDisplaySettingOnLifecycle("disable")' in fn_body("OnDisabled")
     assert 'RestoreDisplaySettingOnLifecycle("unload")' in fn_body("OnDestroyed")
     # Callbacks are not coroutines: only start may yield.
-    assert 'RestoreDisplaySettingCore(when == "start")' in _strip_comments(TOOLS)
+    assert 'RestoreDisplaySettingCore(host, when == "start", false)' in _strip_comments(CORE)
 
 
 def test_restore_record_is_in_plugin_storage():
-    assert 'const string DISPLAY_RESTORE_FILE = "display-restore.json";' in POLICY.read_text()
-    assert "IO::FromStorageFolder(DISPLAY_RESTORE_FILE)" in TOOLS
-
-
-def test_failed_apply_keeps_record():
-    body = _strip_comments(TOOLS)
-    core = body[body.index("Json::Value@ RestoreDisplaySettingCore("):body.index("Json::Value@ RestoreDisplaySetting(Json")]
-    assert "if (ok) _DeleteDisplayRestoreRecord();" in core
+    policy = POLICY.read_text()
+    assert 'const string DISPLAY_RESTORE_FILE = "display-restore.txt";' in policy
+    assert 'const string DISPLAY_RESTORE_NEXT_FILE = "display-restore.next.txt";' in policy
+    assert "IO::FromStorageFolder(name)" in TOOLS
 
 
 def test_policy_file_has_no_game_types():
