@@ -82,7 +82,6 @@ namespace TmMcp {
         // A blocking BasicDialogs / modal menu dialog (DialogPolicy). The
         // in-game menu is not one of those frames, so it never counts.
         bool DialogBlocking();
-        void Log(const string &in message);
         // Extra read-only state added to clock reports (may be null).
         Json::Value@ ExtraState();
     }
@@ -105,6 +104,11 @@ namespace TmMcp {
         uint64 longestFrameMs = 0;
         uint shows = 0;
         uint resumes = 0;
+        bool attemptedResume = false;
+        bool resumeSent = false;
+        // Once a mutator sees an invalid playground, it must not send a
+        // cleanup action even if the next observation appears valid again.
+        string gateFailure = "";
         // After this call's first Show: the menu was seen open, and was then
         // seen closed (by anyone). A reopened menu is someone else's.
         bool menuSeenOpen = false;
@@ -132,13 +136,15 @@ namespace TmMcp {
         // Gate, menu, dialog and context, read now with no yield.
         void Observe() {
             @gate = host.ReadGate(ctx);
+            string currentStop = _StopCode();
+            if (mutating && gateFailure.Length == 0) gateFailure = currentStop;
+            if (stop.Length == 0) stop = currentStop;
             menu = host.MenuShown();
-            dialog = host.DialogBlocking();
             if (shows > 0) {
                 if (menu && !menuSeenClosedAfterOpen) menuSeenOpen = true;
                 else if (!menu && menuSeenOpen) menuSeenClosedAfterOpen = true;
             }
-            if (stop.Length == 0) stop = _StopCode();
+            dialog = host.DialogBlocking();
         }
 
         // One game frame, then a fresh observation and, for ControlPause, the
@@ -162,14 +168,16 @@ namespace TmMcp {
             if (stop.Length > 0) return false;
             if (dialog) { stop = "DIALOG_BLOCKING"; return false; }
             if (Past(showEnd) || Past(deadline)) return false;
-            if (!host.ShowMenu()) { stop = "NO_PLAYGROUND"; return false; }
-            shows++;
+            if (menu) return false; // a menu became visible before dispatch
+            shows++; // the native call may throw after dispatch
+            if (!host.ShowMenu()) { shows--; stop = "NO_PLAYGROUND"; return false; }
             return true;
         }
 
         void Resume() {
-            host.CloseMenuResume();
+            attemptedResume = true;
             resumes++;
+            resumeSent = host.CloseMenuResume();
         }
 
         bool CanRead() { return gate !is null && !gate.loading && gate.sameContext; }
@@ -193,6 +201,7 @@ namespace TmMcp {
         array<bool> seen(PAUSE_CLOCK_COUNT, false); // read at least once (reporting only)
         array<uint> seenValue(PAUSE_CLOCK_COUNT, 0);
         bool started = false;
+        bool menuUpThroughout = false;
         uint64 startedAt = 0;
         uint64 endedAt = 0;
         uint frames = 0;
@@ -207,7 +216,7 @@ namespace TmMcp {
         }
 
         // canRead: no loading screen and the context is the one the call began in.
-        void Observe(PauseHost@ host, bool canRead) {
+        void Observe(PauseHost@ host, bool canRead, bool menuUp = false) {
             uint64 now = host.NowMs();
             frames++;
             if (!canRead) { Restart("loading or context change"); return; }
@@ -221,6 +230,7 @@ namespace TmMcp {
             if (!all) { Restart("a clock was unreadable"); return; }
             if (!started) {
                 started = true;
+                menuUpThroughout = menuUp;
                 startedAt = now;
                 endedAt = now;
                 for (uint i = 0; i < PAUSE_CLOCK_COUNT; i++) {
@@ -229,6 +239,7 @@ namespace TmMcp {
                 return;
             }
             endedAt = now;
+            menuUpThroughout = menuUpThroughout && menuUp;
             for (uint i = 0; i < PAUSE_CLOCK_COUNT; i++) {
                 if (v[i] != last[i]) {
                     changes[i]++;
@@ -290,14 +301,14 @@ namespace TmMcp {
     PauseClockWindow@ PauseSampleWindow(PauseCall@ call, uint holdMs, uint64 endAt, bool requireMenu) {
         auto w = PauseClockWindow();
         if (requireMenu && !call.menu) { if (call.stop.Length == 0) call.stop = "MENU_CLOSED"; return w; }
-        w.Observe(call.host, call.CanRead());
+        w.Observe(call.host, call.CanRead(), call.menu);
         if (holdMs == 0 || call.stop.Length > 0) return w;
         while (w.WindowMs() < holdMs) {
             if (call.Past(endAt)) break;
             call.Step();
             if (call.stop.Length > 0) return w;
             if (requireMenu && !call.menu) { call.stop = "MENU_CLOSED"; return w; }
-            w.Observe(call.host, call.CanRead());
+            w.Observe(call.host, call.CanRead(), call.menu);
         }
         return w;
     }
@@ -426,6 +437,7 @@ namespace TmMcp {
         bool menuBefore = call.menu;
         string verdictBefore = before.Verdict(holdMs);
         string resolved = ResolvePauseAction(action, menuBefore);
+        if (resolved == "pause" && menuBefore) return _PauseExisting(call, before, holdMs, t0, output);
         string plan = PausePlan(resolved, menuBefore, verdictBefore);
         output["resolvedAction"] = resolved;
         output["plan"] = plan;
@@ -446,13 +458,6 @@ namespace TmMcp {
             output["menuShown"] = menuBefore;
             output["openedByThisCall"] = false;
             _PauseFinish(call, t0, output);
-            if (resolved == "pause") {
-                // The menu is up but time runs: online-like, or a menu that
-                // does not pause. Pause never closes a menu.
-                return _PauseErr("The in-game menu is up but the clocks are not frozen ("
-                    + verdictBefore + "). Not paused; the menu was left as it was.", "NOT_PAUSED", false, "",
-                    "ControlPause resume closes it.", output);
-            }
             return _PauseErr("No in-game menu is up but the clocks are not running ("
                 + verdictBefore + "): nothing this tool can close. Check GetMode / loading / finish screen.",
                 "RESUME_UNVERIFIED", true, "", "", output);
@@ -462,119 +467,164 @@ namespace TmMcp {
         return _PauseClose(call, holdMs, timeoutMs, t0, before, output);
     }
 
-    Json::Value@ _PauseOpen(PauseCall@ call, uint holdMs, uint timeoutMs, uint64 t0, Json::Value &in output) {
-        auto host = call.host;
-        uint64 workEnd = call.deadline - uint64(PAUSE_CLEANUP_RESERVE_MS);
-        uint64 showStart = host.NowMs();
-        uint64 showEnd = _PauseMin(showStart + uint64(timeoutMs), workEnd);
-        if (!call.ShowChecked(showEnd)) return _PauseStoppedBeforeAction(call, t0, output);
-        // Wait for the menu, re-sending Show each frame (it can take more
-        // than one), each time after a fresh read of everything.
-        bool shown = host.MenuShown();
-        while (!shown && call.stop.Length == 0) {
-            if (call.Past(showEnd)) break;
-            call.Step();
-            if (call.stop.Length > 0) break;
-            shown = call.menu;
-            if (shown) break;
-            if (!call.ShowChecked(showEnd)) break;
-            shown = host.MenuShown();
+    // A pre-existing menu is never opened or closed by a pause request.
+    Json::Value@ _PauseExisting(PauseCall@ call, PauseClockWindow@ before, uint holdMs, uint64 t0,
+                                Json::Value &in output) {
+        auto w = before;
+        if (w is null || !w.menuUpThroughout || w.WindowMs() < holdMs) {
+            @w = PauseSampleWindow(call, holdMs, call.deadline - uint64(PAUSE_CLEANUP_RESERVE_MS), true);
         }
-        if (shown) call.Observe();
-
-        string verdictAfter = PAUSE_VERDICT_UNKNOWN;
-        uint windows = 0;
-        PauseClockWindow@ after = null;
-        if (shown && call.stop.Length == 0) {
-            // The pause can take effect a frame or two after the menu shows:
-            // back-to-back hold windows until one is frozen or the time for
-            // them (timeoutMs from the show, plus one last full window) runs out.
-            uint64 freezeEnd = _PauseMin(showStart + uint64(timeoutMs) + uint64(holdMs), workEnd);
-            while (windows == 0 || host.NowMs() + uint64(holdMs) <= freezeEnd) {
-                @after = PauseSampleWindow(call, holdMs, freezeEnd, true);
-                windows++;
-                if (call.stop.Length > 0) break;
-                verdictAfter = after.Verdict(holdMs);
-                if (verdictAfter == PAUSE_VERDICT_FROZEN) break;
-            }
-        }
-        output["holdWindows"] = int(windows);
-        if (after !is null) output["clocks"] = after.ToJson(host);
-        output["verdict"] = verdictAfter;
-
-        // Final read right before the result (no yield since the last frame).
+        string verdict = w.Verdict(holdMs);
+        output["resolvedAction"] = "pause";
+        output["menuShownBefore"] = true;
+        output["changed"] = false;
+        output["openedByThisCall"] = false;
+        output["clocks"] = w.ToJson(call.host);
+        output["verdict"] = verdict;
         call.Observe();
+        output["menuShown"] = call.menu;
         string code = call.stop;
-        if (code.Length == 0 && call.menuSeenClosedAfterOpen) code = "MENU_CLOSED";
-        if (code.Length == 0) code = PauseOutcomeCode(call.menu, verdictAfter);
-        if (code.Length == 0) {
-            output["changed"] = true;
-            output["paused"] = true;
-            output["menuShown"] = true;
-            output["openedByThisCall"] = true;
-            _PauseFinish(call, t0, output);
-            return MakeSuccess(output);
-        }
-        return _PauseFailed(call, code, verdictAfter, t0, output);
+        if (code.Length == 0 && !call.menu) code = "MENU_CLOSED";
+        if (code.Length == 0 && verdict != PAUSE_VERDICT_FROZEN) code = "NOT_PAUSED";
+        output["paused"] = code.Length == 0;
+        output["plan"] = code.Length == 0 ? "noop" : "verify";
+        _PauseFinish(call, t0, output);
+        if (code.Length == 0) return MakeSuccess(output);
+        string why = code == "NOT_PAUSED" ? "The clocks were not verified frozen (" + verdict + ")"
+                                          : PauseStopMessage(code);
+        return _PauseErr(why + "; no menu action was sent.", code, code != "NOT_PAUSED", "",
+            "GetPauseState shows the current menu and clocks.", output);
     }
 
-    // P3: after a Show that did not end in a verified pause. At most ONE
-    // Resume, and only for the menu this call saw open, still up, in the
-    // same context; then report what was actually seen.
-    Json::Value@ _PauseFailed(PauseCall@ call, const string &in code, const string &in verdictAfter, uint64 t0,
-                              Json::Value &in output) {
+    Json::Value@ _PauseOpen(PauseCall@ call, uint holdMs, uint timeoutMs, uint64 t0, Json::Value &in output) {
         auto host = call.host;
+        string code, exception;
+        string verdictAfter = PAUSE_VERDICT_UNKNOWN;
+        try {
+            uint64 workEnd = call.deadline - uint64(PAUSE_CLEANUP_RESERVE_MS);
+            uint64 showStart = host.NowMs();
+            uint64 showEnd = _PauseMin(showStart + uint64(timeoutMs), workEnd);
+            if (!call.ShowChecked(showEnd)) {
+                if (call.menu && call.stop.Length == 0) return _PauseExisting(call, null, holdMs, t0, output);
+                return _PauseStoppedBeforeAction(call, t0, output);
+            }
+            call.Observe();
+            // Wait for the menu, re-sending Show each frame as before, only
+            // if the fresh gate allows it and the menu is not already up.
+            while (!call.menu && call.stop.Length == 0) {
+                if (call.Past(showEnd)) break;
+                call.Step();
+                if (call.stop.Length > 0 || call.menu || !call.ShowChecked(showEnd)) break;
+                call.Observe();
+            }
+
+            uint windows = 0;
+            PauseClockWindow@ after = null;
+            if (call.menu && call.stop.Length == 0) {
+                // Allow the clocks to settle, but require a full menu-up hold.
+                uint64 freezeEnd = _PauseMin(showStart + uint64(timeoutMs) + uint64(holdMs), workEnd);
+                while (windows == 0 || host.NowMs() + uint64(holdMs) <= freezeEnd) {
+                    @after = PauseSampleWindow(call, holdMs, freezeEnd, true);
+                    windows++;
+                    if (call.stop.Length > 0) break;
+                    verdictAfter = after.Verdict(holdMs);
+                    if (verdictAfter == PAUSE_VERDICT_FROZEN) break;
+                }
+            }
+            output["holdWindows"] = int(windows);
+            if (after !is null) output["clocks"] = after.ToJson(host);
+            output["verdict"] = verdictAfter;
+
+            call.Observe();
+            code = call.stop;
+            if (code.Length == 0 && call.menuSeenClosedAfterOpen) code = "MENU_CLOSED";
+            if (code.Length == 0) code = PauseOutcomeCode(call.menu, verdictAfter);
+            if (code.Length == 0) {
+                output["changed"] = true;
+                output["paused"] = true;
+                output["menuShown"] = true;
+                output["openedByThisCall"] = true;
+                output["lateShowPossible"] = call.shows > 1;
+                if (call.shows > 1) output["lateShowHint"] = "After the menu appears closed, call GetPauseState again.";
+                _PauseFinish(call, t0, output);
+                return MakeSuccess(output);
+            }
+        } catch {
+            exception = getExceptionInfo();
+            code = "tool_exception";
+            if (call.shows == 0) return MakeError("ControlPause threw before Show: " + exception, code, true);
+        }
+        return _PauseFailed(call, code, verdictAfter, exception, t0, output);
+    }
+
+    // At most one cleanup Resume. Reobserve immediately before dispatch;
+    // neither a changed playground nor a newly observed menu is ours to close.
+    Json::Value@ _PauseFailed(PauseCall@ call, const string &in code, const string &in verdictAfter,
+                              const string &in exception, uint64 t0, Json::Value &in output) {
+        string skipped, cleanupError;
+        bool menuKnown = false;
+        bool menuAfter = false;
+        try {
+            call.Observe();
+            if (call.gateFailure.Length > 0) skipped = call.gateFailure;
+            else if (!call.OwnMenuStillUp()) {
+                skipped = call.menu ? "the menu that is up is not one this call saw open and continuously up"
+                                    : "no in-game menu is up";
+            }
+            if (call.dialog) output["dialogUpAtCleanup"] = true;
+            if (skipped.Length == 0 && !call.attemptedResume) {
+                call.Resume();
+                call.Observe();
+                while (call.menu && call.gateFailure.Length == 0 && !call.Past(call.deadline)) call.Step();
+            }
+            menuKnown = true;
+            menuAfter = call.menu;
+        } catch {
+            cleanupError = getExceptionInfo();
+            if (!call.attemptedResume) skipped = "cleanup observation failed";
+            // A reporting read may fail too. Do not present a stale menu bit
+            // as proof of closure and never send another Resume from here.
+            try {
+                menuAfter = call.host.MenuShown();
+                menuKnown = true;
+            } catch {}
+        }
+        try { _PauseFinish(call, t0, output); } catch {}
         output["paused"] = false;
         output["openedByThisCall"] = call.menuSeenOpen;
-        call.Observe(); // immediately before the Resume
-        bool same = call.gate.sameContext && !call.gate.loading;
-        string skipped = "";
-        if (!call.OwnMenuStillUp()) {
-            skipped = call.menu ? "the menu that is up is not one this call saw open and continuously up"
-                                : "no in-game menu is up";
-        } else if (!same) {
-            skipped = "the playground changed; nothing is sent into a different context";
+        output["resumeAttempted"] = call.attemptedResume;
+        output["resumeSent"] = call.resumeSent;
+        if (skipped.Length > 0) output["cleanupSkipped"] = skipped;
+        if (cleanupError.Length > 0) output["cleanupError"] = cleanupError;
+        if (menuKnown) {
+            output["menuShown"] = menuAfter;
+            output["menuShownAfter"] = menuAfter;
+            output["changed"] = menuAfter;
+        } else {
+            output["menuShown"] = "unknown";
+            output["menuShownAfter"] = "unknown";
+            output["changed"] = "unknown";
         }
-        if (call.dialog) output["dialogUpAtCleanup"] = true;
-        if (skipped.Length == 0) {
-            call.Resume();
-            // Watch (no second Resume) until it is seen closed, the context
-            // changes, or the deadline passes.
-            bool closed = !host.MenuShown();
-            while (!closed && !call.Past(call.deadline)) {
-                call.Step();
-                if (!call.gate.sameContext) break;
-                closed = !call.menu;
-            }
-        }
-        call.Observe();
-        bool menuAfter = call.menu;
-        output["resumeSent"] = skipped.Length == 0;
-        if (skipped.Length > 0) output["resumeSkipped"] = skipped;
-        output["menuShown"] = menuAfter;
-        output["menuShownAfter"] = menuAfter;
-        // A Show this call sent may still be applied by the game later: none
-        // was seen to take effect, or more were sent than the one that did.
-        // There is no API to cancel one or to know it has drained.
-        bool late = call.shows > 0 && !menuAfter && (!call.menuSeenOpen || call.shows > 1);
+        // No API to cancel or drain a Show. A visible menu does not remove
+        // the risk of additional pending requests.
+        bool late = call.shows > 0 && (!call.menuSeenOpen || call.shows > 1 || !menuKnown);
         output["lateShowPossible"] = late;
-        output["changed"] = menuAfter;
-        _PauseFinish(call, t0, output);
 
         string why = code == "MENU_NOT_SHOWN"
             ? "ShowInGameMenu did not bring the in-game menu up within timeoutMs."
             : (code == "NOT_PAUSED"
-               ? "The in-game menu opened but the clocks kept running (" + verdictAfter + "): not paused."
+               ? "The in-game menu opened but the clocks were not verified frozen (" + verdictAfter + ")."
                : "ControlPause stopped after ShowInGameMenu was called: " + PauseStopMessage(code) + ".");
-        string seen = menuAfter
-            ? " The in-game menu is still up" + (skipped.Length == 0 ? " after one Resume." : " (" + skipped + ").")
-            : (skipped.Length == 0 ? " One Resume was sent and the menu was seen closed." : " No in-game menu is up.");
-        if (late) seen += " A ShowInGameMenu this call sent may still be applied later.";
-        string hint = "Call GetPauseState" + (late ? " (a late Show may open the menu)" : "")
-            + "; ControlPause resume closes the in-game menu if it is up.";
-        string outCode = (menuAfter && skipped.Length == 0) ? "CLEANUP_FAILED" : code;
+        if (exception.Length > 0) why += " " + exception + ".";
+        if (!menuKnown) why += " The menu state could not be read.";
+        else if (menuAfter) why += " The in-game menu is still up.";
+        else why += " The in-game menu was observed closed.";
+        if (late) why += " A ShowInGameMenu this call sent may still be applied later.";
+        string hint = "Call GetPauseState; ControlPause resume closes the in-game menu if it is up.";
+        if (late) hint += " After the menu appears closed, call GetPauseState again to check for a late Show.";
+        string outCode = (call.attemptedResume && (!menuKnown || menuAfter)) ? "CLEANUP_FAILED" : code;
         if (outCode != code) output["cause"] = code;
-        return _PauseErr(why + seen, outCode, code != "NOT_PAUSED", "", hint, output);
+        return _PauseErr(why, outCode, code != "NOT_PAUSED" || outCode == "CLEANUP_FAILED", "", hint, output);
     }
 
     Json::Value@ _PauseClose(PauseCall@ call, uint holdMs, uint timeoutMs, uint64 t0, PauseClockWindow@ before,
@@ -593,6 +643,7 @@ namespace TmMcp {
         if (call.stop.Length > 0) return _PauseStoppedBeforeAction(call, t0, output);
         if (call.dialog) { call.stop = "DIALOG_BLOCKING"; return _PauseStoppedBeforeAction(call, t0, output); }
         if (call.Past(call.deadline)) return _PauseStoppedBeforeAction(call, t0, output);
+        if (!call.menu) { call.stop = "MENU_CLOSED"; return _PauseStoppedBeforeAction(call, t0, output); }
         call.Resume();
         uint64 closeStart = host.NowMs();
         uint64 closeEnd = _PauseMin(closeStart + uint64(timeoutMs), call.deadline);
@@ -633,6 +684,7 @@ namespace TmMcp {
         output["menuShownAfter"] = menuNow;
         output["verdict"] = verdictAfter;
         output["jumpMs"] = jumps;
+        output["jumpNote"] = "Missing jumpMs entries are unmeasured, not zero.";
         output["changed"] = !menuNow;
         _PauseFinish(call, t0, output);
         if (call.stop.Length > 0) {

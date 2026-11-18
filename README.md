@@ -576,71 +576,84 @@ changed, with no OS input. The agent stays in control the whole time: nothing
 here runs on its own (no timer, no watcher, no automatic restore), so the agent
 resumes and restores itself.
 
-**Pause.** The game has no public "pause the simulation" call. The only pause
-is its own in-game (ESC) menu, and that only stops time where the mode script
-runs in this game: solo and local play. `ControlPause {action:pause}` opens the
-menu with `ShowInGameMenu()` and then requires three clocks
+**Pause.** `ControlPause {action:pause}` opens the game's own in-game (ESC)
+menu in solo/local play. It succeeds only after all three clocks
 (`PlaygroundClientScriptAPI.GameTime`, `GetCmdBufferCore().SimulationTime` and
-`.GameTime`) to be read and unchanged for `holdMs` (default 300) with the menu
-up on every frame. Every observed change counts (a clock that goes A→B→A is
-not frozen); an unreadable sample or loading frame restarts the window. It
-judges on the clocks, never on the menu flag: online the menu shows while the
-game keeps running. It refuses before opening anything when online
-(`ONLINE_NOT_PAUSABLE`) or behind a dialog (`DIALOG_BLOCKING`). After every
-frame, and immediately before every `ShowInGameMenu` and every Resume, it reads
-the locality gate, the menu, the dialog state and the playground: a change
-stops the call (`CONTEXT_CHANGED`, `LOADING`, `ONLINE_NOT_PAUSABLE`), and a
-dialog stops it before the next Show. If a pause does not verify, the call
-sends **one** Resume, only if it saw its menu open and the playground is
-unchanged, and reports what it then saw (`menuShownAfter`; `CLEANUP_FAILED`
-when the menu is still up). `lateShowPossible:true` means a Show it sent may
-still be applied later; there is no API to cancel one. After any failure,
-call `GetPauseState`, then `ControlPause resume` if the menu is up. `resume`
-closes the in-game menu with `CloseInGameMenu(Resume)` only, never Quit or a
-sub-menu, whoever opened it, and reports `jumpMs` per clock. Both actions are
-idempotent; `openedByThisCall` says whether this call opened the menu. Every
-call has one budget (`output.budgetMs` = 3×holdMs + timeoutMs + 2 s, at most
-18 s; `tools/call.py` waits that plus 5 s, or `--timeout` if longer). The budget
-is checked once per game frame, so a frame hitch can run past it.
-`GetPauseState` changes nothing and samples online too; its `menuShown`,
-locality and `pausable` are read at the end of the window.
+`.GameTime`) are unchanged and the menu is observed up on every frame of a full
+`holdMs` window (default 300). Every observed change counts (A→B→A isn't frozen).
+If a pre-existing menu wasn't up for the initial hold, the tool samples a fresh
+menu-up window. A pause request never closes a pre-existing menu.
+
+`ControlPause` checks locality, loading, playground, menu and dialog state
+after each frame and before a menu action. A loading, locality or context
+change aborts; it refuses online (`ONLINE_NOT_PAUSABLE`) and does not open
+behind a blocking dialog (`DIALOG_BLOCKING`). If a Show did not lead to a
+verified pause, the call attempts **at most one** cleanup Resume, and only if
+it observed the menu open and stay up and the fresh local, non-loading,
+same-context gate passes. It reports `cleanupSkipped` when it cannot dispatch,
+and `menuShownAfter` as observed (or `"unknown"` if it could not read it).
+`CLEANUP_FAILED` means closure wasn't verified after a Resume attempt. A timeout
+or reload isn't evidence of closure. Call `GetPauseState` after any failure;
+if the menu is up, use `ControlPause resume`. If `lateShowPossible:true`, call
+`GetPauseState` again after the menu appears closed. An unobserved or additional
+Show may still land, and the API cannot cancel or drain it. A menu or same-address
+context replacement with no observed edge cannot be distinguished.
+
+`ControlPause {action:resume}` closes the in-game menu with
+`CloseInGameMenu(Resume)` only, never Quit or a sub-menu, whoever opened it.
+`jumpMs` reports the first changed value relative to the pre-resume baseline
+for each clock where both were measured. A missing entry is **unmeasured**, not
+zero; a resume noop has no `jumpMs`. Both actions can succeed with `changed:false`
+when the requested state is already verified. The per-call budget is
+`3×holdMs + timeoutMs + 2 s` (max 18 s; `tools/call.py` waits that plus 5 s, or
+`--timeout` if longer). It is checked per frame, so a hitch can overrun it.
+`GetPauseState` changes nothing and samples online too. Its sample can restart
+on an unreadable clock or loading frame if the context holds; by contrast,
+loading aborts `ControlPause`. `menuShown`, locality and `pausable` reflect the
+end of the read-only sample.
 
 **Bloom.** `SetDisplaySetting {bloom:none|medium|high}` writes the user's own
-setting, which the game saves to its config; `persisted` is reported as
-`"assumed"` because when the game saves it is unproven (Q3). There is one
-restore record, `bloom-restore.txt` in the plugin storage folder, and Set never
-overwrites it: while any record exists, valid or not, Set refuses and changes
-nothing (`RESTORE_PENDING`, `RESTORE_RECORD_INVALID`, `RESTORE_CONFLICT`). It
-also refuses `IDENTITY_UNKNOWN` without a readable `port.override` (only
-leased tmc instances have one, so the primary prefix never gets a Set),
-`WRAPPER_BUSY` while the graphics settings page (or anything else) has the
-`DisplaySettings` wrapper loaded, `SOURCES_DISAGREE` when the wrapper and
-`SystemConfig` read different values, and `LEGACY_RECORD_PRESENT` while an
-older build's record file exists. Otherwise, in one section with no yield, it
-writes the record (prior, target, `display`/`safe` config, an install identity
-hashed from the user, app and storage folders, the profile name, the
-`port.override` and the config in effect), reads it back exactly, writes bloom
-by **one** mechanism chosen up front (`output.mechanism`: the `DisplaySettings`
-wrapper this tool loaded with no yield, else a direct
-`Viewport.SystemConfig.Display` write), and reads every source back
-(`APPLY_UNVERIFIED` keeps the record). `sideEffects` lists any window or
-display-mode change.
+setting. Persistence and deferred `Apply` timing are unproven (Q3);
+`persisted:"assumed"` is not a save receipt. Set never overwrites the single
+`bloom-restore.txt` record in plugin storage, and refuses without a valid
+`port.override` marker (`IDENTITY_UNKNOWN`), while an older record exists
+(`LEGACY_RECORD_PRESENT`), while a wrapper is busy (`WRAPPER_BUSY`), or when
+readable bloom sources disagree (`SOURCES_DISAGREE`). It reads the prior,
+writes and reads back the record, then writes by one mechanism without
+yielding (`output.mechanism`: the tool's own script wrapper, or a direct
+`Viewport.SystemConfig` display/safe config write). `APPLY_UNVERIFIED` means
+same-frame read-back did not verify the change; the record is kept.
+`sideEffects` lists only changes in the same-frame readings of `dirtyCounter`,
+`displayMode` and `windowSize` (or `"unknown"` if unavailable); it cannot rule
+out a window or device reset.
 
-`RestoreDisplaySetting` is the only thing that restores, and it is explicit.
-The record must parse strictly and belong to this install and config. If every
-readable source holds the target, it writes the prior and deletes the record
-only once every source reads the prior back. If every source already holds the
-prior (Set stopped before its write, or the user reverted), it deletes the
-record and reports `restored:false`, reason `already at prior`. Anything else,
-including a known source it cannot read, is `RESTORE_CONFLICT` with the record
-kept; `{force:true}` then writes the prior anyway and **overwrites the user's
-current value**. Plugin start, disable and unload only log a pending record.
+`RestoreDisplaySetting` requires a valid, matching record. If all readable
+sources hold the target and no known source is unreadable, it writes the prior
+and reads back all sources. If all are already at the prior, it writes nothing
+(`restored:false`, reason `already at prior`). Normal Restore **always keeps
+the record**. A conflict keeps it too. `{force:true}` can overwrite the user's
+current value **only within the same identity and config**. A user's same-value
+edit cannot be distinguished from the tool's write (limitation). Startup,
+disable and unload only report records, never apply or delete them.
+
+After a map reload or game restart where `GetDisplaySetting` still shows the
+prior, call `RestoreDisplaySetting {retire:true}` to remove the record. Retire
+checks the same identity/config, every readable source at prior, and no known
+unreadable source or busy display call. It never writes bloom and cannot be
+combined with `force:true`. Don't retire on immediate read-back alone.
+
+**What the record binds to.** The hash covers the prefix's user, app and plugin
+storage paths, active profile and display/safe config, and the tmc port marker.
+`tmc` overlays keep plugin storage in a private per-instance upper directory
+that `tmc stop` wipes by default. The primary has no marker, so Set refuses
+there. **Limitation:** prefixes with identical paths, profile, config and
+marker collide. This is a prefix-marker check, not a lease check.
 
 Manual recovery (an older build's `display-restore.json` / `.txt`, or a record
 from another instance): `GetDisplaySetting` shows `legacyRecord` /
-`restoreRecord` with its path and bloom. Check which instance wrote it, keep a
-copy, set bloom in Settings > Graphics if that is the value to restore, then
-delete the file. Never copy a record between instances.
+`restoreRecord` with its path and recorded value if readable. Check which
+instance wrote it, keep a copy, set bloom in Settings > Graphics if that is the
+value to restore, then delete the file. Never copy a record between instances.
 
 **Unproven live (2026-11-18):** Q1, whether a programmatic menu freezes the
 clocks the way ESC does (ESC in solo was measured to); Q2, whether bloom none

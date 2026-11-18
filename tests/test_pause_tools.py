@@ -449,7 +449,7 @@ def test_p2_menu_closed_and_reopened_during_verification_is_not_ours(as_runner, 
     g.At(1550, "menu", 1);              // ...and opens their own
     auto r = ControlPauseCore(g, PauseInput("pause"));
     Check(!Ok(r) && Code(r) == "MENU_CLOSED", "stopped when its menu closed: " + Code(r));
-    Check(g.closes == 0 && OutStr(r, "resumeSkipped").Length > 0, "no Resume, and says why");
+    Check(g.closes == 0 && OutStr(r, "cleanupSkipped").Length > 0, "no Resume, and says why");
     Check(g.now < 1550, "the call ended on the frame it saw the close");
     g.Idle(10);
     Check(g.menu && g.closes == 0, "the replacement menu is never closed by this call");
@@ -670,3 +670,118 @@ def test_guide_and_docs_mark_live_checks_unproven():
             assert q in doc, q
     for doc in [guide, (ROOT / "README.md").read_text(), (ROOT / "AGENTS.md").read_text()]:
         assert "autoResumeAfterMs" not in doc
+
+
+def test_r4_late_manual_menu_requires_fresh_continuous_hold(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, r'''
+    auto g = FakePauseGame(); g.clocksIdle = true;
+    g.At(1280, "menu", 1);   // only the tail of the initial 300 ms sample
+    auto r = ControlPauseCore(g, PauseInput("pause"));
+    Check(Ok(r) && OutBool(r, "paused") && OutStr(r, "plan") == "noop" && g.now >= 1580,
+          "waited a full menu-up hold rather than using idle clocks before ESC");
+    Check(g.shows == 0 && g.closes == 0, "never touches the existing menu");
+    auto g2 = FakePauseGame(); g2.clocksIdle = true;
+    g2.At(1280, "menu", 1); g2.At(1360, "menu", 0);
+    auto r2 = ControlPauseCore(g2, PauseInput("pause"));
+    Check(Code(r2) == "MENU_CLOSED" && g2.shows == 0 && g2.closes == 0, "late menu went away during fresh window");
+    auto g3 = FakePauseGame(); g3.clocksIdle = true; g3.menu = true;
+    g3.At(1160, "menu", 0); g3.At(1280, "menu", 1); g3.At(1360, "bump", 1);
+    auto r3 = ControlPauseCore(g3, PauseInput("pause"));
+    Check(Code(r3) == "NOT_PAUSED" && g3.shows == 0 && g3.closes == 0, "close/reopen requires a fresh frozen hold");
+    ''')
+
+
+def test_r5_pending_shows_warn_even_if_cleanup_ends_with_menu_up(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, r'''
+    auto g = FakePauseGame();
+    g.showLagFrames = 3; g.menuFreezes = false; g.closeLagFrames = -1;
+    auto r = ControlPauseCore(g, PauseInput("pause", 100, 100));
+    Check(Code(r) == "CLEANUP_FAILED" && g.shows > 1 && g.closes == 1 && OutBool(r, "menuShownAfter"), "still up");
+    Check(OutBool(r, "lateShowPossible") && string(r["hint"]).IndexOf("appears closed") >= 0,
+          "a remaining Show may reopen it; recheck after it looks closed");
+    auto g2 = FakePauseGame(); g2.showLagFrames = 3;
+    auto r2 = ControlPauseCore(g2, PauseInput("pause", 100, 100));
+    Check(Ok(r2) && g2.shows > 1 && OutBool(r2, "lateShowPossible"), "several Shows still ambiguous on success");
+    ''')
+
+
+def test_r6_failed_pause_does_not_resume_into_invalid_gate_or_wait_through_it(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, r'''
+    array<string> change = {"local", "loading", "inPlayground", "handler"};
+    array<int> values = {0, 1, 0, 10};
+    array<string> codes = {"ONLINE_NOT_PAUSABLE", "LOADING", "NO_PLAYGROUND", "CONTEXT_CHANGED"};
+    for (uint i = 0; i < change.Length; i++) {
+        auto g = FakePauseGame(); g.menuFreezes = false;
+        g.At(1150, change[i], values[i]);
+        auto r = ControlPauseCore(g, PauseInput("pause", 100, 100));
+        Check(Code(r) == codes[i] && g.shows == 1 && g.closes == 0 && OutBool(r, "menuShownAfter")
+            && OutStr(r, "cleanupSkipped") == codes[i], "refuse cleanup at " + change[i] + ": " + Code(r));
+    }
+    auto probe = FakePauseGame(); probe.menuFreezes = false;
+    ControlPauseCore(probe, PauseInput("pause", 100, 100));
+    for (uint i = 0; i < change.Length; i++) {
+        auto g = FakePauseGame(); g.menuFreezes = false; g.closeLagFrames = -1;
+        uint64 changeAt = probe.closeAt[0] + 1;
+        g.At(changeAt, change[i], values[i]);
+        auto r = ControlPauseCore(g, PauseInput("pause", 100, 100));
+        Check(Code(r) == "CLEANUP_FAILED" && g.closes == 1 && g.now <= changeAt + 16,
+              "stop waiting on the first invalid frame: " + change[i]);
+    }
+    auto g = FakePauseGame(); g.menuFreezes = false;
+    g.goOnlineOnGateRead = int(probe.gateReadsAtFirstResume);
+    auto r = ControlPauseCore(g, PauseInput("pause", 100, 100));
+    Check(g.closes == 0 && OutStr(r, "cleanupSkipped") == "ONLINE_NOT_PAUSABLE", "fresh gate immediately before cleanup Resume");
+    ''')
+
+
+def test_r7_exceptions_after_show_use_one_cleanup_and_report_unknown(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, r'''
+    auto g = FakePauseGame(); g.clockThrowsAfterShow = true;
+    auto r = ControlPauseCore(g, PauseInput("pause"));
+    Check(Code(r) == "tool_exception" && g.shows == 1 && g.closes == 1 && !g.menu, "clock threw; one cleanup Resume");
+    Check(OutBool(r, "resumeAttempted") && OutBool(r, "resumeSent") && !OutBool(r, "menuShownAfter"), "closure read back");
+    auto g2 = FakePauseGame(); g2.showThrowsAfterDispatch = true;
+    g2.menuThrowsAfterResume = true;
+    auto r2 = ControlPauseCore(g2, PauseInput("pause"));
+    Check(Code(r2) == "CLEANUP_FAILED" && g2.shows == 1 && g2.closes == 1, "Show threw after dispatch");
+    Check(OutStr(r2, "menuShownAfter") == "unknown" && OutBool(r2, "lateShowPossible"), "cleanup and reporting reads threw");
+    Check(string(r2["error"]).IndexOf("observed closed") < 0, "must not claim closure");
+    auto g3 = FakePauseGame(); g3.clockThrowsAfterShow = true; g3.resumeThrowsAfterDispatch = true;
+    auto r3 = ControlPauseCore(g3, PauseInput("pause"));
+    Check(g3.closes == 1 && OutBool(r3, "resumeAttempted") && !OutBool(r3, "resumeSent"), "throw after Resume dispatch is never retried");
+    ''')
+
+
+def test_r9_explicit_resume_rechecks_gate_at_dispatch(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, r'''
+    auto probe = FakePauseGame(); probe.menu = true;
+    Check(Ok(ControlPauseCore(probe, PauseInput("resume"))), "resume boundary probe");
+    auto g = FakePauseGame(); g.menu = true; g.goOnlineOnGateRead = int(probe.gateReadsAtFirstResume);
+    auto r = ControlPauseCore(g, PauseInput("resume"));
+    Check(Code(r) == "ONLINE_NOT_PAUSABLE" && g.closes == 0 && g.menu, "no Resume on last gate refusal");
+    ''')
+    # The runtime probe follows the call's actual read number. Pin the distinct
+    # observation so the test does not adapt to deleting this redundant read.
+    close = _strip_comments(CORE).split("Json::Value@ _PauseClose(", 1)[1]
+    assert close.index("call.Observe();") < close.index("if (call.stop.Length > 0)") < close.index("call.Resume();")
+
+
+def test_r10_missing_jump_is_unmeasured(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, r'''
+    auto g = FakePauseGame(); g.menu = true;
+    g.readable[1] = false;  // no readable baseline for all three clocks
+    g.At(1700, "readable", 1);
+    auto r = ControlPauseCore(g, PauseInput("resume"));
+    Check(Ok(r) && g.closes == 1 && !r["output"]["jumpMs"].HasKey("coreSimulationTime"), "no fabricated jump");
+    Check(OutStr(r, "jumpNote").IndexOf("unmeasured") >= 0, "explain absent measurement");
+    ''')
+
+
+def test_r11_pause_host_needs_no_logger(as_runner, tmp_path):
+    # The fake implements the reduced interface, so the production core
+    # compiles and runs with no Log method on the host.
+    run_pause(as_runner, tmp_path, r'''
+    auto g = FakePauseGame();
+    Check(Ok(ControlPauseCore(g, PauseInput("pause"))), "pause without a logger");
+    ''')
+    assert "void Log(" not in _strip_comments(TOOLS)

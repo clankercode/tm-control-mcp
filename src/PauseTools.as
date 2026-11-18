@@ -114,8 +114,6 @@ namespace TmMcp {
             return d.HasKey("blocking") && bool(d["blocking"]);
         }
 
-        void Log(const string &in message) { trace(message); }
-
         Json::Value@ ExtraState() {
             Json::Value o = Json::Object();
             auto core = GetCmdBufferCore();
@@ -137,11 +135,13 @@ namespace TmMcp {
         try {
             @r = ControlPauseCore(g_livePauseHost, input);
         } catch {
-            // Nothing outlives the call: report what is up now.
+            // The core handles post-Show exceptions; don't do unguarded
+            // game reads while reporting any other failure.
             @r = MakeError("ControlPause threw: " + getExceptionInfo(), "tool_exception", true, "",
                 "Call GetPauseState; if the in-game menu is up, ControlPause resume closes it.");
             Json::Value o = Json::Object();
-            o["menuShown"] = g_livePauseHost.MenuShown();
+            o["menuShown"] = "unknown";
+            try { o["menuShown"] = g_livePauseHost.MenuShown(); } catch {}
             r["output"] = o;
         }
         try {

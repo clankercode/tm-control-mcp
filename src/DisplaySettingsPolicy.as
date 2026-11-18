@@ -13,8 +13,8 @@ namespace TmMcp {
     // persistent; whether and when the game saves it is unproven (Q3), so the
     // tools report persisted:"assumed". SetDisplaySetting writes ONE restore
     // record before it changes anything and never overwrites it: while any
-    // record exists, Set refuses. Only an explicit RestoreDisplaySetting
-    // removes it. Nothing restores automatically.
+    // record exists, Set refuses. Only RestoreDisplaySetting {retire:true}
+    // removes a valid record. Nothing restores automatically.
 
     const string DISPLAY_RESTORE_FILE = "bloom-restore.txt";
     const string DISPLAY_RECORD_SCHEMA = "3";
@@ -197,19 +197,18 @@ namespace TmMcp {
     }
 
     // What an explicit RestoreDisplaySetting does with a valid record whose
-    // identity matches (or force). readable: sources read now; allPrior /
+    // identity and config match. readable: sources read now; allPrior /
     // allTarget: every readable source holds that value; unreadableKnown: a
     // source known to exist could not be read (a wrapper someone else loaded).
     //  "unavailable"  nothing readable: keep the record
-    //  "clear"        already at the prior (Set crashed before its write, or
-    //                 someone reverted): delete the record, write nothing
+    //  "alreadyPrior" already at the prior: keep the record, write nothing
     //  "apply"        every source holds the target: write the prior back
     //  "conflict"     anything else: keep the record, write nothing
     // force (explicit request only) turns "conflict" into "apply", which
     // overwrites whatever the user has now.
     string RestoreDecision(uint readable, bool allPrior, bool allTarget, bool unreadableKnown, bool force) {
         if (readable == 0) return "unavailable";
-        if (!unreadableKnown && allPrior) return "clear";
+        if (!unreadableKnown && allPrior) return "alreadyPrior";
         if (!unreadableKnown && allTarget) return "apply";
         return force ? "apply" : "conflict";
     }

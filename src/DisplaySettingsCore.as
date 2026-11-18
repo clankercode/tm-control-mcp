@@ -29,8 +29,8 @@ namespace TmMcp {
     //    and the tool keeps its claim on it until the release is confirmed.
     //
     // UNPROVEN live (2026-11-18): that None removes bloom at once with no
-    // restart (Q2), and that Apply neither resets the window/device nor
-    // saves Default.json at once (Q3). Persistence is therefore "assumed".
+    // restart (Q2), or whether Apply resets the window/device, lands later,
+    // or saves Default.json (Q3). Persistence is therefore "assumed".
 
     class DisplayWatch {
         bool ok = false;
@@ -149,6 +149,7 @@ namespace TmMcp {
             bool loaded = host.WrapperLoad(err);
             if (loaded) {
                 s.wrapper = host.WrapperRead();
+                s.wrapperUnreadableKnown = s.wrapper < 0;
                 @s.watch = host.WrapperWatch();
             } else {
                 s.wrapperError = err;
@@ -321,14 +322,13 @@ namespace TmMcp {
         if (g_displayBusy) return _DisplayBusy("GetDisplaySetting");
         g_displayBusy = true;
         Json::Value@ r;
+        string bodyError;
         try {
             @r = _DisplayGet(host);
         } catch {
-            @r = MakeError("GetDisplaySetting threw: " + getExceptionInfo(), "tool_exception", true);
+            bodyError = getExceptionInfo();
         }
-        _DisplayReleaseAfterCall(host, r);
-        g_displayBusy = false;
-        return r;
+        return _DisplayCompleteCall(host, r, "GetDisplaySetting", bodyError);
     }
 
     Json::Value@ _DisplayGet(DisplayHost@ host) {
@@ -365,8 +365,8 @@ namespace TmMcp {
         auto legacy = DisplayLegacyJson(host);
         if (legacy is null) o["legacyRecord"] = Json::Value();
         else o["legacyRecord"] = legacy;
-        o["note"] = "Bloom is saved to the user's config. After SetDisplaySetting always call RestoreDisplaySetting;"
-            + " nothing restores it automatically.";
+        o["note"] = "Bloom persistence to the user's config is assumed, not verified. After SetDisplaySetting call"
+            + " RestoreDisplaySetting; it keeps the record until explicit retirement.";
         return MakeSuccess(o);
     }
 
@@ -374,28 +374,36 @@ namespace TmMcp {
         if (g_displayBusy) return _DisplayBusy("SetDisplaySetting");
         g_displayBusy = true;
         Json::Value@ r;
+        string bodyError;
         try {
             @r = _DisplaySet(host, input);
         } catch {
-            @r = MakeError("SetDisplaySetting threw: " + getExceptionInfo(), "tool_exception", true);
+            bodyError = getExceptionInfo();
         }
-        _DisplayReleaseAfterCall(host, r);
-        g_displayBusy = false;
-        return r;
+        return _DisplayCompleteCall(host, r, "SetDisplaySetting", bodyError);
     }
 
-    // Belt and braces: a wrapper this tool loaded never outlives a call
-    // unless its release cannot be confirmed (then the claim stays and the
-    // result says so). A stale claim on a wrapper that is gone, or that was
-    // replaced by someone else's, is dropped without touching theirs.
-    void _DisplayReleaseAfterCall(DisplayHost@ host, Json::Value@ r) {
-        if (!host.ScriptApiAvailable()) return;
-        string err;
-        if (host.WrapperRelease(err)) return;
-        host.Log("TM Control MCP: DisplaySettings wrapper release not confirmed: " + err);
-        if (r !is null && r.HasKey("output") && r["output"].GetType() == Json::Type::Object) {
-            r["output"]["wrapperReleasePending"] = true;
+    // Finally-equivalent exit: hold the lock through the release attempt, then
+    // clear it before constructing fallback results or logging. A release
+    // that threw has not proved the wrapper gone and must not drop the claim.
+    Json::Value@ _DisplayCompleteCall(DisplayHost@ host, Json::Value@ r, const string &in tool,
+                                      const string &in bodyError) {
+        string releaseError;
+        bool released = false;
+        try {
+            released = !host.ScriptApiAvailable() || host.WrapperRelease(releaseError);
+        } catch {
+            releaseError = getExceptionInfo();
         }
+        g_displayBusy = false;
+
+        if (r is null) @r = MakeError(tool + " threw: " + bodyError, "tool_exception", true);
+        if (!released) {
+            if (!r.HasKey("output")) r["output"] = Json::Object();
+            r["output"]["wrapperReleasePending"] = true;
+            try { host.Log("TM Control MCP: DisplaySettings wrapper release not confirmed: " + releaseError); } catch {}
+        }
+        return r;
     }
 
     Json::Value@ _DisplaySet(DisplayHost@ host, Json::Value &in input) {
@@ -435,13 +443,13 @@ namespace TmMcp {
             }
             return _DisplayErr("a restore is pending (prior " + rec.prior + ", set " + rec.target + " at " + rec.setAt
                 + "); nothing was changed", "RESTORE_PENDING", false,
-                "Call RestoreDisplaySetting first (GetDisplaySetting shows the record).", output);
+                "Call RestoreDisplaySetting, then retire the record only after confirming the prior stuck. GetDisplaySetting shows it.", output);
         }
         if (!known) {
             output["install"] = host.IdentityJson();
             return _DisplayErr("this install's identity is unknown (" + why + "), so a restore record could not be"
                 + " bound to it; nothing was changed", "IDENTITY_UNKNOWN", false,
-                "SetDisplaySetting runs only on instances with a port.override (leased tmc instances).", output);
+                "SetDisplaySetting requires a valid port.override prefix marker (not a lease check).", output);
         }
         string gate = _DisplayWrapperGate(host);
         if (gate.Length > 0) {
@@ -510,6 +518,7 @@ namespace TmMcp {
             ? DisplaySideEffects(before.watch.dirty, after.watch.dirty, before.watch.mode, after.watch.mode,
                                  before.watch.winX, before.watch.winY, after.watch.winX, after.watch.winY)
             : "unknown";
+        output["sideEffectsNote"] = "Only fields observed in the same frame; does not rule out window or device resets.";
         output["runtimeEffect"] = "UNPROVEN: whether the renderer drops bloom at once is not verified; compare screenshots.";
         if (!wrote || !after.AllAre(index)) {
             return _DisplayErr("the bloom write did not read back as " + wanted + " from every source (read back in"
@@ -523,19 +532,25 @@ namespace TmMcp {
     Json::Value@ RestoreDisplaySettingTool(DisplayHost@ host, Json::Value &in input) {
         if (g_displayBusy) return _DisplayBusy("RestoreDisplaySetting");
         g_displayBusy = true;
-        bool force = input.HasKey("force") && input["force"].GetType() == Json::Type::Boolean && bool(input["force"]);
         Json::Value@ r;
+        string bodyError;
         try {
-            @r = _DisplayRestore(host, force);
+            @r = _DisplayRestore(host, input);
         } catch {
-            @r = MakeError("RestoreDisplaySetting threw: " + getExceptionInfo(), "tool_exception", true);
+            bodyError = getExceptionInfo();
         }
-        _DisplayReleaseAfterCall(host, r);
-        g_displayBusy = false;
-        return r;
+        return _DisplayCompleteCall(host, r, "RestoreDisplaySetting", bodyError);
     }
 
-    Json::Value@ _DisplayRestore(DisplayHost@ host, bool force) {
+    Json::Value@ _DisplayRestore(DisplayHost@ host, Json::Value &in input) {
+        if ((input.HasKey("force") && input["force"].GetType() != Json::Type::Boolean)
+                || (input.HasKey("retire") && input["retire"].GetType() != Json::Type::Boolean)) {
+            return MakeError("force and retire must be booleans", "INVALID_INPUT");
+        }
+        bool force = input.HasKey("force") && bool(input["force"]);
+        bool retire = input.HasKey("retire") && bool(input["retire"]);
+        if (force && retire) return MakeError("force and retire are mutually exclusive", "INVALID_INPUT");
+
         Json::Value output = Json::Object();
         output["forced"] = force;
         output["restored"] = false;
@@ -551,6 +566,7 @@ namespace TmMcp {
             output["reason"] = legacy is null ? "no record" : "no record (an older build's record is present; it is never applied)";
             return MakeSuccess(output);
         }
+        output["recordKept"] = true;
         output["record"] = DisplayRecordJson(host, state, rec, reason, known, identity);
         if (state == "invalid") {
             output["action"] = "invalid";
@@ -577,6 +593,21 @@ namespace TmMcp {
         }
         auto src = DisplayReadSources(host);
         output["sourcesBefore"] = src.ToJson();
+        string err;
+        if (retire) {
+            output["action"] = "retire";
+            if (!src.AllAre(prior)) {
+                return _DisplayErr("cannot retire: need a readable prior and no disagreeing or known unreadable source; record kept",
+                    "RESTORE_CONFLICT", false, "Restore the prior first; confirm it stuck before retiring the record.", output);
+            }
+            if (!host.FileDelete(DISPLAY_RESTORE_FILE, err)) {
+                return _DisplayErr("could not retire the record: " + err, "RESTORE_FAILED", true, "", output);
+            }
+            output["retired"] = true;
+            output["recordKept"] = false;
+            output["now"] = rec.prior;
+            return MakeSuccess(output);
+        }
         string action = RestoreDecision(src.Readable(), src.AllAre(prior), src.AllAre(target),
                                         src.wrapperUnreadableKnown, force);
         output["action"] = action;
@@ -590,14 +621,10 @@ namespace TmMcp {
                 "GetDisplaySetting shows the sources. RestoreDisplaySetting {force:true} writes the prior anyway,"
                 + " overwriting the user's current value.", output);
         }
-        string err;
-        if (action == "clear") {
-            if (!host.FileDelete(DISPLAY_RESTORE_FILE, err)) {
-                return _DisplayErr("bloom is already at the prior but the record could not be deleted: " + err,
-                    "RESTORE_FAILED", true, "", output);
-            }
+        if (action == "alreadyPrior") {
             output["now"] = rec.prior;
             output["reason"] = "already at prior";
+            output["retireWith"] = "RestoreDisplaySetting {retire:true}";
             return MakeSuccess(output);
         }
         // "apply": one write by a mechanism chosen now; a wrapper someone
@@ -617,10 +644,8 @@ namespace TmMcp {
                 after.wrapperUnreadableKnown ? "A DisplaySettings wrapper is still loaded; close the settings page and restore again."
                                              : "GetDisplaySetting shows the sources; restore again.", output);
         }
-        if (!host.FileDelete(DISPLAY_RESTORE_FILE, err)) {
-            return _DisplayErr("the prior is back but the record could not be deleted: " + err, "RESTORE_FAILED", true, "", output);
-        }
         output["restored"] = true;
+        output["retireWith"] = "RestoreDisplaySetting {retire:true}";
         return MakeSuccess(output);
     }
 
@@ -635,14 +660,15 @@ namespace TmMcp {
             if (!host.WrapperRelease(err)) done = "wrapper release not confirmed: " + err;
             else if (ours) done = "wrapper released";
         }
-        bool record = host.FileExists(DISPLAY_RESTORE_FILE);
-        bool legacy = DisplayLegacyJson(host) !is null;
-        if (record || legacy) {
-            string what = record ? "a bloom restore record is pending at " + host.FilePath(DISPLAY_RESTORE_FILE)
-                                 : "an older build's bloom restore record is present";
-            host.Log("TM Control MCP (" + when + "): " + what + "; it is not applied automatically."
-                + " GetDisplaySetting shows it; RestoreDisplaySetting puts the prior back.");
-            done += (done.Length > 0 ? "; " : "") + (record ? "record pending" : "legacy record present");
+        if (host.FileExists(DISPLAY_RESTORE_FILE)) {
+            host.Log("TM Control MCP (" + when + "): a bloom restore record is pending at " + host.FilePath(DISPLAY_RESTORE_FILE)
+                + "; GetDisplaySetting shows it. To recover the prior, call RestoreDisplaySetting explicitly.");
+            done += (done.Length > 0 ? "; " : "") + "record pending";
+        }
+        if (DisplayLegacyJson(host) !is null) {
+            host.Log("TM Control MCP (" + when + "): an older build's bloom restore record is present; never applied."
+                + " See GetDisplaySetting and the pause-bloom guide for manual recovery.");
+            done += (done.Length > 0 ? "; " : "") + "legacy record present";
         }
         return done;
     }

@@ -33,7 +33,7 @@ namespace TmMcp {
     Json::Value@ MakeError(const string &in err, const string &in code = "", bool retryable = false,
                            const string &in mode = "", const string &in hint = "") {
         auto v = Json::Object(); v["success"] = false; v["error"] = err; v["code"] = code;
-        v["retryable"] = retryable; return v;
+        v["retryable"] = retryable; v["hint"] = hint; return v;
     }
     bool Ok(Json::Value@ r) { return bool(r["success"]); }
     string Code(Json::Value@ r) { return r.HasKey("code") ? string(r["code"]) : ""; }
@@ -78,6 +78,7 @@ namespace TmMcp {
         array<uint> clocks = {100000, 200000, 300000};
         array<bool> readable = {true, true, true};
         // how the game reacts
+        bool clocksIdle = false;      // frozen for a reason unrelated to the menu
         bool menuFreezes = true;      // menu up => clocks stop (local play)
         int showLagFrames = 0;        // frames before a show takes effect (-1 = never)
         int closeLagFrames = 0;       // frames before a close takes effect (-1 = never)
@@ -87,7 +88,8 @@ namespace TmMcp {
         array<uint64> showAt;
         array<uint64> closeAt;
         array<FakeEvent@> events;
-        array<string> log;
+        bool clockThrowsAfterShow = false, menuThrowsAfterResume = false;
+        bool showThrowsAfterDispatch = false, resumeThrowsAfterDispatch = false;
         // Go online on the Nth clock report (ExtraState runs between a sample
         // and the read that follows it, with no yield in between).
         int goOnlineOnReport = -1;
@@ -99,7 +101,7 @@ namespace TmMcp {
         int dialogReads = 0;
         // Probes: reads done before the first ShowMenu (the last one is the
         // read immediately before it).
-        uint gateReadsAtFirstShow = 0;
+        uint gateReadsAtFirstShow = 0, gateReadsAtFirstResume = 0;
         uint dialogReadsAtFirstShow = 0;
 
         void At(uint64 t, const string &in what, int value = 0) { events.InsertLast(FakeEvent(t, what, value)); }
@@ -133,7 +135,7 @@ namespace TmMcp {
             if (pendingClose > 0) pendingClose--;
             if (pendingClose == 0) { menu = false; pendingClose = -1; }
             bool frozen = menu && menuFreezes;
-            if (!frozen && !loading) for (uint i = 0; i < 3; i++) clocks[i] += step;
+            if (!clocksIdle && !frozen && !loading) for (uint i = 0; i < 3; i++) clocks[i] += step;
         }
 
         uint64 NowMs() { return now; }
@@ -155,20 +157,29 @@ namespace TmMcp {
                 && c.playground == playgroundId && c.handler == handlerId;
             return g;
         }
-        bool MenuShown() { return menu; }
-        bool ReadClock(uint i, uint &out v) { v = clocks[i]; return inPlayground && readable[i]; }
+        bool MenuShown() {
+            if (menuThrowsAfterResume && closes > 0) { array<int> a; a[3] = 1; }
+            return menu;
+        }
+        bool ReadClock(uint i, uint &out v) {
+            if (clockThrowsAfterShow && shows > 0) { array<int> a; a[3] = 1; }
+            v = clocks[i]; return inPlayground && readable[i];
+        }
         bool ShowMenu() {
             if (shows == 0) { gateReadsAtFirstShow = gateReads; dialogReadsAtFirstShow = dialogReads; }
             shows++; showAt.InsertLast(now);
             if (!inPlayground) return false;
             if (showLagFrames == 0) menu = true;
             else if (showLagFrames > 0 && pendingShow < 0) pendingShow = showLagFrames;
+            if (showThrowsAfterDispatch) { array<int> a; a[3] = 1; }
             return true;
         }
         bool CloseMenuResume() {
+            if (closes == 0) gateReadsAtFirstResume = gateReads;
             closes++; closeAt.InsertLast(now);
             if (closeLagFrames == 0) menu = false;
             else if (closeLagFrames > 0 && pendingClose < 0) pendingClose = closeLagFrames;
+            if (resumeThrowsAfterDispatch) { array<int> a; a[3] = 1; }
             return true;
         }
         bool DialogBlocking() {
@@ -176,7 +187,6 @@ namespace TmMcp {
             if (dialogOnRead > 0 && int(dialogReads) == dialogOnRead) dialog = true;
             return dialog;
         }
-        void Log(const string &in m) { log.InsertLast(m); }
         Json::Value@ ExtraState() {
             reports++;
             if (reports == goOnlineOnReport) local = false;
@@ -248,6 +258,17 @@ namespace TmMcp {
         bool applyThrows = false;
         bool watchThrows = false;
         bool applyWritesSystemConfig = true;
+        // Model persistent writes only via Apply. A direct write is runtime-only.
+        int persistedConfig = 2;
+        bool deferApply = false;
+        int pendingApply = -1;
+        void LandApply() {
+            if (pendingApply < 0) return;
+            persistedConfig = systemConfig = pendingApply;
+            pendingApply = -1;
+        }
+        void Reload() { apiWrapper = ownWrapper = 0; systemConfig = persistedConfig; }
+        bool releaseThrows = false, logThrows = false;
         int releaseFailures = 0;    // the next N releases do not take...
         int releaseOkFirst = 0;     // ...after this many more succeed
         int appliedMode = 0;
@@ -320,12 +341,14 @@ namespace TmMcp {
             if (applyThrows) { array<int> a; a[3] = 1; }
             if (wrapperApplyFails) { err = "apply failed"; return false; }
             apiWrapperValue = index; applies++;
-            if (applyWritesSystemConfig && !systemConfigWriteIgnored) systemConfig = index;
+            if (deferApply) pendingApply = index;
+            else if (applyWritesSystemConfig && !systemConfigWriteIgnored) persistedConfig = systemConfig = index;
             return true;
         }
         bool WrapperRelease(string &out err) {
             if (ownWrapper == 0) return true;
             if (apiWrapper != ownWrapper) { ownWrapper = 0; return true; }
+            if (releaseThrows) { array<int> a; a[3] = 1; }
             if (releaseOkFirst > 0) releaseOkFirst--;
             else if (releaseFailures > 0) { releaseFailures--; err = "unload threw"; return false; }
             apiWrapper = 0; ownWrapper = 0; unloads++;
@@ -356,7 +379,10 @@ namespace TmMcp {
             disk.Remove(n); return true;
         }
         string FilePath(const string &in n) { return "storage/" + n; }
-        void Log(const string &in m) { log.InsertLast(m); }
+        void Log(const string &in m) {
+            if (logThrows) { array<int> a; a[3] = 1; }
+            log.InsertLast(m);
+        }
 
         string Record() { return disk.Get(DISPLAY_RESTORE_FILE); }
         bool HasRecord() { return disk.Has(DISPLAY_RESTORE_FILE); }
@@ -366,6 +392,7 @@ namespace TmMcp {
     Json::Value@ BloomInput(const string &in v) { auto o = Json::Object(); o["bloom"] = v; return o; }
     Json::Value@ NoInput() { return Json::Object(); }
     Json::Value@ ForceInput(bool f) { auto o = Json::Object(); o["force"] = f; return o; }
+    Json::Value@ RetireInput() { auto o = Json::Object(); o["retire"] = true; return o; }
 
     string MakeRecordText(const string &in prior, const string &in target, const string &in identity,
                           const string &in config = "display") {

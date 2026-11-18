@@ -11,14 +11,9 @@ namespace TmMcp {
     //   SystemConfig.GameProfileName the active config profile
     //   PluginStorage/tm-control-mcp/port.override  (trimmed contents)
     //   display | safe               the config block in effect (IsSafeMode)
-    // Only the hash is stored. It fails closed: with no readable, non-empty
-    // port.override the identity is unknown and SetDisplaySetting refuses
-    // (IDENTITY_UNKNOWN). tmc writes a port.override into every leased
-    // instance's private upper dir; the primary prefix (Max's own game) has
-    // none, so it never gets a Set. On x-boss every overlay instance reports
-    // the same Windows paths (C:/users/steamuser/...), which is why the
-    // override is the part that tells instances apart. Two prefixes with the
-    // same override contents still collide (documented limit).
+    // Only the hash is stored. Without a valid port.override the binding
+    // is unknown and Set refuses. This is a prefix-marker check, not a lease
+    // check: prefixes with the same paths, profile, config and marker collide.
 
     string _DisplayStoragePath(const string &in name) {
         return IO::FromStorageFolder(name);
@@ -54,24 +49,6 @@ namespace TmMcp {
             auto app = GetApp();
             if (app is null || app.Viewport is null || app.Viewport.SystemConfig is null) return "";
             return app.Viewport.SystemConfig.GameProfileName;
-        }
-
-        // false + why when port.override is absent, unreadable or empty.
-        bool _PortMark(string &out mark, string &out why) {
-            mark = "";
-            why = "";
-            string path = IO::FromStorageFolder("port.override");
-            if (!IO::FileExists(path)) { why = "no port.override in plugin storage (not a leased tmc instance)"; return false; }
-            try {
-                IO::File f(path, IO::FileMode::Read);
-                mark = f.ReadToEnd().Trim();
-                f.Close();
-            } catch {
-                why = "port.override is unreadable: " + getExceptionInfo();
-                return false;
-            }
-            if (mark.Length == 0 || mark.Length > 64) { why = "port.override is empty or too long"; return false; }
-            return true;
         }
 
         bool InstallIdentity(string &out identity, string &out why) {
