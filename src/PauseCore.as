@@ -141,7 +141,8 @@ namespace TmMcp {
             if (stop.Length == 0) stop = _StopCode();
         }
 
-        // One game frame, then a fresh observation.
+        // One game frame, then a fresh observation and, for ControlPause, the
+        // deadline: a frame that ends past it stops the call (DEADLINE).
         void Step() {
             uint64 before = host.NowMs();
             host.Yield();
@@ -149,6 +150,7 @@ namespace TmMcp {
             uint64 took = host.NowMs() - before;
             if (took > longestFrameMs) longestFrameMs = took;
             Observe();
+            if (mutating && stop.Length == 0 && Past(deadline)) stop = "DEADLINE";
         }
 
         bool Past(uint64 t) { return host.NowMs() >= t; }

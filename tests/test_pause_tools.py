@@ -480,6 +480,14 @@ def test_p2_deadline_after_a_slow_frame(as_runner, tmp_path):
     Check(g.now - t0 > uint64(budget), "the hitch overran the budget by that frame (documented)");
     Check(double(r["output"]["longestFrameMs"]) >= 5000, "the hitch is reported");
     Check(OutBool(r, "lateShowPossible"), "the unanswered Show is reported as a possibility");
+    Check(Code(r) == "DEADLINE", "the deadline is checked right after the yield: " + Code(r));
+    // A hitch during verification of a real (frozen) pause: no success past the
+    // deadline; the one Resume closes the menu this call opened.
+    auto g2 = FakePauseGame();
+    g2.slowAt = 1150; g2.slowMs = 6000;
+    auto r2 = ControlPauseCore(g2, PauseInput("pause", 100, 2400));
+    Check(Code(r2) == "DEADLINE" && OutBool(r2, "resumeSent") && g2.closes == 1 && !g2.menu,
+          "deadline after a slow frame in verification: " + Code(r2));
     // A bounded grid: every failure ends within budget + one frame on normal frames.
     array<int> holds = {100, 300, 2000};
     array<int> timeouts = {100, 3000, 10000};
