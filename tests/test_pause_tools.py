@@ -303,3 +303,15 @@ def test_policy_file_has_no_game_types():
     policy = _strip_comments(POLICY.read_text())
     for banned in ["GetApp", "CGame", "CMw", "yield", "Time::"]:
         assert banned not in policy, banned
+
+
+def test_guide_and_docs_mark_live_checks_unproven():
+    guides = (SRC / "Guides.as").read_text()
+    start = guides.index('_RegisterGuide("pause-bloom",')
+    guide = guides[start:guides.index("_RegisterGuide(", start + 1)]
+    for name in ["GetPauseState", "ControlPause", "SetDisplaySetting", "RestoreDisplaySetting", "ONLINE_NOT_PAUSABLE"]:
+        assert name in guide, name
+    for doc in [guide, (ROOT / "README.md").read_text(), (ROOT / "AGENTS.md").read_text(), (ROOT / "CHANGELOG.md").read_text()]:
+        assert "nproven" in doc or "NPROVEN" in doc
+        for q in ["Q1", "Q2", "Q3", "Q4"]:
+            assert q in doc, q

@@ -426,6 +426,8 @@ checklist: [`docs/dialogs.md`](docs/dialogs.md); in game: `GetGuide {topic:dialo
 | `ControlCamera` | centerOnCursor, watchWholeMap/start/CP/finish, zoom, look, … |
 | `FocusCamera` | Focus on world `(x,y,z)` via E++ animation. |
 | `ControlPlayCamera` | **In-play** camera: read state, switch mode (free / cam 1-3 / backwards / alt), place and aim the free camera. |
+| `GetPauseState` / `ControlPause` | Read the pause state from three game clocks; pause / resume solo or local play with the game's own in-game menu (refuses online). |
+| `GetDisplaySetting` / `SetDisplaySetting` / `RestoreDisplaySetting` | Read / set the game's bloom (none / medium / high) with a recorded restore. |
 | `TakeScreenshot` | Native viewport screenshot with file detection (`fullName`), `hideOverlay`, `forceRes`. |
 
 ### Blocks / items (read)
@@ -566,6 +568,39 @@ Path-based place remains the reliable headless path; `ControlInventory` is for p
 ### Named macroblocks + skins
 
 Block/item specs support `variant`, `bgSkin`, `fgSkin`. Skins apply after successful `PlaceNamedMacroblock` and are verified when possible. Durable JSON is v2-capable (item skins) with v1 load compatibility. In-memory handles alone do not survive reload — use `SaveNamedMacroblock`.
+
+### Pause and bloom (`ControlPause`, `SetDisplaySetting`)
+
+For live checks that need the game paused or bloom changed, with no OS input.
+
+**Pause.** The game has no public "pause the simulation" call. The only pause
+is its own in-game (ESC) menu, and that only stops time where the mode script
+runs in this game: solo and local play. `ControlPause {action:pause}` opens the
+menu with `ShowInGameMenu()` and then requires three clocks
+(`PlaygroundClientScriptAPI.GameTime`, `GetCmdBufferCore().SimulationTime` and
+`.GameTime`) to stand still for `holdMs` (default 300). It judges on the clocks,
+never on the menu flag: online the menu shows while the game keeps running.
+It refuses before opening anything when online (`ONLINE_NOT_PAUSABLE`), and if
+the menu opens but the clocks keep moving it closes the menu again
+(`NOT_PAUSED`). `resume` closes the menu with `CloseInGameMenu(Resume)` only,
+never Quit or a sub-menu, and reports `jumpMs` per clock. Both are idempotent.
+`autoResumeAfterMs` (default off) undoes a pause the tool made if the agent
+never comes back. `GetPauseState` reads all of this without changing anything.
+
+**Bloom.** `SetDisplaySetting {bloom:none|medium|high}` writes the user's own
+setting, which the game saves to its config. The prior value goes to
+`display-restore.json` in the plugin storage folder before any write, and the
+oldest value is kept across repeated calls. `RestoreDisplaySetting` puts it
+back, and so do plugin start, disable and unload. The write goes through the
+`DisplaySettings` script wrapper (`LoadCurrent` / set / `Apply` / `Unload`),
+falling back to `Viewport.SystemConfig.Display`. `output.mechanism` says which
+path ran, and `sideEffects` lists any window or display-mode change.
+
+**Unproven live (2026-11-18):** Q1, whether a programmatic menu freezes the
+clocks the way ESC does (ESC in solo was measured to); Q2, whether bloom none
+takes effect without a restart; Q3, whether `Apply` resets the window or
+device or saves the config at once; Q4, whether a locally hosted server with
+no other clients pauses. Guide: `pause-bloom`.
 
 ### In-play camera (`ControlPlayCamera`)
 

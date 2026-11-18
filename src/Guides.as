@@ -338,6 +338,31 @@ namespace TmMcp {
             + " '/connection-error' reproduce the pages for testing (the pages Nadeo's own"
             + " disconnect detector pushes).");
 
+        _RegisterGuide("pause-bloom",
+            "Pausing the game and changing bloom for live checks",
+            "GetPauseState {sampleMs?} (read-only): menuShown, locality, pausable, and three clocks"
+            + " (clientGameTime, coreSimulationTime, coreGameTime) sampled per frame. verdict"
+            + " frozen|running|mixed|unknown is from the clocks only: online the menu shows while time runs.\n"
+            + "ControlPause {action:pause|resume|toggle, holdMs?, timeoutMs?, autoResumeAfterMs?}:"
+            + " pause opens the game's own in-game menu (the only pause the API has) and succeeds only"
+            + " when every clock stands still for holdMs (default 300). Solo/local play only:"
+            + " ONLINE_NOT_PAUSABLE refuses before opening anything. NOT_PAUSED = the menu opened but"
+            + " time kept running; the menu is closed again. resume uses CloseInGameMenu(Resume) only and"
+            + " reports jumpMs per clock and wallPausedMs. Idempotent. A menu someone else opened is never"
+            + " closed by pause. autoResumeAfterMs (default 0 = off) resumes a pause the tool made.\n"
+            + "Freeze check: ControlPause pause, TakeScreenshot twice a few seconds apart with a fixed"
+            + " ControlPlayCamera, compare, then ControlPause resume and check jumpMs is small.\n"
+            + "\n"
+            + "GetDisplaySetting / SetDisplaySetting {bloom:none|medium|high} / RestoreDisplaySetting:"
+            + " bloom is the user's setting and is saved to their config. Set records the prior value"
+            + " (oldest kept) BEFORE writing; Restore puts it back; plugin start/disable/unload restore it"
+            + " too. Always Restore when done. output.mechanism = wrapper (DisplaySettings script API) or"
+            + " systemConfig (fallback); sideEffects lists any window/mode change.\n"
+            + "\n"
+            + "UNPROVEN live (2026-11-18): Q1 programmatic pause freezes like ESC; Q2 bloom none applies"
+            + " without a restart (compare paused screenshots); Q3 Apply has no window/device side effects;"
+            + " Q4 local hosted play pauses. Use a plain map with no MediaTracker bloom clip.");
+
         _RegisterGuide("agent-cleanup",
             "Provenance tags for safe multi-step cleanup",
             "SetAgentTag sets the default tag applied to PlaceBlock/PlaceItem E++ tools"
