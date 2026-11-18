@@ -18,40 +18,35 @@ namespace TmMcp {
     const int PAUSE_TIMEOUT_MS_DEFAULT = 3000;
     const int PAUSE_TIMEOUT_MS_MIN = 100;
     const int PAUSE_TIMEOUT_MS_MAX = 10000;
-    const int PAUSE_AUTO_RESUME_MS_MAX = 600000; // 10 min
 
     const string PAUSE_VERDICT_FROZEN = "frozen";
     const string PAUSE_VERDICT_RUNNING = "running";
     const string PAUSE_VERDICT_MIXED = "mixed";
     const string PAUSE_VERDICT_UNKNOWN = "unknown";
 
-    int ClampPauseSampleMs(int v, bool given) {
-        if (!given) return PAUSE_SAMPLE_MS_DEFAULT;
-        if (v < 0) return 0;
-        if (v > PAUSE_SAMPLE_MS_MAX) return PAUSE_SAMPLE_MS_MAX;
-        return v;
+    // Clamped in double BEFORE narrowing to int, so any JSON number (huge,
+    // infinite, fractional) lands inside [lo, hi]. NaN takes lo: it is
+    // tested on its own because AngelScript's double compare does not order
+    // NaN the IEEE way (NaN >= x is true there). Fractions are truncated
+    // after the clamp.
+    int _ClampMs(double v, bool given, int dflt, int lo, int hi) {
+        if (!given) return dflt;
+        if (v != v) return lo;
+        if (v < double(lo)) return lo;
+        if (v > double(hi)) return hi;
+        return int(v);
     }
 
-    int ClampPauseHoldMs(int v, bool given) {
-        if (!given) return PAUSE_HOLD_MS_DEFAULT;
-        if (v < PAUSE_HOLD_MS_MIN) return PAUSE_HOLD_MS_MIN;
-        if (v > PAUSE_HOLD_MS_MAX) return PAUSE_HOLD_MS_MAX;
-        return v;
+    int ClampPauseSampleMs(double v, bool given) {
+        return _ClampMs(v, given, PAUSE_SAMPLE_MS_DEFAULT, 0, PAUSE_SAMPLE_MS_MAX);
     }
 
-    int ClampPauseTimeoutMs(int v, bool given) {
-        if (!given) return PAUSE_TIMEOUT_MS_DEFAULT;
-        if (v < PAUSE_TIMEOUT_MS_MIN) return PAUSE_TIMEOUT_MS_MIN;
-        if (v > PAUSE_TIMEOUT_MS_MAX) return PAUSE_TIMEOUT_MS_MAX;
-        return v;
+    int ClampPauseHoldMs(double v, bool given) {
+        return _ClampMs(v, given, PAUSE_HOLD_MS_DEFAULT, PAUSE_HOLD_MS_MIN, PAUSE_HOLD_MS_MAX);
     }
 
-    // 0 = off (the default). Anything else is a safety net so an agent that
-    // dies mid-test does not leave the game paused for good.
-    int ClampAutoResumeMs(int v, bool given) {
-        if (!given || v <= 0) return 0;
-        if (v > PAUSE_AUTO_RESUME_MS_MAX) return PAUSE_AUTO_RESUME_MS_MAX;
-        return v;
+    int ClampPauseTimeoutMs(double v, bool given) {
+        return _ClampMs(v, given, PAUSE_TIMEOUT_MS_DEFAULT, PAUSE_TIMEOUT_MS_MIN, PAUSE_TIMEOUT_MS_MAX);
     }
 
     // CGamePlaygroundClientScriptAPI.GameTime is a signed int; the core clocks
@@ -139,10 +134,10 @@ namespace TmMcp {
         return "";
     }
 
-    // After the menu has been opened by this call, the outcome code.
-    // "" = success (paused). Anything else: the caller closes the menu it
-    // opened (Resume) and returns the code, or CLEANUP_FAILED when it could
-    // not see the menu close.
+    // After this call sent ShowInGameMenu, the outcome code. "" = success
+    // (paused). Anything else: the call sends ONE Resume if it saw the menu
+    // open and the context is unchanged, then reports the menu state it
+    // observed (CLEANUP_FAILED when the menu is still up).
     string PauseOutcomeCode(bool menuShownAfter, const string &in verdictAfter) {
         if (!menuShownAfter) return "MENU_NOT_SHOWN";
         if (verdictAfter == PAUSE_VERDICT_FROZEN) return "";
@@ -156,17 +151,12 @@ namespace TmMcp {
         return "RESUME_UNVERIFIED";
     }
 
-    // --- One deadline per call (review 1 F10) --------------------------------
-    // A failed pause keeps this much of the budget to close the menu it opened.
+    // --- One deadline per call ----------------------------------------------
+    // The deadline is checked once per game frame (right after each yield and
+    // before each ShowInGameMenu), so a frame hitch can overrun it by up to
+    // that frame's length. It is not a wall-clock cap.
+    // A failed pause keeps this much of the budget to watch its one Resume land.
     const int PAUSE_CLEANUP_RESERVE_MS = 2000;
-    // Resume is re-sent this often while a menu this tool opened stays up.
-    const int PAUSE_CLOSE_RETRY_MS = 500;
-    // Background Resume retries for one ownership before the watcher stops
-    // closing (it keeps watching).
-    const int PAUSE_CLOSE_ATTEMPTS_MAX = 10;
-    // After MENU_NOT_SHOWN the call watches this long for a menu that comes
-    // up late, so it can close it.
-    const int PAUSE_LATE_MENU_GRACE_MS = 1000;
 
     // The initial sample can restart (a clock unreadable for a frame); it gets
     // at most twice holdMs before the call goes on with what it has.
@@ -188,47 +178,15 @@ namespace TmMcp {
     }
 
     // Why a call stopped part-way. Codes come from PauseRefusalCode, plus
-    // CONTEXT_CHANGED and DIALOG_BLOCKING.
+    // CONTEXT_CHANGED, DIALOG_BLOCKING, DEADLINE and MENU_CLOSED.
     string PauseStopMessage(const string &in code) {
         if (code == "CONTEXT_CHANGED") return "the playground or its interface handler changed (map change, restart or reload)";
         if (code == "LOADING") return "a loading screen started";
         if (code == "NO_PLAYGROUND") return "the playground went away";
         if (code == "ONLINE_NOT_PAUSABLE") return "the game is no longer solo/local play";
         if (code == "DIALOG_BLOCKING") return "a game dialog came up";
+        if (code == "DEADLINE") return "the call's deadline (budgetMs) passed";
+        if (code == "MENU_CLOSED") return "the in-game menu closed while the clocks were being checked";
         return code;
-    }
-
-    // --- Ownership (review 1 F7/F8) -----------------------------------------
-    // What the ownership watcher does this frame. It runs every frame while
-    // this tool owns the menu, so ownership ends with the menu, whoever
-    // closed it, and with the context it was opened in. While a ControlPause
-    // call is still running on it (callActive), that call decides.
-    //  "stop"           nothing is owned
-    //  "skip"           a call is running: it decides this frame
-    //  "forget-context" the playground or its handler changed
-    //  "forget-closed"  the menu closed (anyone): ownership ends with it
-    //  "wait"           keep watching
-    //  "close"          a close is due: CloseInGameMenu(Resume)
-    //  "give-up"        closes went unanswered: stop closing, keep watching
-    string PauseWatchAction(bool owned, bool callActive, bool sameContext, bool menuShown,
-                            bool closeDue, uint closeAttempts) {
-        if (!owned) return "stop";
-        if (callActive) return "skip";
-        if (!sameContext) return "forget-context";
-        if (!menuShown) return "forget-closed";
-        if (!closeDue) return "wait";
-        if (closeAttempts >= uint(PAUSE_CLOSE_ATTEMPTS_MAX)) return "give-up";
-        return "close";
-    }
-
-    // pause while already paused (plan "noop") with autoResumeAfterMs:
-    //  not given          -> "keep" the timer as it is
-    //  this tool's pause  -> "update" it (0 cancels it)
-    //  someone else's     -> "refuse" a timer (AUTO_RESUME_NOT_OWNED): it would
-    //                        close a menu this tool did not open; 0 is "keep"
-    string PauseNoopTimerAction(bool given, int autoResumeMs, bool owned) {
-        if (!given) return "keep";
-        if (owned) return "update";
-        return autoResumeMs > 0 ? "refuse" : "keep";
     }
 }

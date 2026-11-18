@@ -2,21 +2,23 @@ namespace TmMcp {
     // GetDisplaySetting / SetDisplaySetting / RestoreDisplaySetting: the live
     // game side. The orchestration is in DisplaySettingsCore.as and the pure
     // rules in DisplaySettingsPolicy.as; this file only maps DisplayHost onto
-    // the game and the plugin storage folder.
+    // the game and the plugin storage folder. Nothing here yields.
     //
-    // Install identity (review 1 F2): SHA-256 over
+    // Install identity (B3): SHA-256 over
     //   IO::FromUserGameFolder("")   the game's user folder (Documents/Trackmania)
     //   IO::FromAppFolder("")        the game install folder
     //   IO::FromStorageFolder("")    this plugin's storage folder
     //   SystemConfig.GameProfileName the active config profile
-    //   PluginStorage/tm-control-mcp/port.override  (contents, "" if absent)
-    // All cheap, stable reads. Only the hash is stored. On x-boss every
-    // overlay instance reports the same Windows paths (C:/users/steamuser/...),
-    // so the paths alone cannot tell the primary from instance N; tmc writes a
-    // per-instance port.override into each instance's private upper dir, and
-    // plugin storage written on one can show through on another. Hence the
-    // override file is part of the identity: a record from a different
-    // instance does not match and is never applied automatically.
+    //   PluginStorage/tm-control-mcp/port.override  (trimmed contents)
+    //   display | safe               the config block in effect (IsSafeMode)
+    // Only the hash is stored. It fails closed: with no readable, non-empty
+    // port.override the identity is unknown and SetDisplaySetting refuses
+    // (IDENTITY_UNKNOWN). tmc writes a port.override into every leased
+    // instance's private upper dir; the primary prefix (Max's own game) has
+    // none, so it never gets a Set. On x-boss every overlay instance reports
+    // the same Windows paths (C:/users/steamuser/...), which is why the
+    // override is the part that tells instances apart. Two prefixes with the
+    // same override contents still collide (documented limit).
 
     string _DisplayStoragePath(const string &in name) {
         return IO::FromStorageFolder(name);
@@ -37,21 +39,13 @@ namespace TmMcp {
         return app.ManiaPlanetScriptAPI;
     }
 
-    string _ReadSmallFile(const string &in path) {
-        if (!IO::FileExists(path)) return "";
-        try {
-            IO::File f(path, IO::FileMode::Read);
-            string text = f.ReadToEnd();
-            f.Close();
-            return text.Length > 256 ? text.SubStr(0, 256) : text;
-        } catch {
-            return "<unreadable>";
-        }
-    }
-
     class LiveDisplayHost : DisplayHost {
-        // True only between a WrapperLoad that loaded it and WrapperUnload.
-        bool loadedByUs = false;
+        // The wrapper this host loaded, kept until it is seen released. The
+        // handle is only compared, never dereferenced (writes go through
+        // api.DisplaySettings after an `is` check). Limit: if an Unload that
+        // reported failure did free it and a new wrapper later reused the
+        // address before the next call, that wrapper would be taken for ours.
+        CGameDisplaySettingsWrapper@ ownWrapper = null;
 
         void Yield() { yield(); }
         string Now() { return Time::FormatString("%Y-%m-%d %H:%M:%S"); }
@@ -62,21 +56,46 @@ namespace TmMcp {
             return app.Viewport.SystemConfig.GameProfileName;
         }
 
-        string InstallIdentity() {
+        // false + why when port.override is absent, unreadable or empty.
+        bool _PortMark(string &out mark, string &out why) {
+            mark = "";
+            why = "";
+            string path = IO::FromStorageFolder("port.override");
+            if (!IO::FileExists(path)) { why = "no port.override in plugin storage (not a leased tmc instance)"; return false; }
+            try {
+                IO::File f(path, IO::FileMode::Read);
+                mark = f.ReadToEnd().Trim();
+                f.Close();
+            } catch {
+                why = "port.override is unreadable: " + getExceptionInfo();
+                return false;
+            }
+            if (mark.Length == 0 || mark.Length > 64) { why = "port.override is empty or too long"; return false; }
+            return true;
+        }
+
+        bool InstallIdentity(string &out identity, string &out why) {
+            identity = "";
+            string mark;
+            if (!_PortMark(mark, why)) return false;
             string user = IO::FromUserGameFolder("");
             string appDir = IO::FromAppFolder("");
             string storage = IO::FromStorageFolder("");
-            if (user.Length == 0 && appDir.Length == 0) return "";
-            string portMark = _ReadSmallFile(IO::FromStorageFolder("port.override")).Trim();
-            return Crypto::Sha256("tm-control-mcp display identity v1\n" + user + "\n" + appDir + "\n" + storage
-                + "\n" + _ProfileName() + "\n" + portMark).ToLower();
+            if (user.Length == 0 && appDir.Length == 0) { why = "the game folders are unknown"; return false; }
+            identity = Crypto::Sha256("tm-control-mcp display identity v2\n" + user + "\n" + appDir + "\n" + storage
+                + "\n" + _ProfileName() + "\n" + mark + "\n" + DisplayConfigName(SafeMode())).ToLower();
+            return true;
         }
 
         Json::Value@ IdentityJson() {
             Json::Value o = Json::Object();
-            o["fingerprint"] = InstallIdentity();
-            o["from"] = "sha256(user game folder, app folder, plugin storage folder, SystemConfig.GameProfileName, port.override)";
-            o["portOverridePresent"] = IO::FileExists(IO::FromStorageFolder("port.override"));
+            string identity, why;
+            bool known = InstallIdentity(identity, why);
+            o["known"] = known;
+            if (known) o["fingerprint"] = identity;
+            else o["unknownBecause"] = why;
+            o["from"] = "sha256(user game folder, app folder, plugin storage folder, SystemConfig.GameProfileName,"
+                + " port.override, display|safe)";
             return o;
         }
 
@@ -94,6 +113,7 @@ namespace TmMcp {
         }
 
         bool WriteSystemConfig(int index, string &out err) {
+            if (BloomName(index).Length == 0) { err = "not a bloom index: " + index; return false; }
             bool safe;
             auto d = _ActiveDisplayConfig(safe);
             if (d is null) { err = "Viewport.SystemConfig unavailable"; return false; }
@@ -108,30 +128,32 @@ namespace TmMcp {
 
         bool ScriptApiAvailable() { return _DisplayScriptApi() !is null; }
 
-        bool WrapperLoadedByOther() {
+        int WrapperOwner() {
             auto api = _DisplayScriptApi();
-            return api !is null && api.DisplaySettings !is null && !loadedByUs;
+            if (api is null) return DISPLAY_WRAPPER_NONE;
+            return DisplayWrapperOwner(api.DisplaySettings !is null, ownWrapper !is null,
+                                       ownWrapper !is null && api.DisplaySettings is ownWrapper);
         }
 
         bool WrapperLoad(string &out err) {
             auto api = _DisplayScriptApi();
             if (api is null) { err = "ManiaPlanetScriptAPI unavailable"; return false; }
-            if (api.DisplaySettings !is null) { err = "already loaded by someone else"; return false; }
+            if (api.DisplaySettings !is null) { err = "a DisplaySettings wrapper is already loaded"; return false; }
             try {
                 api.DisplaySettings_LoadCurrent();
-                loadedByUs = true;
             } catch {
                 err = getExceptionInfo();
-                loadedByUs = api.DisplaySettings !is null;
-                if (loadedByUs) WrapperUnload();
+            }
+            // Claim whatever this call loaded, at once, so it is released.
+            @ownWrapper = api.DisplaySettings;
+            if (ownWrapper is null) {
+                // Not there without a frame: the wrapper path is not used this
+                // call (no yield). Undo the request in case it lands later.
+                if (err.Length == 0) err = "DisplaySettings is null after LoadCurrent (it would need a frame)";
+                try { api.DisplaySettings_Unload(); } catch {}
                 return false;
             }
-            if (api.DisplaySettings is null) {
-                err = "DisplaySettings is null after LoadCurrent";
-                WrapperUnload();
-                return false;
-            }
-            return true;
+            return err.Length == 0;
         }
 
         int WrapperRead() {
@@ -144,10 +166,13 @@ namespace TmMcp {
             }
         }
 
-        // Only on a wrapper this host loaded (DisplaySettingsCore checks).
         bool WrapperWriteApply(int index, string &out err) {
+            if (BloomName(index).Length == 0) { err = "not a bloom index: " + index; return false; }
             auto api = _DisplayScriptApi();
-            if (api is null || api.DisplaySettings is null || !loadedByUs) { err = "no wrapper loaded by this tool"; return false; }
+            if (api is null || ownWrapper is null || api.DisplaySettings !is ownWrapper) {
+                err = "no wrapper loaded by this tool";
+                return false;
+            }
             try {
                 api.DisplaySettings.FxBloomHdr = CGameDisplaySettingsWrapper::EFxBloomHdr(index);
                 api.DisplaySettings_Apply();
@@ -158,31 +183,43 @@ namespace TmMcp {
             return true;
         }
 
-        void WrapperUnload() {
-            if (!loadedByUs) return;
-            loadedByUs = false;
+        // Releases only the wrapper this host loaded; the claim is dropped
+        // only once the API no longer exposes that wrapper.
+        bool WrapperRelease(string &out err) {
+            err = "";
+            if (ownWrapper is null) return true;
             auto api = _DisplayScriptApi();
-            if (api is null) return;
-            try { api.DisplaySettings_Unload(); } catch { warn("TM Control MCP: DisplaySettings_Unload failed: " + getExceptionInfo()); }
+            if (api is null) { err = "ManiaPlanetScriptAPI unavailable"; return false; }
+            if (api.DisplaySettings !is ownWrapper) {
+                // Gone, or replaced by someone else's (never unloaded here).
+                @ownWrapper = null;
+                return true;
+            }
+            try { api.DisplaySettings_Unload(); } catch { err = getExceptionInfo(); }
+            if (api.DisplaySettings is ownWrapper) {
+                if (err.Length == 0) err = "still loaded after DisplaySettings_Unload";
+                return false;
+            }
+            @ownWrapper = null;
+            return true;
         }
 
-        // DirtyCounter / DisplayMode / WindowSize, from a wrapper this host
-        // loads (never someone else's: Set refuses those before this runs).
+        // DirtyCounter / DisplayMode / WindowSize from the wrapper this host
+        // has loaded right now (never someone else's).
         DisplayWatch@ WrapperWatch() {
             auto w = DisplayWatch();
-            string err;
-            if (!WrapperLoad(err)) return w;
+            auto api = _DisplayScriptApi();
+            if (api is null || ownWrapper is null || api.DisplaySettings !is ownWrapper) return w;
             try {
-                auto s = _DisplayScriptApi().DisplaySettings;
-                w.ok = true;
+                auto s = api.DisplaySettings;
                 w.dirty = s.DirtyCounter;
                 w.mode = int(s.DisplayMode);
                 w.winX = s.WindowSize.x;
                 w.winY = s.WindowSize.y;
+                w.ok = true;
             } catch {
                 w.ok = false;
             }
-            WrapperUnload();
             return w;
         }
 
@@ -196,7 +233,6 @@ namespace TmMcp {
                 IO::File f(path, IO::FileMode::Read);
                 if (f.Size() > DISPLAY_RECORD_MAX_BYTES) {
                     f.Close();
-                    text = "";
                     err = "larger than " + DISPLAY_RECORD_MAX_BYTES + " bytes";
                     return false;
                 }
@@ -222,16 +258,6 @@ namespace TmMcp {
             return true;
         }
 
-        bool FileMove(const string &in from, const string &in to, string &out err) {
-            try {
-                IO::Move(_DisplayStoragePath(from), _DisplayStoragePath(to));
-            } catch {
-                err = getExceptionInfo();
-                return false;
-            }
-            return IO::FileExists(_DisplayStoragePath(to));
-        }
-
         bool FileDelete(const string &in name, string &out err) {
             string path = _DisplayStoragePath(name);
             try {
@@ -255,35 +281,21 @@ namespace TmMcp {
     }
 
     Json::Value@ SetDisplaySetting(Json::Value &in input) {
-        Json::Value@ r;
-        try {
-            @r = SetDisplaySettingCore(g_liveDisplayHost, input);
-        } catch {
-            @r = MakeError("SetDisplaySetting threw: " + getExceptionInfo(), "tool_exception", true);
-        }
-        g_liveDisplayHost.WrapperUnload(); // a wrapper this tool loaded never outlives the call
-        return r;
+        return SetDisplaySettingCore(g_liveDisplayHost, input);
     }
 
     Json::Value@ RestoreDisplaySetting(Json::Value &in input) {
-        Json::Value@ r;
-        try {
-            @r = RestoreDisplaySettingTool(g_liveDisplayHost, input);
-        } catch {
-            @r = MakeError("RestoreDisplaySetting threw: " + getExceptionInfo(), "tool_exception", true);
-        }
-        g_liveDisplayHost.WrapperUnload();
-        return r;
+        return RestoreDisplaySettingTool(g_liveDisplayHost, input);
     }
 
-    // Plugin lifecycle: start (a coroutine), disable and unload (callbacks).
-    void RestoreDisplaySettingOnLifecycle(const string &in when) {
+    // Plugin start / disable / unload (no yield): never restores bloom.
+    // Releases a wrapper this tool still holds and logs a pending record.
+    void DisplaySettingsOnLifecycle(const string &in when) {
         try {
-            auto o = RestoreDisplaySettingOnLifecycleCore(g_liveDisplayHost, when);
-            if (o !is null) trace("TM Control MCP: display restore on " + when + ": " + Json::Write(o));
+            string done = DisplayLifecycleCore(g_liveDisplayHost, when);
+            if (done.Length > 0) trace("TM Control MCP: display settings on " + when + ": " + done);
         } catch {
-            warn("TM Control MCP: display restore on " + when + " failed: " + getExceptionInfo());
+            warn("TM Control MCP: display settings on " + when + " failed: " + getExceptionInfo());
         }
-        g_liveDisplayHost.WrapperUnload();
     }
 }

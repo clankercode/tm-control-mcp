@@ -1,45 +1,38 @@
 namespace TmMcp {
     // Pure display-setting policy: no game types, so
     // tests/test_display_settings_tools.py runs it in stock AngelScript. The
-    // live side is src/DisplaySettingsTools.as.
+    // orchestration is in DisplaySettingsCore.as and the live game side in
+    // DisplaySettingsTools.as.
     //
     // Only bloom (CSystemConfigDisplay.FxBloomHdr / the script wrapper's
     // FxBloomHdr) for now. Both enums are None, Medium, High in that order, so
-    // the index is the shared language between them.
+    // the index 0/1/2 is the shared language between them.
     //
-    // A display setting is the user's: the game saves it to its config
+    // Bloom is the user's own setting and the game saves it to its config
     // (Documents/Trackmania/Config/Default.json). Every write is treated as
-    // persistent. The prior value goes to a restore record on disk BEFORE the
-    // write, and the record keeps the OLDEST prior: a second Set must not
-    // overwrite the user's real value with the tool's own earlier write.
-    //
-    // The record (schema 2, review 1 F1/F2) also holds every value the tool
-    // applied under it and the install identity it was written on. It is
-    // restored automatically only on the same install and only while the
-    // setting still holds a value the tool applied; anything else is a
-    // conflict that is reported and left alone.
+    // persistent; whether and when the game saves it is unproven (Q3), so the
+    // tools report persisted:"assumed". SetDisplaySetting writes ONE restore
+    // record before it changes anything and never overwrites it: while any
+    // record exists, Set refuses. Only an explicit RestoreDisplaySetting
+    // removes it. Nothing restores automatically.
 
-    const string DISPLAY_RESTORE_FILE = "display-restore.txt";
-    // A new record is written here, read back, then moved over the record.
-    const string DISPLAY_RESTORE_NEXT_FILE = "display-restore.next.txt";
-    const string DISPLAY_RECORD_SCHEMA = "2";
+    const string DISPLAY_RESTORE_FILE = "bloom-restore.txt";
+    const string DISPLAY_RECORD_SCHEMA = "3";
     const uint DISPLAY_RECORD_MAX_BYTES = 4096;
 
-    // "" = not a bloom value.
-    string NormalizeBloom(const string &in raw) {
-        string s = raw.Trim();
-        if (s == "none" || s == "None" || s == "NONE" || s == "off" || s == "Off") return "none";
-        if (s == "medium" || s == "Medium" || s == "MEDIUM") return "medium";
-        if (s == "high" || s == "High" || s == "HIGH") return "high";
-        return "";
+    // Record files earlier builds wrote: schema 1 (JSON) and schema 2 (with a
+    // side file). They carry no usable identity, so they are never applied or
+    // migrated. GetDisplaySetting reports them; Set refuses while one exists.
+    array<string> DisplayLegacyRecordFiles() {
+        array<string> names = {"display-restore.json", "display-restore.txt", "display-restore.next.txt"};
+        return names;
     }
 
-    // -1 = not a bloom value.
+    // -1 unless name is exactly "none", "medium" or "high".
     int BloomIndex(const string &in name) {
-        string n = NormalizeBloom(name);
-        if (n == "none") return 0;
-        if (n == "medium") return 1;
-        if (n == "high") return 2;
+        if (name == "none") return 0;
+        if (name == "medium") return 1;
+        if (name == "high") return 2;
         return -1;
     }
 
@@ -51,19 +44,26 @@ namespace TmMcp {
         return "";
     }
 
+    // The CSystemConfig display block in effect: Display, or DisplaySafe
+    // when the game runs in safe mode (IsSafeMode).
+    string DisplayConfigName(bool safeMode) {
+        return safeMode ? "safe" : "display";
+    }
+
     // --- The restore record --------------------------------------------------
-    // Plain key=value lines so this file can parse and check it with no JSON
-    // library; the last line must be end=ok, so a truncated file never parses.
-    //   schema=2
+    // Exactly these lines, in this order, each ending in "\n":
+    //   schema=3
     //   setting=bloom
-    //   prior=high               the user's value before the first Set
-    //   applied=none,medium      every value the tool wrote under this record
-    //   identity=<hex>           the install it was written on
-    //   setAt=2026-11-18 19:50:00
+    //   prior=high               the value before SetDisplaySetting
+    //   target=none              the value SetDisplaySetting then wrote
+    //   config=display           display | safe: the config block written
+    //   identity=<hex>           the install it belongs to (a SHA-256)
+    //   setAt=2026-11-18 23:30:00
     //   end=ok
     class DisplayRecord {
         string prior;
-        array<string> applied;
+        string target;
+        string config;
         string identity;
         string setAt;
     }
@@ -79,19 +79,24 @@ namespace TmMcp {
     }
 
     string DisplayRecordText(DisplayRecord@ r) {
-        string applied = "";
-        for (uint i = 0; i < r.applied.Length; i++) applied += (i == 0 ? "" : ",") + r.applied[i];
-        return "# tm-control-mcp: the user's bloom before SetDisplaySetting. RestoreDisplaySetting puts it back.\n"
-            + "schema=" + DISPLAY_RECORD_SCHEMA + "\n"
+        return "schema=" + DISPLAY_RECORD_SCHEMA + "\n"
             + "setting=bloom\n"
             + "prior=" + r.prior + "\n"
-            + "applied=" + applied + "\n"
+            + "target=" + r.target + "\n"
+            + "config=" + r.config + "\n"
             + "identity=" + r.identity + "\n"
             + "setAt=" + r.setAt + "\n"
             + "end=ok\n";
     }
 
-    // null + reason when the text is not a complete, valid schema-2 record.
+    bool _IsDisplayRecordKey(const string &in k) {
+        return k == "schema" || k == "setting" || k == "prior" || k == "target" || k == "config"
+            || k == "identity" || k == "setAt";
+    }
+
+    // null + reason unless the text is a complete schema-3 record in exactly
+    // the form DisplayRecordText writes: canonical tokens, nothing missing,
+    // nothing extra, and prior != target.
     DisplayRecord@ ParseDisplayRecord(const string &in text, string &out reason) {
         reason = "";
         if (text.Length == 0) { reason = "empty"; return null; }
@@ -101,30 +106,32 @@ namespace TmMcp {
         array<string> values;
         bool ended = false;
         for (uint i = 0; i < lines.Length; i++) {
-            string line = lines[i].Trim();
-            if (line.Length == 0 || line.StartsWith("#")) continue;
-            if (ended) { reason = "content after end=ok"; return null; }
+            string line = lines[i];
+            if (ended) {
+                // "end=ok\n" leaves one empty piece after the split.
+                if (i == lines.Length - 1 && line.Length == 0) break;
+                reason = "content after end=ok";
+                return null;
+            }
             int eq = line.IndexOf("=");
-            if (eq <= 0) { reason = "malformed line " + (i + 1); return null; }
+            if (eq <= 0) { reason = (line.Length == 0 ? "blank line " : "malformed line ") + (i + 1); return null; }
             string k = line.SubStr(0, eq);
             string v = line.SubStr(eq + 1);
-            if (keys.Find(k) >= 0) { reason = "duplicate key " + k; return null; }
             if (k == "end") {
                 if (v != "ok") { reason = "bad end marker"; return null; }
                 ended = true;
                 continue;
             }
-            if (k != "schema" && k != "setting" && k != "prior" && k != "applied" && k != "identity" && k != "setAt") {
-                reason = "unknown key " + k;
-                return null;
-            }
+            if (!_IsDisplayRecordKey(k)) { reason = "unknown key " + k; return null; }
+            if (keys.Find(k) >= 0) { reason = "duplicate key " + k; return null; }
             keys.InsertLast(k);
             values.InsertLast(v);
         }
         if (!ended) { reason = "truncated (no end=ok)"; return null; }
         int iSchema = keys.Find("schema"), iSetting = keys.Find("setting"), iPrior = keys.Find("prior");
-        int iApplied = keys.Find("applied"), iIdentity = keys.Find("identity"), iSetAt = keys.Find("setAt");
-        if (iSchema < 0 || iSetting < 0 || iPrior < 0 || iApplied < 0 || iIdentity < 0 || iSetAt < 0) {
+        int iTarget = keys.Find("target"), iConfig = keys.Find("config"), iIdentity = keys.Find("identity");
+        int iSetAt = keys.Find("setAt");
+        if (iSchema < 0 || iSetting < 0 || iPrior < 0 || iTarget < 0 || iConfig < 0 || iIdentity < 0 || iSetAt < 0) {
             reason = "missing key";
             return null;
         }
@@ -132,80 +139,103 @@ namespace TmMcp {
         if (values[iSetting] != "bloom") { reason = "unknown setting " + values[iSetting]; return null; }
         auto r = DisplayRecord();
         r.prior = values[iPrior];
-        if (BloomName(BloomIndex(r.prior)) != r.prior) { reason = "prior is not none|medium|high"; return null; }
-        if (values[iApplied].Length == 0) { reason = "applied is empty"; return null; }
-        auto parts = values[iApplied].Split(",");
-        for (uint i = 0; i < parts.Length; i++) {
-            if (BloomName(BloomIndex(parts[i])) != parts[i]) { reason = "applied holds a value that is not none|medium|high"; return null; }
-            if (r.applied.Find(parts[i]) >= 0) { reason = "applied repeats " + parts[i]; return null; }
-            r.applied.InsertLast(parts[i]);
-        }
-        if (r.applied.Length == 0) { reason = "applied is empty"; return null; }
+        r.target = values[iTarget];
+        r.config = values[iConfig];
         r.identity = values[iIdentity];
-        if (!IsDisplayIdentity(r.identity)) { reason = "identity is not a hex fingerprint"; return null; }
         r.setAt = values[iSetAt];
+        // Canonical spelling only: BloomIndex accepts nothing else, so an
+        // empty or misspelt token never maps to an index.
+        if (BloomIndex(r.prior) < 0) { reason = "prior is not none|medium|high"; return null; }
+        if (BloomIndex(r.target) < 0) { reason = "target is not none|medium|high"; return null; }
+        if (r.prior == r.target) { reason = "prior and target are the same"; return null; }
+        if (r.config != "display" && r.config != "safe") { reason = "config is not display|safe"; return null; }
+        if (!IsDisplayIdentity(r.identity)) { reason = "identity is not a hex fingerprint"; return null; }
+        if (r.setAt.Length == 0) { reason = "setAt is empty"; return null; }
+        // Same bytes as this build writes: order, line ends, no stray spaces.
+        if (DisplayRecordText(r) != text) { reason = "not in canonical form"; return null; }
         return r;
     }
 
     bool DisplayRecordsEqual(DisplayRecord@ a, DisplayRecord@ b) {
         if (a is null || b is null) return false;
-        if (a.prior != b.prior || a.identity != b.identity || a.setAt != b.setAt) return false;
-        if (a.applied.Length != b.applied.Length) return false;
-        for (uint i = 0; i < a.applied.Length; i++) if (a.applied[i] != b.applied[i]) return false;
-        return true;
+        return a.prior == b.prior && a.target == b.target && a.config == b.config
+            && a.identity == b.identity && a.setAt == b.setAt;
     }
 
-    // What a restore does. sources: the value each source reads now, "" for
-    // an unreadable one (wrapper, systemConfig).
-    //  "unavailable"        nothing readable: keep the record
-    //  "conflict-identity"  written on another install / profile: keep it, apply nothing
-    //  "clear"              every readable source has the recorded prior: delete
-    //  "apply"              every other value is one the tool applied: write the prior back
-    //  "conflict-value"     a source holds a value the tool never applied (someone
-    //                       changed it since): keep it, apply nothing
-    // force (explicit RestoreDisplaySetting only) overrides both conflicts.
-    string RestoreDecision(bool identityMatches, const array<string> &in sources, const string &in prior,
-                           const array<string> &in applied, bool force) {
-        uint readable = 0;
-        bool allPrior = true;
-        bool foreign = false;
-        for (uint i = 0; i < sources.Length; i++) {
-            if (BloomIndex(sources[i]) < 0) continue;
-            readable++;
-            if (sources[i] == prior) continue;
-            allPrior = false;
-            if (applied.Find(sources[i]) < 0) foreign = true;
+    // The bloom an older record names, "" if none can be read. Reported only.
+    //   display-restore.json (schema 1)           {"bloom":"high","setAt":...}
+    //   display-restore(.next).txt (schema 2)     a prior=high line
+    string LegacyRecordBloom(const string &in name, const string &in text) {
+        if (name == "display-restore.json") {
+            int k = text.IndexOf("\"bloom\"");
+            if (k < 0) return "";
+            string rest = text.SubStr(k + 7);
+            uint i = 0;
+            bool colon = false;
+            while (i < uint(rest.Length)) {
+                uint8 c = rest[i];
+                if (c == 32 || c == 9 || c == 10 || c == 13) { i++; continue; }
+                if (c == 58 && !colon) { colon = true; i++; continue; }
+                break;
+            }
+            if (!colon || i >= uint(rest.Length) || rest[i] != 34) return "";
+            string tail = rest.SubStr(int(i) + 1);
+            int q = tail.IndexOf("\"");
+            if (q < 0) return "";
+            string v = tail.SubStr(0, q);
+            return BloomIndex(v) >= 0 ? v : "";
         }
-        if (readable == 0) return "unavailable";
-        if (!identityMatches && !force) return "conflict-identity";
-        if (allPrior) return "clear";
-        if (foreign && !force) return "conflict-value";
-        return "apply";
-    }
-
-    // SetDisplaySetting with a valid record already on disk: "" = go on
-    // (keep the oldest prior, add the new value), else the conflict.
-    string SetRecordConflict(bool identityMatches, const string &in current, const string &in prior,
-                             const array<string> &in applied) {
-        if (!identityMatches) return "identity";
-        if (current != prior && applied.Find(current) < 0) return "value";
+        auto lines = text.Split("\n");
+        for (uint i = 0; i < lines.Length; i++) {
+            string l = lines[i].Trim();
+            if (l.StartsWith("prior=")) {
+                string v = l.SubStr(6);
+                return BloomIndex(v) >= 0 ? v : "";
+            }
+        }
         return "";
     }
 
-    // Which write path to use. The script wrapper (what the game's settings
-    // page uses) first; a direct CSystemConfigDisplay write when the wrapper
-    // is missing, its write did not read back, or someone else has it loaded
-    // (F3: the tool never applies a wrapper it did not load).
-    string ChooseBloomMechanism(bool wrapperAvailable, bool wrapperBusy, bool wrapperFailed) {
-        if (wrapperAvailable && !wrapperBusy && !wrapperFailed) return "wrapper";
-        return "systemConfig";
+    // What an explicit RestoreDisplaySetting does with a valid record whose
+    // identity matches (or force). readable: sources read now; allPrior /
+    // allTarget: every readable source holds that value; unreadableKnown: a
+    // source known to exist could not be read (a wrapper someone else loaded).
+    //  "unavailable"  nothing readable: keep the record
+    //  "clear"        already at the prior (Set crashed before its write, or
+    //                 someone reverted): delete the record, write nothing
+    //  "apply"        every source holds the target: write the prior back
+    //  "conflict"     anything else: keep the record, write nothing
+    // force (explicit request only) turns "conflict" into "apply", which
+    // overwrites whatever the user has now.
+    string RestoreDecision(uint readable, bool allPrior, bool allTarget, bool unreadableKnown, bool force) {
+        if (readable == 0) return "unavailable";
+        if (!unreadableKnown && allPrior) return "clear";
+        if (!unreadableKnown && allTarget) return "apply";
+        return force ? "apply" : "conflict";
     }
 
-    // A write is verified only when every readable source reports the wanted
-    // value. sourcesRead counts the readable ones; sourcesMatching those equal
-    // to the wanted index.
-    bool BloomWriteVerified(uint sourcesRead, uint sourcesMatching) {
-        return sourcesRead > 0 && sourcesMatching == sourcesRead;
+    // Who has the game's DisplaySettings wrapper loaded right now.
+    const int DISPLAY_WRAPPER_NONE = 0;
+    const int DISPLAY_WRAPPER_OURS = 1;   // this tool loaded it and its release is not confirmed yet
+    const int DISPLAY_WRAPPER_OTHER = 2;  // the settings page or another plugin
+    // apiLoaded: api.DisplaySettings !is null. ownClaim: this tool loaded a
+    // wrapper and has not seen it released. sameObject: the loaded wrapper is
+    // the very one this tool loaded (handle comparison). A different wrapper
+    // is someone else's, whatever this tool loaded before.
+    int DisplayWrapperOwner(bool apiLoaded, bool ownClaim, bool sameObject) {
+        if (!apiLoaded) return DISPLAY_WRAPPER_NONE;
+        if (ownClaim && sameObject) return DISPLAY_WRAPPER_OURS;
+        return DISPLAY_WRAPPER_OTHER;
+    }
+
+    // One write path per call, chosen before the write and never switched:
+    // the script wrapper (what the settings page uses) when this call just
+    // loaded, read and released one with no yield and nobody else has it
+    // loaded; else the direct CSystemConfigDisplay write. A wrapper that
+    // would need a frame to load is never waited for. Neither path yields.
+    string ChooseBloomMechanism(bool wrapperLoadedWithoutYield, bool wrapperBusy) {
+        if (wrapperLoadedWithoutYield && !wrapperBusy) return "wrapper";
+        return "systemConfig";
     }
 
     // Applying the wrapper applies the WHOLE wrapper, so window/mode changes

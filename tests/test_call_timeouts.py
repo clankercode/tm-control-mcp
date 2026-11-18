@@ -86,3 +86,45 @@ def test_control_pause_socket_outlives_the_plugin_budget(payload, budget_s, caps
         assert client.main() == 0
     assert connect.call_args.kwargs["timeout"] >= budget_s + 5.0
     assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+def test_control_pause_long_explicit_timeout_is_kept(capsys):
+    """Review 2 F10 survivor: --timeout 90 must survive the ControlPause expansion."""
+    sock = mock.MagicMock()
+    sock.__enter__.return_value = sock
+    sock.recv.return_value = b'{"ok":true,"data":{"result":{"success":true,"output":{}}}}\n'
+    with mock.patch.object(sys, "argv", ["call.py", "--skip-process-check", "--timeout", "90", "ControlPause",
+                                         '{"action":"pause"}']), \
+         mock.patch.object(client.socket, "create_connection", return_value=sock) as connect:
+        assert client.main() == 0
+    assert connect.call_args.kwargs["timeout"] == 90
+    assert sock.settimeout.call_args.args[0] == 90
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+@pytest.mark.parametrize("payload", [
+    '{"action":"pause","holdMs":1e309}',
+    '{"action":"pause","timeoutMs":-1e309}',
+    '{"action":"pause","holdMs":NaN}',
+    '{"action":"pause","holdMs":Infinity}',
+    '{"action":"pause","holdMs":250.5}',
+    '{"action":"pause","timeoutMs":"3000"}',
+    '{"action":"pause","holdMs":true}',
+])
+def test_control_pause_rejects_nonfinite_or_noninteger_input(payload, capsys):
+    """Review 2 P3: 1e309 decodes to inf and int() raised OverflowError before any request."""
+    with mock.patch.object(sys, "argv", ["call.py", "--skip-process-check", "ControlPause", payload]), \
+         mock.patch.object(client.socket, "create_connection") as connect:
+        assert client.main() == 2
+    connect.assert_not_called()
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False and out["code"] == "INVALID_INPUT"
+    assert "ControlPause" in out["error"]
+
+
+@pytest.mark.parametrize("value,expected", [
+    (float("inf"), 2000), (float("-inf"), 100), (float("nan"), 100), (1e300, 2000), (2000.0, 2000), (150, 150),
+])
+def test_pause_clamp_is_finite_safe(value, expected):
+    assert client._pause_clamp(value, client.PAUSE_HOLD_MS) == expected
+    assert client.pause_socket_timeout(5.0, {"holdMs": value}) >= 5.0

@@ -3,6 +3,7 @@ import argparse
 import csv
 import difflib
 import json
+import math
 import os
 from pathlib import Path
 import socket
@@ -360,20 +361,47 @@ PAUSE_CLEANUP_RESERVE_MS = 2000
 PAUSE_SOCKET_SLACK_S = 5.0
 
 
+def pause_input_error(input_data: object) -> str | None:
+    """None when holdMs/timeoutMs are absent or finite integers, else why not.
+
+    The JSON decoder accepts 1e309 as infinity and NaN literals; int() of those
+    raises before any request is sent. The schema says integer, so a
+    fractional value is rejected here too. The plugin clamps again on its side.
+    """
+    if not isinstance(input_data, dict):
+        return None
+    for key in ("holdMs", "timeoutMs"):
+        if key not in input_data:
+            continue
+        value = input_data[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return f"{key} must be an integer number of milliseconds"
+        if isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
+            return f"{key} must be a finite integer number of milliseconds, got {value!r}"
+    return None
+
+
 def _pause_clamp(value: object, spec: tuple[int, int, int]) -> int:
     default, lo, hi = spec
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return default
-    return max(lo, min(hi, int(value)))
+    if isinstance(value, float) and not math.isfinite(value):
+        return lo if value != value or value < 0 else hi
+    # Clamp before narrowing, like the plugin.
+    if value < lo:
+        return lo
+    if value > hi:
+        return hi
+    return int(value)
 
 
 def pause_socket_timeout(timeout: float, input_data: object) -> float:
     """Socket deadline for ControlPause.
 
-    The plugin stops every ControlPause call at budgetMs = 3*holdMs +
-    timeoutMs + 2000 (clamped inputs; at most 18 s). The socket gets that plus
-    slack for the frames around it. If the client still times out, the plugin
-    worker finishes on its own within budgetMs; call GetPauseState before
+    The plugin stops a ControlPause call at budgetMs = 3*holdMs + timeoutMs +
+    2000 (clamped inputs; at most 18 s), checked once per game frame. The
+    socket gets that plus slack for the frames around it, or --timeout if that
+    is longer. If the client still times out, call GetPauseState before
     pausing or resuming again.
     """
     data = input_data if isinstance(input_data, dict) else {}
@@ -722,6 +750,12 @@ def main() -> int:
     except json.JSONDecodeError as exc:
         print(f"invalid input JSON: {exc}", file=sys.stderr)
         return 2
+
+    if args.route_or_tool == "ControlPause":
+        pause_err = pause_input_error(input_data)
+        if pause_err:
+            print_json_error(f"invalid input for ControlPause: {pause_err}", args.pretty, code="INVALID_INPUT")
+            return 2
 
     if args.route_or_tool == "recover" and not isinstance(input_data, dict):
         print(f"invalid input for recover: input must be an object, got {_json_type(input_data)}", file=sys.stderr)

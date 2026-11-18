@@ -14,14 +14,10 @@ namespace TmMcp {
     // The only close result used here is Resume. Quit would leave the map;
     // the sub-menu results open other pages that this tool cannot close again.
     //
-    // Context ids: the host remembers the playground and handler handles it
-    // last saw and hands out a new id whenever either differs, null
-    // included. The handles are only compared, never dereferenced, and hold
-    // no engine reference: keeping a playground alive past its map would be
-    // worse than the problem. A map change passes through frames with no
-    // playground or a loading screen, and both a running call (after every
-    // yield) and the ownership watcher (every frame) read the gate, so they
-    // see the change even if a new object later reuses an address.
+    // Context: a call captures the playground and handler handles when it
+    // begins and compares them (with `is`, never dereferenced) after every
+    // frame. Nothing is kept after the call. A same-address replacement with
+    // no loading or empty frame in between would not be seen (documented).
 
     CGameScriptHandlerPlaygroundInterface@ _PauseHandler() {
         auto app = GetApp();
@@ -35,49 +31,30 @@ namespace TmMcp {
         return app.Network.PlaygroundClientScriptAPI;
     }
 
-    class PauseNodIds {
+    class LivePauseContext : PauseContext {
         CGamePlayground@ playground;
         CGameScriptHandlerPlaygroundInterface@ handler;
-        uint64 playgroundId = 0;
-        uint64 handlerId = 0;
-        uint64 next = 1;
-
-        uint64 PlaygroundId(CGamePlayground@ pg) {
-            if (playground !is pg || (pg !is null && playgroundId == 0)) {
-                @playground = pg;
-                playgroundId = pg is null ? 0 : next++;
-            }
-            return playgroundId;
-        }
-
-        uint64 HandlerId(CGameScriptHandlerPlaygroundInterface@ h) {
-            if (handler !is h || (h !is null && handlerId == 0)) {
-                @handler = h;
-                handlerId = h is null ? 0 : next++;
-            }
-            return handlerId;
-        }
-
-        void Forget() {
-            @playground = null;
-            @handler = null;
-            playgroundId = 0;
-            handlerId = 0;
-        }
     }
-
-    PauseNodIds g_pauseNodIds;
 
     class LivePauseHost : PauseHost {
         uint64 NowMs() { return Time::Now; }
         void Yield() { yield(); }
 
-        PauseGate@ ReadGate() {
+        PauseContext@ CaptureContext() {
+            auto c = LivePauseContext();
+            auto app = GetApp();
+            @c.playground = app is null ? null : app.CurrentPlayground;
+            @c.handler = _PauseHandler();
+            return c;
+        }
+
+        PauseGate@ ReadGate(PauseContext@ ctx) {
             auto g = PauseGate();
             auto app = GetApp();
             auto api = _PauseClientApi();
             auto h = _PauseHandler();
-            g.inPlayground = app !is null && app.CurrentPlayground !is null && api !is null && h !is null;
+            auto pg = app is null ? null : app.CurrentPlayground;
+            g.inPlayground = pg !is null && api !is null && h !is null;
             g.loading = api !is null && api.IsLoadingScreen;
             g.local = app !is null && app.PlaygroundScript !is null;
             if (app !is null && app.Network !is null) {
@@ -86,8 +63,8 @@ namespace TmMcp {
             }
             g.spectatorClient = api !is null && api.IsSpectatorClient;
             g.serverOrSolo = api !is null && api.IsServerOrSolo;
-            g.playgroundId = g_pauseNodIds.PlaygroundId(app is null ? null : app.CurrentPlayground);
-            g.handlerId = g_pauseNodIds.HandlerId(h);
+            auto c = cast<LivePauseContext>(ctx);
+            g.sameContext = c !is null && pg !is null && h !is null && c.playground is pg && c.handler is h;
             return g;
         }
 
@@ -129,12 +106,14 @@ namespace TmMcp {
             return true;
         }
 
+        // BasicDialogs and modal menu frames (DialogPolicy). The in-game menu
+        // is a playground UI layer, not one of those frames (assumed; checked
+        // in the first live run).
         bool DialogBlocking() {
             auto d = BasicDialogSummary();
             return d.HasKey("blocking") && bool(d["blocking"]);
         }
 
-        void StartWatcher() { startnew(_PauseWatchCoro); }
         void Log(const string &in message) { trace(message); }
 
         Json::Value@ ExtraState() {
@@ -147,11 +126,6 @@ namespace TmMcp {
 
     LivePauseHost g_livePauseHost;
 
-    // Runs every frame while this tool owns a menu (PauseCore.as).
-    void _PauseWatchCoro() {
-        while (PauseWatchStep(g_livePauseHost)) yield();
-    }
-
     Json::Value@ GetPauseState(Json::Value &in input) {
         auto r = GetPauseStateCore(g_livePauseHost, input);
         if (r.HasKey("output")) r["output"]["mode"] = DetectGameModeName();
@@ -163,24 +137,21 @@ namespace TmMcp {
         try {
             @r = ControlPauseCore(g_livePauseHost, input);
         } catch {
-            PauseCallAborted(); // the watcher closes a menu this call opened
+            // Nothing outlives the call: report what is up now.
             @r = MakeError("ControlPause threw: " + getExceptionInfo(), "tool_exception", true, "",
-                "GetPauseState shows the menu; a menu this call opened is closed in the background.");
+                "Call GetPauseState; if the in-game menu is up, ControlPause resume closes it.");
+            Json::Value o = Json::Object();
+            o["menuShown"] = g_livePauseHost.MenuShown();
+            r["output"] = o;
         }
-        if (r.HasKey("output")) {
-            r["output"]["mode"] = DetectGameModeName();
-            r["output"]["overlay"] = OverlayStateJson();
+        try {
+            if (r.HasKey("output")) {
+                r["output"]["mode"] = DetectGameModeName();
+                r["output"]["overlay"] = OverlayStateJson();
+            }
+        } catch {
+            warn("TM Control MCP: ControlPause result decoration failed: " + getExceptionInfo());
         }
         return r;
-    }
-
-    // Plugin disable / unload (no yield): close a menu this tool still owns.
-    void ClosePauseOnLifecycle(const string &in when) {
-        try {
-            string outcome = PauseCloseOwnedOnShutdown(g_livePauseHost);
-            if (outcome != "none") trace("TM Control MCP: in-game menu on " + when + ": " + outcome);
-        } catch {
-            warn("TM Control MCP: in-game menu close on " + when + " failed: " + getExceptionInfo());
-        }
     }
 }

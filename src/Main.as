@@ -6,18 +6,16 @@ void Main() {
     TmMcp::StartToolCalls();
     TmMcp::InitToolSchemas();
     TmMcp::StartPackUpdates();
-    TmMcp::RestoreDisplaySettingOnLifecycle("start");
+    TmMcp::DisplaySettingsOnLifecycle("start");
     TmMcp::Start();
 }
 
 void OnDestroyed() {
-    TmMcp::ClosePauseOnLifecycle("unload");
-    TmMcp::RestoreDisplaySettingOnLifecycle("unload");
+    TmMcp::DisplaySettingsOnLifecycle("unload");
     TmMcp::Shutdown();
 }
 
 void OnDisabled() {
-    TmMcp::ClosePauseOnLifecycle("disable");
-    TmMcp::RestoreDisplaySettingOnLifecycle("disable");
+    TmMcp::DisplaySettingsOnLifecycle("disable");
     TmMcp::Shutdown();
 }

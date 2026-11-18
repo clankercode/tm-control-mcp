@@ -2,8 +2,11 @@
 in stock AngelScript (tests/test_pause_tools.py, tests/test_display_settings_tools.py).
 
 The cores reach the game only through the PauseHost / DisplayHost interfaces, so
-these fakes drive the real orchestration: clocks, menu, gate, context ids, yields,
-wrapper and disk are all scripted per test. Nothing here reimplements policy.
+these fakes drive the real orchestration: clocks, menu, gate, context, yields,
+dialogs, wrapper and disk are all scripted per test. Nothing here reimplements
+policy. Both fakes carry reentry hooks: a test can make the fake call back into
+the production core from inside Yield or from inside a host operation, the way
+another coroutine would run if the core ever yielded there.
 """
 import subprocess
 from pathlib import Path
@@ -22,6 +25,7 @@ namespace Json {
 '''
 
 SHIM = r'''
+string getExceptionInfo() { return "fake exception"; }
 namespace TmMcp {
     Json::Value@ MakeSuccess(Json::Value &in output) {
         auto v = Json::Object(); v["success"] = true; v["output"] = output; return v;
@@ -33,11 +37,15 @@ namespace TmMcp {
     }
     bool Ok(Json::Value@ r) { return bool(r["success"]); }
     string Code(Json::Value@ r) { return r.HasKey("code") ? string(r["code"]) : ""; }
+    bool OutHas(Json::Value@ r, const string &in key) { return r.HasKey("output") && r["output"].HasKey(key); }
     bool OutBool(Json::Value@ r, const string &in key) {
-        return r["output"].HasKey(key) && r["output"][key].GetType() == Json::Type::Boolean && bool(r["output"][key]);
+        return OutHas(r, key) && r["output"][key].GetType() == Json::Type::Boolean && bool(r["output"][key]);
     }
     string OutStr(Json::Value@ r, const string &in key) {
-        return r["output"].HasKey(key) && r["output"][key].GetType() == Json::Type::String ? string(r["output"][key]) : "";
+        return OutHas(r, key) && r["output"][key].GetType() == Json::Type::String ? string(r["output"][key]) : "";
+    }
+    int OutInt(Json::Value@ r, const string &in key) {
+        return OutHas(r, key) && r["output"][key].GetType() == Json::Type::Number ? int(r["output"][key]) : -999;
     }
 }
 '''
@@ -51,9 +59,17 @@ namespace TmMcp {
         FakeEvent(uint64 a, const string &in w, int v) { at = a; what = w; value = v; }
     }
 
+    class FakePauseContext : PauseContext {
+        uint64 playground = 0;
+        uint64 handler = 0;
+    }
+
     class FakePauseGame : PauseHost {
         uint64 now = 1000;
         uint frameMs = 16;
+        // Frame hitches: the frame that starts at or after slowAt takes slowMs.
+        uint64 slowAt = 0;
+        uint slowMs = 0;
         // game
         bool inPlayground = true, loading = false, local = true, loginSet = false, spectator = false;
         uint64 playgroundId = 7, handlerId = 9;
@@ -67,19 +83,24 @@ namespace TmMcp {
         int closeLagFrames = 0;       // frames before a close takes effect (-1 = never)
         int pendingShow = -1, pendingClose = -1;
         // calls seen
-        uint shows = 0, closes = 0, yields = 0, watchersStarted = 0;
+        uint shows = 0, closes = 0, yields = 0, gateReads = 0;
         array<uint64> showAt;
+        array<uint64> closeAt;
         array<FakeEvent@> events;
         array<string> log;
         // Go online on the Nth clock report (ExtraState runs between a sample
-        // and the check that follows it, with no yield in between).
+        // and the read that follows it, with no yield in between).
         int goOnlineOnReport = -1;
         int reports = 0;
-        // Flip locality off on the Nth gate read after arming (no yield needed).
-        int gateFlipAfterReads = -1;
-        bool armGateFlipAtSampleEnd = false;
-        bool gateArmed = false;
-        int gateReadsSinceArm = 0;
+        // Flip locality off on gate read number N (counted from 1), no yield needed.
+        int goOnlineOnGateRead = -1;
+        // A dialog comes up on DialogBlocking read number N, no yield needed.
+        int dialogOnRead = -1;
+        int dialogReads = 0;
+        // Probes: reads done before the first ShowMenu (the last one is the
+        // read immediately before it).
+        uint gateReadsAtFirstShow = 0;
+        uint dialogReadsAtFirstShow = 0;
 
         void At(uint64 t, const string &in what, int value = 0) { events.InsertLast(FakeEvent(t, what, value)); }
 
@@ -96,11 +117,14 @@ namespace TmMcp {
             else if (what == "unreadable") readable[uint(value)] = false;
             else if (what == "readable") readable[uint(value)] = true;
             else if (what == "bump") clocks[uint(value)] += 1;
+            else if (what == "unbump") clocks[uint(value)] -= 1;
             else Check(false, "unknown fake event " + what);
         }
 
         void Frame() {
-            now += frameMs;
+            uint step = frameMs;
+            if (slowMs > 0 && now >= slowAt) { step = slowMs; slowMs = 0; }
+            now += step;
             for (uint i = 0; i < events.Length; i++) {
                 if (events[i] !is null && events[i].at <= now) { Apply(events[i].what, events[i].value); @events[i] = null; }
             }
@@ -109,28 +133,32 @@ namespace TmMcp {
             if (pendingClose > 0) pendingClose--;
             if (pendingClose == 0) { menu = false; pendingClose = -1; }
             bool frozen = menu && menuFreezes;
-            if (!frozen && !loading) for (uint i = 0; i < 3; i++) clocks[i] += frameMs;
+            if (!frozen && !loading) for (uint i = 0; i < 3; i++) clocks[i] += step;
         }
 
         uint64 NowMs() { return now; }
         void Yield() { yields++; Frame(); }
-        PauseGate@ ReadGate() {
-            if (gateArmed) {
-                gateReadsSinceArm++;
-                if (gateReadsSinceArm > gateFlipAfterReads) { local = false; gateArmed = false; }
-            }
+        PauseContext@ CaptureContext() {
+            auto c = FakePauseContext();
+            c.playground = inPlayground ? playgroundId : 0;
+            c.handler = inPlayground ? handlerId : 0;
+            return c;
+        }
+        PauseGate@ ReadGate(PauseContext@ ctx) {
+            gateReads++;
+            if (goOnlineOnGateRead > 0 && int(gateReads) == goOnlineOnGateRead) local = false;
             auto g = PauseGate();
             g.inPlayground = inPlayground; g.loading = loading; g.local = local;
             g.serverLoginSet = loginSet; g.spectatorClient = spectator;
-            g.playgroundId = inPlayground ? playgroundId : 0;
-            g.handlerId = inPlayground ? handlerId : 0;
+            auto c = cast<FakePauseContext>(ctx);
+            g.sameContext = c !is null && inPlayground && c.playground != 0
+                && c.playground == playgroundId && c.handler == handlerId;
             return g;
         }
         bool MenuShown() { return menu; }
         bool ReadClock(uint i, uint &out v) { v = clocks[i]; return inPlayground && readable[i]; }
-        // Called by the test fake when the initial sample is over: the core
-        // reads the dialog state right after the post-sample gate check.
         bool ShowMenu() {
+            if (shows == 0) { gateReadsAtFirstShow = gateReads; dialogReadsAtFirstShow = dialogReads; }
             shows++; showAt.InsertLast(now);
             if (!inPlayground) return false;
             if (showLagFrames == 0) menu = true;
@@ -138,52 +166,50 @@ namespace TmMcp {
             return true;
         }
         bool CloseMenuResume() {
-            closes++;
+            closes++; closeAt.InsertLast(now);
             if (closeLagFrames == 0) menu = false;
             else if (closeLagFrames > 0 && pendingClose < 0) pendingClose = closeLagFrames;
             return true;
         }
         bool DialogBlocking() {
-            // DialogBlocking is first read by the post-sample recheck: arm the
-            // flip there, so the next gate read (the pre-show check) sees it.
-            if (armGateFlipAtSampleEnd) { armGateFlipAtSampleEnd = false; gateArmed = true; gateReadsSinceArm = 0; }
+            dialogReads++;
+            if (dialogOnRead > 0 && int(dialogReads) == dialogOnRead) dialog = true;
             return dialog;
         }
-        void StartWatcher() { watchersStarted++; }
         void Log(const string &in m) { log.InsertLast(m); }
         Json::Value@ ExtraState() {
             reports++;
             if (reports == goOnlineOnReport) local = false;
             return null;
         }
-
-        // Run the ownership watcher for n frames (the live coroutine does this).
-        void Watch(uint n) {
-            for (uint i = 0; i < n; i++) { if (!PauseWatchStep(this)) break; Frame(); }
+        // Frames with nobody calling (after a call returned).
+        void Idle(uint n) { for (uint i = 0; i < n; i++) Frame(); }
+        bool AnyShowAfter(uint64 t) {
+            for (uint i = 0; i < showAt.Length; i++) if (showAt[i] > t) return true;
+            return false;
         }
     }
 
-    Json::Value@ PauseInput(const string &in action, int hold = -1, int timeout = -1, int autoResume = -1) {
+    Json::Value@ PauseInput(const string &in action, int hold = -1, int timeout = -1) {
         auto v = Json::Object();
         v["action"] = action;
         if (hold >= 0) v["holdMs"] = hold;
         if (timeout >= 0) v["timeoutMs"] = timeout;
-        if (autoResume >= 0) v["autoResumeAfterMs"] = autoResume;
         return v;
     }
 
     Json::Value@ SampleInput(int ms) { auto v = Json::Object(); v["sampleMs"] = ms; return v; }
-
-    void ResetPause() { g_pause = PauseOwnership(); }
 }
 '''
 
 DISPLAY_FAKE = r'''
 namespace TmMcp {
+    funcdef void FakeDisplayHook(FakeDisplayGame@ g);
+
     class FakeDisk {
         array<string> names;
         array<string> texts;
-        // failure injection by operation + file name ("write:display-restore.next.txt")
+        // failure injection by operation + file name ("write:bloom-restore.txt")
         array<string> fail;
         // write text, but store a truncated copy (simulates a short write)
         bool truncateWrites = false;
@@ -201,78 +227,115 @@ namespace TmMcp {
 
     class FakeDisplayGame : DisplayHost {
         FakeDisk disk;
-        string identity = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        // identity: unknown without a port.override; display and safe mode differ
+        bool identityKnown = true;
+        bool safeMode = false;
         int systemConfig = 2;       // high
         bool systemConfigAvailable = true;
-        bool scriptApi = true;
-        // The game's settings: the wrapper LoadCurrent copies systemConfig.
-        bool otherLoaded = false;   // someone else has the wrapper loaded
-        int otherWrapperValue = 2;  // what their (maybe edited) wrapper holds
-        int otherPendingMode = 0;   // their unsaved edit to another field
-        bool ourLoaded = false;
-        int ourWrapperValue = -1;
-        // effects
-        bool applyWritesSystemConfig = true;  // Apply pushes the wrapper into systemConfig
-        bool wrapperApplyFails = false;
         bool systemConfigWriteIgnored = false;
-        int appliedMode = 0;        // the display mode the game runs (Apply of an edited wrapper changes it)
+        bool scriptApi = true;
+        // The script API's loaded wrapper (0 = none) and the one this tool claims.
+        uint apiWrapper = 0;
+        uint ownWrapper = 0;
+        uint nextWrapper = 1;
+        int apiWrapperValue = -1;
+        bool apiWrapperReadable = true;
+        int otherPendingMode = 0;   // an edit someone else's wrapper holds
+        // how LoadCurrent behaves
+        int loadValue = -1;         // -1: copies systemConfig
+        bool loadNeedsFrame = false;// LoadCurrent leaves DisplaySettings null this frame
+        bool wrapperApplyFails = false;
+        bool applyThrows = false;
+        bool watchThrows = false;
+        bool applyWritesSystemConfig = true;
+        int releaseFailures = 0;    // the next N releases do not take...
+        int releaseOkFirst = 0;     // ...after this many more succeed
+        int appliedMode = 0;
         uint loads = 0, unloads = 0, applies = 0, scWrites = 0, yields = 0;
-        bool applyOnOtherWrapper = false;     // set if anything ever applied someone else's wrapper
-        // false = model a game whose LoadCurrent does not refuse when someone
-        // else has the wrapper loaded (then only the core's policy protects it)
-        bool strictLoad = true;
-        // a source that reverts after the restore's own read-back (e.g. a late
-        // Apply from the settings page re-saving the tool's value)
-        int revertSystemConfigOnReadsAfter = -1;
-        int scReads = 0;
-        int revertTo = -1;
+        bool applyOnOtherWrapper = false;
+        array<int> scWritten;
         array<string> log;
+        // Reentry hooks: run production code from inside Yield or right after
+        // the record is written (where a yield would let another call in).
+        FakeDisplayHook@ onYield = null;
+        FakeDisplayHook@ onRecordWritten = null;
+        // Right before a bloom write (wrapper Apply or systemConfig): the
+        // window between the record and the write, where review 2 F11 let a
+        // Restore in. A hook that throws models a crash there.
+        FakeDisplayHook@ onBeforeBloomWrite = null;
+        uint hookRuns = 0;
 
-        void Yield() { yields++; }
-        string Now() { return "2026-11-18 20:00:00"; }
-        string InstallIdentity() { return identity; }
-        Json::Value@ IdentityJson() { auto o = Json::Object(); o["fingerprint"] = identity; return o; }
-        bool SafeMode() { return false; }
-        int ReadSystemConfig() {
-            scReads++;
-            if (revertSystemConfigOnReadsAfter >= 0 && scReads > revertSystemConfigOnReadsAfter) {
-                systemConfig = revertTo; revertSystemConfigOnReadsAfter = -1;
-            }
-            return systemConfigAvailable ? systemConfig : -1;
+        void Yield() {
+            yields++;
+            if (onYield !is null) { hookRuns++; onYield(this); }
         }
+        string Now() { return "2026-11-19 00:00:00"; }
+        string Id() { return safeMode ? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; }
+        bool InstallIdentity(string &out identity, string &out why) {
+            identity = ""; why = "";
+            if (!identityKnown) { why = "no port.override in plugin storage"; return false; }
+            identity = Id();
+            return true;
+        }
+        Json::Value@ IdentityJson() { auto o = Json::Object(); o["known"] = identityKnown; return o; }
+        bool SafeMode() { return safeMode; }
+        int ReadSystemConfig() { return systemConfigAvailable ? systemConfig : -1; }
         bool WriteSystemConfig(int index, string &out err) {
+            if (onBeforeBloomWrite !is null) { hookRuns++; onBeforeBloomWrite(this); }
             if (!systemConfigAvailable) { err = "unavailable"; return false; }
-            scWrites++;
+            if (BloomName(index).Length == 0) { err = "bad index"; return false; }
+            scWrites++; scWritten.InsertLast(index);
             if (!systemConfigWriteIgnored) systemConfig = index;
             return true;
         }
         bool ScriptApiAvailable() { return scriptApi; }
-        bool WrapperLoadedByOther() { return scriptApi && otherLoaded; }
+        int WrapperOwner() {
+            if (!scriptApi) return DISPLAY_WRAPPER_NONE;
+            return DisplayWrapperOwner(apiWrapper != 0, ownWrapper != 0, ownWrapper != 0 && apiWrapper == ownWrapper);
+        }
+        // Someone else (the settings page) loads the wrapper.
+        void OtherLoads(int value, bool readable = true) {
+            apiWrapper = 1000 + nextWrapper++; apiWrapperValue = value; apiWrapperReadable = readable;
+        }
+        void OtherUnloads() { if (apiWrapper != 0 && apiWrapper != ownWrapper) apiWrapper = 0; }
         bool WrapperLoad(string &out err) {
             if (!scriptApi) { err = "no api"; return false; }
-            if (otherLoaded && strictLoad) { err = "already loaded by someone else"; return false; }
-            loads++; ourLoaded = true; ourWrapperValue = systemConfigAvailable ? systemConfig : 2;
+            if (apiWrapper != 0) { err = "already loaded"; return false; }
+            loads++;
+            if (loadNeedsFrame) { ownWrapper = 0; err = "null after LoadCurrent"; return false; }
+            apiWrapper = nextWrapper++;
+            ownWrapper = apiWrapper;
+            apiWrapperValue = loadValue >= 0 ? loadValue : (systemConfigAvailable ? systemConfig : 2);
+            apiWrapperReadable = true;
             return true;
         }
         int WrapperRead() {
-            if (otherLoaded && !ourLoaded) return otherWrapperValue;
-            return ourLoaded ? ourWrapperValue : -1;
+            if (apiWrapper == 0 || !apiWrapperReadable) return -1;
+            return apiWrapperValue;
         }
         bool WrapperWriteApply(int index, string &out err) {
-            if (otherLoaded) { applyOnOtherWrapper = true; appliedMode = otherPendingMode; }
-            if (!ourLoaded) { err = "not loaded"; return false; }
+            if (onBeforeBloomWrite !is null) { hookRuns++; onBeforeBloomWrite(this); }
+            if (apiWrapper != 0 && apiWrapper != ownWrapper) { applyOnOtherWrapper = true; appliedMode = otherPendingMode; }
+            if (ownWrapper == 0 || apiWrapper != ownWrapper) { err = "not ours"; return false; }
+            if (applyThrows) { array<int> a; a[3] = 1; }
             if (wrapperApplyFails) { err = "apply failed"; return false; }
-            ourWrapperValue = index; applies++;
-            if (applyWritesSystemConfig) systemConfig = index;
+            apiWrapperValue = index; applies++;
+            if (applyWritesSystemConfig && !systemConfigWriteIgnored) systemConfig = index;
             return true;
         }
-        void WrapperUnload() { if (ourLoaded) { ourLoaded = false; unloads++; } }
+        bool WrapperRelease(string &out err) {
+            if (ownWrapper == 0) return true;
+            if (apiWrapper != ownWrapper) { ownWrapper = 0; return true; }
+            if (releaseOkFirst > 0) releaseOkFirst--;
+            else if (releaseFailures > 0) { releaseFailures--; err = "unload threw"; return false; }
+            apiWrapper = 0; ownWrapper = 0; unloads++;
+            return true;
+        }
         DisplayWatch@ WrapperWatch() {
             auto w = DisplayWatch();
-            string err;
-            if (!WrapperLoad(err)) return w;
+            if (ownWrapper == 0 || apiWrapper != ownWrapper) return w;
+            if (watchThrows) { array<int> a; a[3] = 1; }
             w.ok = true; w.dirty = 1; w.mode = appliedMode; w.winX = 800; w.winY = 450;
-            WrapperUnload();
             return w;
         }
         bool FileExists(const string &in n) { return disk.Has(n); }
@@ -285,12 +348,8 @@ namespace TmMcp {
         bool FileWrite(const string &in n, const string &in text, string &out err) {
             if (disk.Fails("write", n)) { err = "write failed"; return false; }
             disk.Put(n, disk.truncateWrites ? text.SubStr(0, text.Length / 2) : text);
+            if (n == DISPLAY_RESTORE_FILE && onRecordWritten !is null) { hookRuns++; onRecordWritten(this); }
             return true;
-        }
-        bool FileMove(const string &in from, const string &in to, string &out err) {
-            if (disk.Fails("move", from)) { err = "move failed"; return false; }
-            if (!disk.Has(from)) { err = "missing"; return false; }
-            disk.Put(to, disk.Get(from)); disk.Remove(from); return true;
         }
         bool FileDelete(const string &in n, string &out err) {
             if (disk.Fails("delete", n)) { err = "delete failed"; return false; }
@@ -301,19 +360,21 @@ namespace TmMcp {
 
         string Record() { return disk.Get(DISPLAY_RESTORE_FILE); }
         bool HasRecord() { return disk.Has(DISPLAY_RESTORE_FILE); }
+        bool Clean() { return ownWrapper == 0 && !g_displayBusy; }
     }
 
     Json::Value@ BloomInput(const string &in v) { auto o = Json::Object(); o["bloom"] = v; return o; }
     Json::Value@ NoInput() { return Json::Object(); }
     Json::Value@ ForceInput(bool f) { auto o = Json::Object(); o["force"] = f; return o; }
 
-    string MakeRecordText(const string &in prior, const string &in applied, const string &in identity) {
+    string MakeRecordText(const string &in prior, const string &in target, const string &in identity,
+                          const string &in config = "display") {
         auto r = DisplayRecord();
         r.prior = prior;
-        auto parts = applied.Split(",");
-        for (uint i = 0; i < parts.Length; i++) r.applied.InsertLast(parts[i]);
+        r.target = target;
+        r.config = config;
         r.identity = identity;
-        r.setAt = "2026-11-18 19:00:00";
+        r.setAt = "2026-11-18 23:00:00";
         return DisplayRecordText(r);
     }
 }
@@ -332,19 +393,19 @@ def _json_mocks_full():
     return extra + JSON_EXTRA
 
 
-def run_core(runner, tmp_path, sources, fake, body, name="core_case.as"):
+def run_core(runner, tmp_path, sources, fake, body, name="core_case.as", prelude=""):
     case = tmp_path / name
-    case.write_text(_json_mocks_full() + SHIM + fake
+    case.write_text(_json_mocks_full() + SHIM + fake + "\n" + prelude
                     + "\nvoid RunTests() {\n    using namespace TmMcp;\n" + body + "\n}\n")
     result = subprocess.run([str(runner), *[str(SRC / s) for s in sources], str(case)],
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def run_pause(runner, tmp_path, body):
-    run_core(runner, tmp_path, ["PausePolicy.as", "PauseCore.as"], PAUSE_FAKE, body, "pause_core_case.as")
+def run_pause(runner, tmp_path, body, prelude=""):
+    run_core(runner, tmp_path, ["PausePolicy.as", "PauseCore.as"], PAUSE_FAKE, body, "pause_core_case.as", prelude)
 
 
-def run_display(runner, tmp_path, body):
+def run_display(runner, tmp_path, body, prelude=""):
     run_core(runner, tmp_path, ["DisplaySettingsPolicy.as", "DisplaySettingsCore.as"], DISPLAY_FAKE, body,
-             "display_core_case.as")
+             "display_core_case.as", prelude)

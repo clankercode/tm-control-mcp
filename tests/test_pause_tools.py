@@ -2,9 +2,11 @@
 
 No live game. The production PausePolicy.as runs in the stock AngelScript
 runner against a Python port of the same rules. The production orchestration
-(PauseCore.as: clock window, gate, ownership, cleanup, deadline) runs in the
-same runner against a scripted fake game (tests/as_core_fakes.py), with a
-regression for each review-1 finding F5-F10 (test_f5_..., test_f6_..., ...).
+(PauseCore.as: clock window, per-frame observation, one-Resume cleanup,
+deadline) runs in the same runner against a scripted fake game
+(tests/as_core_fakes.py). Fix round 2 removed the ownership watcher, the
+auto-resume timer and the context generations; the regressions here are
+named after the brief's P1-P5 and the review-2 findings that still apply.
 
 UNPROVEN live (2026-11-18): that a programmatic ShowInGameMenu freezes the
 clocks like ESC does. ESC in solo was measured to freeze all three clocks
@@ -84,28 +86,6 @@ def plan(resolved, menu, v):
     return ""
 
 
-def watch_action(owned, call_active, same, menu, close_due, attempts):
-    if not owned:
-        return "stop"
-    if call_active:
-        return "skip"
-    if not same:
-        return "forget-context"
-    if not menu:
-        return "forget-closed"
-    if not close_due:
-        return "wait"
-    return "give-up" if attempts >= 10 else "close"
-
-
-def noop_timer(given, ms, owned):
-    if not given:
-        return "keep"
-    if owned:
-        return "update"
-    return "refuse" if ms > 0 else "keep"
-
-
 def budget(hold, timeout):
     return 3 * hold + timeout + 2000
 
@@ -114,12 +94,6 @@ def clamp(v, given, default, lo, hi):
     if not given:
         return default
     return max(lo, min(hi, v))
-
-
-def clamp_auto(v, given):
-    if not given or v <= 0:
-        return 0
-    return min(v, 600000)
 
 
 # --- AngelScript runner --------------------------------------------------------
@@ -222,16 +196,6 @@ def test_pause_resume_idempotence_matrix(as_runner, tmp_path):
     lines.append('Check(ResumeOutcomeCode(false, "running") == "", "resumed");')
     lines.append('Check(ResumeOutcomeCode(true, "frozen") == "MENU_SUBPAGE_OPEN", "menu still up");')
     lines.append('Check(ResumeOutcomeCode(false, "frozen") == "RESUME_UNVERIFIED", "closed but still");')
-    # The ownership watcher: ownership ends with the menu and with the context.
-    for owned, active, same, menu, due, attempts in itertools.product(
-            [False, True], [False, True], [False, True], [False, True], [False, True], [0, 10]):
-        exp = watch_action(owned, active, same, menu, due, attempts)
-        lines.append(f"Check(PauseWatchAction({as_bool(owned)}, {as_bool(active)}, {as_bool(same)}, {as_bool(menu)}, "
-                     f"{as_bool(due)}, {attempts}) == {as_str(exp)}, \"watch {owned}/{active}/{same}/{menu}/{due}/{attempts}\");")
-    for given, ms, owned in itertools.product([False, True], [0, 5000], [False, True]):
-        exp = noop_timer(given, ms, owned)
-        lines.append(f"Check(PauseNoopTimerAction({as_bool(given)}, {ms}, {as_bool(owned)}) == {as_str(exp)}, "
-                     f"\"noop timer {given}/{ms}/{owned}\");")
     run_policy(as_runner, tmp_path, "\n".join("    " + l for l in lines))
 
 
@@ -243,442 +207,342 @@ def test_clamps(as_runner, tmp_path):
             lines.append(f"Check(ClampPauseSampleMs({v}, {g}) == {clamp(v, given, 300, 0, 2000)}, \"sample {v}/{given}\");")
             lines.append(f"Check(ClampPauseHoldMs({v}, {g}) == {clamp(v, given, 300, 100, 2000)}, \"hold {v}/{given}\");")
             lines.append(f"Check(ClampPauseTimeoutMs({v}, {g}) == {clamp(v, given, 3000, 100, 10000)}, \"timeout {v}/{given}\");")
-            lines.append(f"Check(ClampAutoResumeMs({v}, {g}) == {clamp_auto(v, given)}, \"auto {v}/{given}\");")
+    # Clamped in double before narrowing (review 2 F10/P3): huge, infinite, NaN, fractional.
+    lines.append("Check(ClampPauseHoldMs(1e309, true) == 2000, \"inf hold -> max\");")
+    lines.append("Check(ClampPauseHoldMs(-1e309, true) == 100, \"-inf hold -> min\");")
+    lines.append("Check(ClampPauseTimeoutMs(4294967296.0 * 8, true) == 10000, \"beyond int range -> max\");")
+    lines.append("double inf = 1e309; double nan = inf - inf;")
+    lines.append("Check(ClampPauseHoldMs(nan, true) == 100, \"NaN -> min\");")
+    lines.append("Check(ClampPauseSampleMs(299.9, true) == 299, \"fraction truncated after the clamp\");")
     for hold in [100, 300, 2000]:
         for timeout in [100, 3000, 10000]:
             lines.append(f"Check(PauseCallBudgetMs({hold}, {timeout}) == {budget(hold, timeout)}, \"budget {hold}/{timeout}\");")
     lines.append("Check(PauseCallBudgetMs(2000, 10000) == 18000, \"worst-case budget\");")
-    lines.append("Check(ClampAutoResumeMs(0, false) == 0, \"auto-resume is off by default\");")
-    lines.append("Check(ClampAutoResumeMs(999999999, true) == 600000, \"auto-resume cap\");")
     run_policy(as_runner, tmp_path, "\n".join("    " + l for l in lines))
 
 
 # --- Production orchestration (PauseCore.as) on a fake game ---------------------
-# Each scenario runs the real ControlPauseCore / GetPauseStateCore / PauseWatchStep
-# with a scripted fake game: per-frame clocks, menu, gate, playground/handler ids.
+# Each scenario runs the real ControlPauseCore / GetPauseStateCore with a scripted
+# fake game: per-frame clocks, menu, gate, dialog, playground/handler ids.
 
 
 def test_core_pause_resume_round_trip(as_runner, tmp_path):
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
+    run_pause(as_runner, tmp_path, r"""
     auto g = FakePauseGame();
     auto r = ControlPauseCore(g, PauseInput("pause"));
-    Check(Ok(r) && OutBool(r, "paused") && OutBool(r, "changed"), "paused: " + Code(r));
-    Check(g.menu && g_pause.owned && g.shows >= 1, "menu up and owned");
-    Check(g.closes == 0, "a good pause sends no Resume");
+    Check(Ok(r) && OutBool(r, "paused") && OutBool(r, "changed") && OutBool(r, "openedByThisCall"), "paused: " + Code(r));
+    Check(g.menu && g.shows >= 1 && g.closes == 0, "menu up, no Resume sent on a good pause");
     auto again = ControlPauseCore(g, PauseInput("pause"));
     Check(Ok(again) && OutStr(again, "plan") == "noop" && !OutBool(again, "changed"), "idempotent pause");
+    Check(!OutBool(again, "openedByThisCall"), "the noop opened nothing");
+    // Nothing outlives a call: many idle frames later the menu is still up, untouched.
+    uint closes = g.closes;
+    g.Idle(2000);
+    Check(g.menu && g.closes == closes, "no timer, no watcher: the menu stays until the agent resumes");
     auto r2 = ControlPauseCore(g, PauseInput("resume"));
-    Check(Ok(r2) && !g.menu && !g_pause.owned, "resumed and ownership ended: " + Code(r2));
+    Check(Ok(r2) && !g.menu && g.closes == closes + 1, "resumed with one Resume: " + Code(r2));
     Check(r2["output"]["jumpMs"].HasKey("clientGameTime"), "jumpMs reported");
-    ''')
+    auto again2 = ControlPauseCore(g, PauseInput("resume"));
+    Check(Ok(again2) && OutStr(again2, "plan") == "noop", "idempotent resume");
+    """)
 
 
-def test_f5_clock_first_seen_late_is_not_frozen(as_runner, tmp_path):
-    """Review 1 F5 case 1: a clock unreadable at the start and seen only at the end."""
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
+def test_p1_resume_closes_a_menu_someone_else_opened(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, r"""
     auto g = FakePauseGame();
-    g.menu = true;                 // frozen by a menu
-    g.readable[0] = false;         // client clock unreadable at the window start
-    g.At(1500, "readable", 0);     // back with less than 300 ms of the 700 ms limit left
-    auto r = GetPauseStateCore(g, SampleInput(300));
-    Check(OutStr(r, "verdict") != "frozen", "a late clock never counts for the elapsed window");
-    Check(int(r["output"]["windowMs"]) < 300, "the window only covers time with all three clocks");
-    // The reviewer's exact probe, on the production window.
-    auto w = PauseClockWindow();
-    g.readable[0] = false; w.Observe(g, true);
-    g.now += 300; g.readable[0] = true; w.Observe(g, true);
-    Check(w.Verdict(300) != "frozen", "BUG F5a must not reproduce: late clock counted for the window");
-    // A clock that comes back early enough gets a genuine full window.
+    g.menu = true;                       // a person pressed ESC
+    auto p = ControlPauseCore(g, PauseInput("pause"));
+    Check(Ok(p) && OutStr(p, "plan") == "noop" && !OutBool(p, "openedByThisCall") && g.shows == 0, "noop, not ours");
+    auto r = ControlPauseCore(g, PauseInput("resume"));
+    Check(Ok(r) && !g.menu && g.closes == 1, "resume closes it whoever opened it: " + Code(r));
+    Check(!OutBool(r, "openedByThisCall"), "and says it did not open it");
+    // Pause never closes a menu: up but running stays up.
     auto g2 = FakePauseGame();
-    g2.menu = true; g2.readable[0] = false; g2.At(1050, "readable", 0);
-    auto r2 = GetPauseStateCore(g2, SampleInput(300));
-    Check(OutStr(r2, "verdict") == "frozen" && int(r2["output"]["windowMs"]) >= 300, "full coverage after it returns");
-    ''')
+    g2.menu = true; g2.menuFreezes = false;
+    auto r2 = ControlPauseCore(g2, PauseInput("pause"));
+    Check(Code(r2) == "NOT_PAUSED" && g2.menu && g2.closes == 0, "pause leaves it: " + Code(r2));
+    """)
 
 
-def test_f5_moving_clock_that_disappears_is_not_frozen(as_runner, tmp_path):
-    """Review 1 F5 case 2: a clock that changed, then became unreadable."""
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
+def test_f5_p5_clock_a_b_a_is_not_frozen(as_runner, tmp_path):
+    """Review 2 F5 survivor: a clock that goes A -> B -> A has changed twice."""
+    run_pause(as_runner, tmp_path, r"""
     auto g = FakePauseGame();
-    g.menu = true; g.menuFreezes = true;
+    g.menu = true;                       // frozen by a menu
     auto w = PauseClockWindow();
-    w.Observe(g, true);
-    g.now += 100; g.clocks[0] += 10; w.Observe(g, true);
-    g.now += 200; g.readable[0] = false; w.Observe(g, true);
-    Check(w.Verdict(300) != "frozen", "BUG F5b must not reproduce: moving clock excluded then frozen");
-    g.readable[0] = true;
-    for (uint i = 0; i < 40; i++) { g.now += 16; w.Observe(g, true); }
-    Check(w.Verdict(300) == "frozen" && w.WindowMs() >= 300, "frozen again only after a fresh full window");
-    ''')
+    for (uint i = 0; i < 10; i++) { g.now += 16; w.Observe(g, true); }
+    g.clocks[1] += 1; g.now += 16; w.Observe(g, true);   // A -> B
+    g.clocks[1] -= 1; g.now += 16; w.Observe(g, true);   // B -> A
+    for (uint i = 0; i < 20; i++) { g.now += 16; w.Observe(g, true); }
+    Check(w.WindowMs() >= 300, "a full window");
+    Check(w.changes[1] == 2 && w.Verdict(300) != "frozen", "A->B->A is not frozen: " + w.Verdict(300));
+    // Through GetPauseStateCore too.
+    auto g2 = FakePauseGame();
+    g2.menu = true;
+    g2.At(1100, "bump", 2); g2.At(1200, "unbump", 2);
+    auto r = GetPauseStateCore(g2, SampleInput(300));
+    Check(OutStr(r, "verdict") != "frozen", "GetPauseState: A->B->A not frozen: " + OutStr(r, "verdict"));
+    // Through a pause's verification window: never claims paused.
+    auto g3 = FakePauseGame();
+    g3.At(1700, "bump", 0); g3.At(1800, "unbump", 0);
+    g3.At(2700, "bump", 0); g3.At(2800, "unbump", 0);
+    g3.At(3700, "bump", 0); g3.At(3800, "unbump", 0);
+    g3.At(4700, "bump", 0); g3.At(4800, "unbump", 0);
+    auto r3 = ControlPauseCore(g3, PauseInput("pause", 1000, 3000));
+    Check(!(Ok(r3) && OutBool(r3, "paused")), "a flickering clock is never a verified pause: " + Code(r3));
+    """)
 
 
-def test_f5_loading_or_context_change_restarts_window(as_runner, tmp_path):
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
+def test_f5_window_restarts_on_unreadable_or_loading(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, r"""
     auto g = FakePauseGame();
     g.menu = true;
     auto w = PauseClockWindow();
-    for (uint i = 0; i < 15; i++) { g.now += 16; w.Observe(g, true); }
-    w.Observe(g, false); // a loading frame / context change
-    Check(!w.started && w.restarts == 1, "restart on a loading frame");
-    g.now += 16; w.Observe(g, true);
-    Check(w.WindowMs() == 0 && w.Verdict(300) != "frozen", "coverage starts again from zero");
-    ''')
+    g.readable[0] = false; w.Observe(g, true);
+    g.now += 300; g.readable[0] = true; w.Observe(g, true);
+    Check(w.Verdict(300) != "frozen", "a late clock never counts for the elapsed window");
+    auto w2 = PauseClockWindow();
+    w2.Observe(g, true);
+    g.now += 100; g.clocks[0] += 10; w2.Observe(g, true);
+    g.now += 200; g.readable[0] = false; w2.Observe(g, true);
+    Check(w2.Verdict(300) != "frozen", "a moving clock that disappears is not frozen");
+    g.readable[0] = true;
+    auto w3 = PauseClockWindow();
+    for (uint i = 0; i < 15; i++) { g.now += 16; w3.Observe(g, true); }
+    w3.Observe(g, false);
+    Check(!w3.started && w3.restarts == 1, "restart on a loading frame");
+    """)
 
 
-# Timing probes: run a clean call first to learn the fake time at which a
-# phase ends, so an event can be placed in the one window a check covers.
-SAMPLE_END_PROBE = r'''
-    ResetPause();
+def test_p4_get_pause_state_samples_online(as_runner, tmp_path):
+    """Review 2 GetPauseState P2: read-only, so it samples online; final values read at the end."""
+    run_pause(as_runner, tmp_path, r"""
+    auto g = FakePauseGame();
+    g.local = false; g.loginSet = true;  // on a server: not pausable, clocks running
+    auto r = GetPauseStateCore(g, SampleInput(300));
+    Check(Ok(r) && OutStr(r, "verdict") == "running", "online clocks measured: " + OutStr(r, "verdict"));
+    Check(!OutBool(r, "pausable") && OutStr(r, "notPausableReason").Length > 0, "but not pausable");
+    Check(int(r["output"]["windowMs"]) >= 300 && !OutHas(r, "sampleStopped"), "a full window, not cut short");
+    // An online menu that is up while the game runs.
+    auto g2 = FakePauseGame();
+    g2.local = false; g2.menu = true; g2.menuFreezes = false;
+    auto r2 = GetPauseStateCore(g2, SampleInput(300));
+    Check(OutStr(r2, "verdict") == "running" && OutBool(r2, "menuShown"), "menu up, still running online");
+    // Locality and menu change during the sample: the reported values are the final ones.
+    auto g3 = FakePauseGame();
+    g3.menu = true;
+    g3.At(1100, "menu", 0); g3.At(1150, "local", 0);
+    auto r3 = GetPauseStateCore(g3, SampleInput(300));
+    Check(!OutBool(r3, "menuShown") && OutBool(r3, "menuShownAtStart"), "menuShown read at the end");
+    Check(!OutBool(r3, "pausable"), "pausable read at the end");
+    Check(!bool(r3["output"]["locality"]["playgroundScriptLocal"]), "locality read at the end");
+    Check(g3.shows == 0 && g3.closes == 0, "read-only");
+    // A map change still ends the sample with no verdict.
+    auto g4 = FakePauseGame();
+    g4.At(1100, "playground", 8);
+    auto r4 = GetPauseStateCore(g4, SampleInput(300));
+    Check(OutStr(r4, "verdict") == "unknown" && OutHas(r4, "sampleStopped"), "context change: unknown");
+    """)
+
+
+# Timing probe: run a clean call first to learn the fake time at which the
+# initial sample ends, so an event can be placed in the one window a check covers.
+SAMPLE_END_PROBE = r"""
     auto probe = FakePauseGame();
     probe.menu = true;                   // frozen: the sample runs its full holdMs
     auto pr = ControlPauseCore(probe, PauseInput("pause"));
     Check(OutStr(pr, "plan") == "noop", "probe is a noop");
     uint64 sampleEnd = probe.now;        // a noop returns right after the sample
-'''
+"""
 
 
-def test_f6_locality_change_during_initial_sample_never_shows(as_runner, tmp_path):
-    """Review 1 F6: local -> online during the initial sample must not reach ShowInGameMenu."""
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
-    auto g = FakePauseGame();
-    g.At(1100, "local", 0);
-    auto r = ControlPauseCore(g, PauseInput("pause"));
-    Check(!Ok(r) && Code(r) == "ONLINE_NOT_PAUSABLE", "stopped: " + Code(r));
-    Check(g.shows == 0 && !g.menu && !g_pause.owned, "no menu call was made");
-    ResetPause();
-    auto g2 = FakePauseGame();
-    g2.At(1100, "playground", 8);   // map change mid-sample
-    auto r2 = ControlPauseCore(g2, PauseInput("pause"));
-    Check(Code(r2) == "CONTEXT_CHANGED" && g2.shows == 0, "context change stops before any show");
-    ResetPause();
+def test_p2_locality_or_context_change_before_show_never_shows(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, SAMPLE_END_PROBE + r"""
+    array<string> what = {"local", "playground", "loading", "handler"};
+    array<int> value = {0, 8, 1, 10};
+    array<string> code = {"ONLINE_NOT_PAUSABLE", "CONTEXT_CHANGED", "LOADING", "CONTEXT_CHANGED"};
+    for (uint i = 0; i < what.Length; i++) {
+        auto g = FakePauseGame();
+        g.At(1100, what[i], value[i]);
+        auto r = ControlPauseCore(g, PauseInput("pause"));
+        Check(Code(r) == code[i] && g.shows == 0 && !g.menu, what[i] + " mid-sample: " + Code(r));
+        auto g2 = FakePauseGame();
+        g2.At(sampleEnd, what[i], value[i]);
+        auto r2 = ControlPauseCore(g2, PauseInput("pause"));
+        Check(Code(r2) == code[i] && g2.shows == 0, what[i] + " on the last sample frame: " + Code(r2));
+    }
+    // Changed with no yield in between, on the read immediately before Show.
+    auto probe2 = FakePauseGame();
+    Check(Ok(ControlPauseCore(probe2, PauseInput("pause"))), "probe pause");
     auto g3 = FakePauseGame();
-    g3.At(1100, "loading", 1);
+    g3.goOnlineOnGateRead = int(probe2.gateReadsAtFirstShow);
     auto r3 = ControlPauseCore(g3, PauseInput("pause"));
-    Check(Code(r3) == "LOADING" && g3.shows == 0, "loading stops before any show");
-    ''')
+    Check(g3.shows == 0 && Code(r3) == "ONLINE_NOT_PAUSABLE" && OutStr(r3, "stoppedAt") == "before-action",
+          "read immediately before Show: " + Code(r3) + " shows=" + g3.shows);
+    """)
 
 
-def test_f6_menu_closed_during_sample_is_not_a_noop(as_runner, tmp_path):
-    """Review 1 F6: a menu closed during the initial sample must not take noop and claim paused."""
-    run_pause(as_runner, tmp_path, SAMPLE_END_PROBE + r'''
-    // Someone else's pause, frozen for the whole sample; the menu closes on
-    // the sample's last frame, after the clocks already proved frozen.
-    ResetPause();
+def test_p2_dialog_before_first_show_and_before_resume(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, SAMPLE_END_PROBE + r"""
     auto g = FakePauseGame();
-    g.menu = true;
-    g.At(sampleEnd, "menu", 0);
+    g.At(1200, "dialog", 1);
     auto r = ControlPauseCore(g, PauseInput("pause"));
-    Check(!OutBool(r, "menuShownBefore"), "menu state is read after the sample");
-    Check(OutStr(r, "plan") != "noop", "no noop for a menu that already closed: " + OutStr(r, "plan"));
-    Check(!(Ok(r) && OutBool(r, "paused") && !g.menu), "never claims paused with no menu up");
-    ''')
+    Check(Code(r) == "DIALOG_BLOCKING" && g.shows == 0, "dialog during the sample: " + Code(r));
+    auto probe2 = FakePauseGame();
+    Check(Ok(ControlPauseCore(probe2, PauseInput("pause"))), "probe pause");
+    auto g2 = FakePauseGame();
+    g2.dialogOnRead = int(probe2.dialogReadsAtFirstShow);
+    auto r2 = ControlPauseCore(g2, PauseInput("pause"));
+    Check(Code(r2) == "DIALOG_BLOCKING" && g2.shows == 0, "dialog on the read immediately before Show: " + Code(r2));
+    auto g3 = FakePauseGame();
+    g3.menu = true;
+    g3.At(sampleEnd, "dialog", 1);
+    auto r3 = ControlPauseCore(g3, PauseInput("resume"));
+    Check(Code(r3) == "DIALOG_BLOCKING" && g3.closes == 0 && g3.menu, "resume behind a dialog: " + Code(r3));
+    """)
 
 
-def test_f6_change_after_the_sample_is_caught_by_the_post_sample_recheck(as_runner, tmp_path):
-    """The post-sample recheck alone. In the game nothing can change between the
-    sampler's last per-frame check and this one (no yield between them), so the
-    change is injected at the clock report that runs in between."""
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
+def test_p2_dialog_appearing_before_a_re_show_stops_it(as_runner, tmp_path):
+    """Review 2 F9: the first Show is ignored and a blocking dialog appears on the next frame."""
+    run_pause(as_runner, tmp_path, r"""
+    auto probe = FakePauseGame();
+    probe.showLagFrames = -1;            // Show never lands
+    ControlPauseCore(probe, PauseInput("pause", 100, 1000));
+    Check(probe.shows >= 3 && probe.showAt.Length >= 2, "probe re-shows");
+    uint64 firstShow = probe.showAt[0];
     auto g = FakePauseGame();
-    g.goOnlineOnReport = 1;              // clocksBefore is the first report
-    auto r = ControlPauseCore(g, PauseInput("pause"));
-    Check(Code(r) == "ONLINE_NOT_PAUSABLE" && g.shows == 0, "stopped before any show: " + Code(r));
-    Check(OutStr(r, "stoppedAt") == "before-action", "stopped before acting");
-    ''')
+    g.showLagFrames = -1;
+    g.At(firstShow + 1, "dialog", 1);    // on the frame right after the first Show
+    auto r = ControlPauseCore(g, PauseInput("pause", 100, 1000));
+    Check(g.shows == 1, "no Show after the dialog appeared: shows=" + g.shows);
+    Check(Code(r) == "DIALOG_BLOCKING", "reported: " + Code(r));
+    Check(OutBool(r, "lateShowPossible"), "the ignored Show may still land: said so");
+    Check(!g.menu && OutBool(r, "menuShownAfter") == g.menu, "menuShownAfter is what was seen");
+    // One Show that took effect and was closed again: no late Show to expect.
+    auto g2 = FakePauseGame();
+    g2.menuFreezes = false;
+    auto r2 = ControlPauseCore(g2, PauseInput("pause"));
+    Check(Code(r2) == "NOT_PAUSED" && g2.shows == 1 && !OutBool(r2, "lateShowPossible"), "no late show claimed");
+    """)
 
 
-def test_f6_change_on_last_sample_frame_never_shows(as_runner, tmp_path):
-    run_pause(as_runner, tmp_path, SAMPLE_END_PROBE + r'''
-    ResetPause();
-    auto g = FakePauseGame();
-    g.At(sampleEnd, "local", 0);         // goes online on the last sample frame
-    auto r = ControlPauseCore(g, PauseInput("pause"));
-    Check(Code(r) == "ONLINE_NOT_PAUSABLE" && g.shows == 0, "stopped before any show: " + Code(r));
-    ''')
-
-
-def test_f6_change_between_plan_and_show_is_caught_before_show(as_runner, tmp_path):
-    """The check directly before ShowInGameMenu: nothing yields in between, so the
-    change is injected through the host's own read, on the read just before the show."""
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
-    auto g = FakePauseGame();
-    g.gateFlipAfterReads = 0;            // the first gate read after the post-sample dialog check = the pre-show check
-    g.armGateFlipAtSampleEnd = true;
-    auto r = ControlPauseCore(g, PauseInput("pause"));
-    Check(g.shows == 0, "no ShowInGameMenu after the gate changed: " + Code(r) + " shows=" + g.shows);
-    Check(OutStr(r, "stoppedAt") == "before-action", "stopped before acting");
-    Check(Code(r) == "ONLINE_NOT_PAUSABLE", "refused: " + Code(r));
-    ''')
-
-
-def test_f6_context_change_after_show_never_resumes_into_new_playground(as_runner, tmp_path):
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
+def test_p2_context_change_after_show_never_resumes_into_new_playground(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, r"""
     auto g = FakePauseGame();
     g.menuFreezes = false;              // menu opens, clocks keep running
     g.At(1500, "playground", 8);        // map changes while verifying
     auto r = ControlPauseCore(g, PauseInput("pause"));
     Check(!Ok(r) && Code(r) == "CONTEXT_CHANGED", "stopped on context change: " + Code(r));
-    Check(g.closes == 0, "no Resume sent into another playground");
-    Check(OutBool(r, "menuShown") == g.menu, "menuShown is the truth");
-    g.Watch(3);
-    Check(!g_pause.owned && g_pause.endedReason == "context-changed", "watcher drops ownership");
-    ''')
+    Check(g.closes == 0 && !OutBool(r, "resumeSent"), "no Resume sent into another playground");
+    Check(OutBool(r, "menuShownAfter") == g.menu, "menuShownAfter is the truth");
+    """)
 
 
-def test_f6_success_return_rechecks_the_context(as_runner, tmp_path):
-    run_pause(as_runner, tmp_path, r'''
-    // Learn when a clean pause would finish, then flip the handler on the
-    // frame before that, so only the final recheck can catch it.
-    ResetPause();
-    auto probe = FakePauseGame();
-    uint64 t0 = probe.now;
-    Check(Ok(ControlPauseCore(probe, PauseInput("pause"))), "probe pause");
-    uint64 endAt = probe.now;
-    ResetPause();
+def test_p2_menu_closed_and_reopened_during_verification_is_not_ours(as_runner, tmp_path):
+    """Review 2 F8: a person closes the call's menu during sampling and opens another one."""
+    run_pause(as_runner, tmp_path, r"""
     auto g = FakePauseGame();
-    g.At(endAt, "handler", 10);
+    g.menuFreezes = false;              // not frozen, so the call keeps sampling
+    g.At(1500, "menu", 0);              // the person closes it...
+    g.At(1550, "menu", 1);              // ...and opens their own
     auto r = ControlPauseCore(g, PauseInput("pause"));
-    Check(!(Ok(r) && OutBool(r, "paused")), "no success after the handler changed: " + Code(r));
-    Check(Code(r) == "CONTEXT_CHANGED", "context change reported: " + Code(r));
-    Check(g.closes == 0, "no Resume into the changed context");
-    // The final recheck alone: the change is injected at the clock report
-    // between the last window and the success return (reports: clocksBefore,
-    // then the window's own).
-    ResetPause();
+    Check(!Ok(r) && Code(r) == "MENU_CLOSED", "stopped when its menu closed: " + Code(r));
+    Check(g.closes == 0 && OutStr(r, "resumeSkipped").Length > 0, "no Resume, and says why");
+    Check(g.now < 1550, "the call ended on the frame it saw the close");
+    g.Idle(10);
+    Check(g.menu && g.closes == 0, "the replacement menu is never closed by this call");
+    // Same if the replacement shows a frozen game: never a verified pause.
     auto g2 = FakePauseGame();
-    g2.goOnlineOnReport = 2;
+    g2.showLagFrames = 1;
+    g2.At(1400, "menu", 0); g2.At(1420, "menu", 1);
     auto r2 = ControlPauseCore(g2, PauseInput("pause"));
-    Check(!(Ok(r2) && OutBool(r2, "paused")), "no success claimed after the gate changed: " + Code(r2));
-    Check(Code(r2) == "ONLINE_NOT_PAUSABLE", "reported: " + Code(r2));
-    ''')
+    Check(!(Ok(r2) && OutBool(r2, "paused")), "a replacement menu is never a success: " + Code(r2));
+    """)
 
 
-def test_f7_failed_cleanup_returns_cleanup_failed_with_truthful_state(as_runner, tmp_path):
-    """Review 1 F7: an ignored Resume must not be reported as a rollback."""
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
+def test_p2_deadline_after_a_slow_frame(as_runner, tmp_path):
+    """Review 2 F10: after a slow frame the call sends no further Show and stops near the budget."""
+    run_pause(as_runner, tmp_path, r"""
     auto g = FakePauseGame();
-    g.menuFreezes = false;     // not paused
-    g.closeLagFrames = -1;     // Resume is ignored
-    auto r = ControlPauseCore(g, PauseInput("pause"));
-    Check(!Ok(r) && Code(r) == "CLEANUP_FAILED", "distinct code: " + Code(r));
-    Check(OutBool(r, "menuShown") && g.menu, "menuShown is the truth");
-    Check(!OutBool(r, "menuClosedAgain"), "no rollback claimed");
-    Check(string(r["error"]).IndexOf("closed again") < 0, "message never says closed");
-    Check(g_pause.owned && g_pause.closing, "ownership and pending recovery kept");
-    Check(int(r["output"]["cleanupResumeCalls"]) >= 2, "Resume was retried");
-    // The watcher keeps retrying; once the game answers, ownership ends.
-    uint before = g.closes;
-    g.Watch(40);
-    Check(g.closes > before, "background Resume retries");
-    g.closeLagFrames = 0;
-    g.Watch(80);
-    Check(!g.menu && !g_pause.owned, "closed by the retry, ownership ended");
-    ''')
-
-
-def test_f7_late_close_is_observed_before_reporting(as_runner, tmp_path):
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
-    auto g = FakePauseGame();
-    g.menuFreezes = false;
-    g.closeLagFrames = 5;      // Resume lands a few frames later
-    auto r = ControlPauseCore(g, PauseInput("pause"));
-    Check(!Ok(r) && Code(r) == "NOT_PAUSED", "not paused: " + Code(r));
-    Check(OutBool(r, "menuClosedAgain") && !g.menu && !OutBool(r, "menuShown"), "closure observed");
-    Check(!g_pause.owned, "ownership ended after the observed close");
-    ''')
-
-
-def test_f7_late_show_is_closed(as_runner, tmp_path):
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
-    auto g = FakePauseGame();
-    g.showLagFrames = 1000;    // effectively never within timeoutMs
-    auto r = ControlPauseCore(g, PauseInput("pause", 100, 100));
-    Check(!Ok(r) && Code(r) == "MENU_NOT_SHOWN", "menu not shown: " + Code(r));
-    Check(!g.menu, "nothing left open");
-    ResetPause();
-    auto g2 = FakePauseGame();
-    g2.showLagFrames = 20;     // lands after timeoutMs but within the grace
-    auto r2 = ControlPauseCore(g2, PauseInput("pause", 100, 100));
-    Check(!g2.menu, "a late menu is closed: " + Code(r2));
-    Check(g2.closes >= 1, "with Resume");
-    ''')
-
-
-def test_f7_shutdown_closes_owned_menu(as_runner, tmp_path):
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
-    auto g = FakePauseGame();
-    Check(Ok(ControlPauseCore(g, PauseInput("pause"))), "paused");
-    uint y = g.yields;
-    Check(PauseCloseOwnedOnShutdown(g) == "closed", "closed on disable/unload");
-    Check(g.yields == y, "lifecycle path never yields");
-    Check(!g.menu && !g_pause.owned, "closed and forgotten");
-    ResetPause();
-    auto g2 = FakePauseGame();
-    Check(Ok(ControlPauseCore(g2, PauseInput("pause"))), "paused 2");
-    g2.closeLagFrames = -1;
-    Check(PauseCloseOwnedOnShutdown(g2) == "resume-sent-unconfirmed", "unconfirmed is reported as such");
-    ResetPause();
-    auto g3 = FakePauseGame();
-    g3.menu = true;            // someone else's menu
-    Check(PauseCloseOwnedOnShutdown(g3) == "none" && g3.closes == 0, "never closes a menu it did not open");
-    ''')
-
-
-def test_f7_aborted_call_hands_menu_to_watcher(as_runner, tmp_path):
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
-    auto g = FakePauseGame();
-    PauseGate@ ctx = g.ReadGate();
-    PauseOwnershipBegin(g, ctx, g.now + 18000);
-    g.ShowMenu();                       // the call died right after the show
-    PauseCallAborted();
-    g.Watch(5);
-    Check(!g.menu && !g_pause.owned, "the watcher closed it");
-    ResetPause();
-    auto g2 = FakePauseGame();
-    PauseOwnershipBegin(g2, g2.ReadGate(), g2.now + 500);
-    g2.ShowMenu();                      // a worker killed without unwinding
-    g2.Watch(60);                       // past the call's deadline
-    Check(!g2.menu && !g_pause.owned, "expired call: menu closed");
-    ''')
-
-
-def test_f8_manual_resume_then_other_menu_is_never_closed_by_old_timer(as_runner, tmp_path):
-    """Review 1 F8: the timer belongs to the menu it was set for."""
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
-    auto g = FakePauseGame();
-    auto r = ControlPauseCore(g, PauseInput("pause", 300, 3000, 1000));
-    Check(Ok(r) && g_pause.autoResumeMs == 1000, "paused with a 1s timer");
-    g.menu = false;              // the player pressed ESC to resume
-    g.Watch(2);
-    Check(!g_pause.owned && g_pause.endedReason == "menu-closed", "ownership ends with the menu");
-    g.menu = true;               // the player opens the menu again later
-    uint c = g.closes;
-    g.Watch(200);                // well past the old timer
-    Check(g.menu && g.closes == c, "the old timer never closes someone else's menu");
-    ''')
-
-
-def test_f8_map_change_drops_timer(as_runner, tmp_path):
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
-    auto g = FakePauseGame();
-    Check(Ok(ControlPauseCore(g, PauseInput("pause", 300, 3000, 1000))), "paused");
-    g.playgroundId = 8; g.menu = true;   // a new map, a menu up there
-    uint c = g.closes;
-    g.Watch(200);
-    Check(!g_pause.owned && g.closes == c && g.menu, "no close in the new playground");
-    ''')
-
-
-def test_f8_timer_fires_for_its_own_menu(as_runner, tmp_path):
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
-    auto g = FakePauseGame();
-    Check(Ok(ControlPauseCore(g, PauseInput("pause", 300, 3000, 500))), "paused");
-    g.Watch(20);
-    Check(g.menu, "not before the timer");
-    g.Watch(40);
-    Check(!g.menu && !g_pause.owned, "timer resumed its own pause");
-    ''')
-
-
-def test_f8_noop_pause_updates_or_refuses_timer(as_runner, tmp_path):
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
-    auto g = FakePauseGame();
-    Check(Ok(ControlPauseCore(g, PauseInput("pause"))), "paused, no timer");
-    auto r = ControlPauseCore(g, PauseInput("pause", 300, 3000, 700));
-    Check(Ok(r) && OutStr(r, "autoResume") == "update" && g_pause.autoResumeMs == 700, "noop installs the timer");
-    auto off = ControlPauseCore(g, PauseInput("pause", 300, 3000, 0));
-    Check(Ok(off) && g_pause.autoResumeMs == 0, "0 cancels it");
-    ResetPause();
-    auto o = FakePauseGame();
-    o.menu = true;                       // someone else's pause
-    auto r2 = ControlPauseCore(o, PauseInput("pause", 300, 3000, 700));
-    Check(!Ok(r2) && Code(r2) == "AUTO_RESUME_NOT_OWNED", "refused on someone else's menu");
-    Check(!g_pause.owned && o.menu && o.closes == 0, "nothing changed");
-    auto r3 = ControlPauseCore(o, PauseInput("pause"));
-    Check(Ok(r3) && OutStr(r3, "plan") == "noop", "a plain pause noop is still fine");
-    ''')
-
-
-def test_f9_dialog_after_initial_sample_refuses_before_show(as_runner, tmp_path):
-    """Review 1 F9: a dialog that comes up during the sample is checked after it."""
-    run_pause(as_runner, tmp_path, SAMPLE_END_PROBE + r'''
-    ResetPause();
-    auto g = FakePauseGame();
-    g.At(1200, "dialog", 1);
-    auto r = ControlPauseCore(g, PauseInput("pause"));
-    Check(!Ok(r) && Code(r) == "DIALOG_BLOCKING" && g.shows == 0, "dialog after the sample: " + Code(r));
-    // A resume is refused too (nothing closed behind a dialog).
-    ResetPause();
-    auto g2 = FakePauseGame();
-    g2.menu = true;
-    g2.At(sampleEnd, "dialog", 1);
-    auto r2 = ControlPauseCore(g2, PauseInput("resume"));
-    Check(Code(r2) == "DIALOG_BLOCKING" && g2.closes == 0 && g2.menu, "resume behind a dialog: " + Code(r2));
-    ''')
-
-
-def test_f10_one_deadline_bounds_every_failure_path(as_runner, tmp_path):
-    """Review 1 F10: nothing in a call waits past budgetMs."""
-    run_pause(as_runner, tmp_path, r'''
+    g.showLagFrames = -1;                // Show never lands: the call keeps re-showing
+    g.slowAt = 1100; g.slowMs = 5000;    // one 5 s hitch right after the first Show
+    uint64 t0 = g.now;
+    auto r = ControlPauseCore(g, PauseInput("pause", 100, 2400));
+    uint budget = PauseCallBudgetMs(100, 2400);
+    Check(!Ok(r), "fails");
+    Check(g.showAt.Length >= 1 && !g.AnyShowAfter(t0 + uint64(budget) - uint64(PAUSE_CLEANUP_RESERVE_MS)),
+          "no Show after the show deadline, even right after the slow frame");
+    Check(g.shows == 1, "the slow frame ended the show phase: shows=" + g.shows);
+    // Initial sample (~holdMs) + the one 5 s frame; nothing after it.
+    Check(g.now - t0 <= uint64(100 + 16 + 5000), "stopped on the first check after the hitch: took " + (g.now - t0));
+    Check(g.now - t0 > uint64(budget), "the hitch overran the budget by that frame (documented)");
+    Check(double(r["output"]["longestFrameMs"]) >= 5000, "the hitch is reported");
+    Check(OutBool(r, "lateShowPossible"), "the unanswered Show is reported as a possibility");
+    // A bounded grid: every failure ends within budget + one frame on normal frames.
     array<int> holds = {100, 300, 2000};
     array<int> timeouts = {100, 3000, 10000};
     for (uint a = 0; a < holds.Length; a++) for (uint b = 0; b < timeouts.Length; b++) {
         for (uint mode = 0; mode < 4; mode++) {
-            ResetPause();
-            auto g = FakePauseGame();
-            if (mode == 0) { g.menuFreezes = false; }                          // NOT_PAUSED + cleanup
-            if (mode == 1) { g.menuFreezes = false; g.closeLagFrames = -1; }   // CLEANUP_FAILED
-            if (mode == 2) { g.showLagFrames = -1; }                           // MENU_NOT_SHOWN
-            if (mode == 3) { g.readable[1] = false; }                          // a clock never readable
-            uint64 t0 = g.now;
-            auto r = ControlPauseCore(g, PauseInput("pause", holds[a], timeouts[b]));
-            uint budget = PauseCallBudgetMs(uint(holds[a]), uint(timeouts[b]));
-            Check(int(r["output"]["budgetMs"]) == int(budget), "budget reported");
-            Check(g.now - t0 <= uint64(budget) + 32, "pause " + holds[a] + "/" + timeouts[b] + " mode " + mode
-                  + " took " + (g.now - t0) + " > " + budget);
-            Check(!Ok(r), "every one of these fails");
-            if (mode != 1) Check(!g.menu, "failure leaves no menu open (mode " + mode + ")");
+            auto h = FakePauseGame();
+            if (mode == 0) { h.menuFreezes = false; }                          // NOT_PAUSED + one Resume
+            if (mode == 1) { h.menuFreezes = false; h.closeLagFrames = -1; }   // CLEANUP_FAILED
+            if (mode == 2) { h.showLagFrames = -1; }                           // MENU_NOT_SHOWN
+            if (mode == 3) { h.readable[1] = false; }                          // a clock never readable
+            uint64 s0 = h.now;
+            auto rr = ControlPauseCore(h, PauseInput("pause", holds[a], timeouts[b]));
+            uint bud = PauseCallBudgetMs(uint(holds[a]), uint(timeouts[b]));
+            Check(int(rr["output"]["budgetMs"]) == int(bud), "budget reported");
+            Check(h.now - s0 <= uint64(bud) + 16, "pause " + holds[a] + "/" + timeouts[b] + " mode " + mode
+                  + " took " + (h.now - s0) + " > " + bud);
+            Check(!Ok(rr), "every one of these fails");
+            Check(h.closes <= 1, "at most one Resume (mode " + mode + "): " + h.closes);
+            Check(OutBool(rr, "menuShownAfter") == h.menu, "menuShownAfter is what was seen (mode " + mode + ")");
+            if (mode == 1) Check(Code(rr) == "CLEANUP_FAILED" && h.menu, "still up after one Resume: " + Code(rr));
         }
-        ResetPause();
-        auto rg = FakePauseGame();
-        Check(Ok(ControlPauseCore(rg, PauseInput("pause", holds[a], timeouts[b]))), "pause ok");
-        rg.closeLagFrames = -1;
-        uint64 t1 = rg.now;
-        auto rr = ControlPauseCore(rg, PauseInput("resume", holds[a], timeouts[b]));
-        Check(Code(rr) == "MENU_SUBPAGE_OPEN", "resume stuck: " + Code(rr));
-        Check(rg.now - t1 <= uint64(PauseCallBudgetMs(uint(holds[a]), uint(timeouts[b]))) + 32, "resume bounded");
     }
-    ''')
+    """)
+
+
+def test_p3_failure_sends_one_resume_and_reports_what_it_saw(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, r"""
+    auto g = FakePauseGame();
+    g.menuFreezes = false;              // not paused
+    g.closeLagFrames = 5;               // Resume lands a few frames later
+    auto r = ControlPauseCore(g, PauseInput("pause"));
+    Check(Code(r) == "NOT_PAUSED" && OutBool(r, "resumeSent") && g.closes == 1, "one Resume: " + Code(r));
+    Check(!g.menu && !OutBool(r, "menuShownAfter") && OutBool(r, "openedByThisCall"), "closure observed");
+    auto g2 = FakePauseGame();
+    g2.menuFreezes = false; g2.closeLagFrames = -1;   // Resume ignored
+    auto r2 = ControlPauseCore(g2, PauseInput("pause"));
+    Check(Code(r2) == "CLEANUP_FAILED" && g2.closes == 1 && g2.menu, "no retry loop: " + Code(r2));
+    Check(OutBool(r2, "menuShownAfter") && OutStr(r2, "cause") == "NOT_PAUSED", "truthful state");
+    Check(string(r2["error"]).IndexOf("seen closed") < 0, "never claims a closure it did not see");
+    g2.Idle(500);
+    Check(g2.closes == 1, "nothing runs after the call");
+    // A Show that lands after the call returned: reported as possible, not hidden.
+    auto g3 = FakePauseGame();
+    g3.showLagFrames = 1000;
+    auto r3 = ControlPauseCore(g3, PauseInput("pause", 100, 100));
+    Check(Code(r3) == "MENU_NOT_SHOWN" && OutBool(r3, "lateShowPossible") && g3.closes == 0, "late show possible");
+    Check(string(r3["error"]).IndexOf("may still be applied later") >= 0, "the message says so");
+    """)
 
 
 def test_get_pause_state_is_read_only(as_runner, tmp_path):
-    run_pause(as_runner, tmp_path, r'''
-    ResetPause();
+    run_pause(as_runner, tmp_path, r"""
     auto g = FakePauseGame();
     auto r = GetPauseStateCore(g, SampleInput(300));
     Check(Ok(r) && OutStr(r, "verdict") == "running", "running");
     Check(g.shows == 0 && g.closes == 0, "read-only");
     g.menu = true;
     auto r2 = GetPauseStateCore(g, SampleInput(300));
-    Check(OutStr(r2, "verdict") == "frozen" && string(r2["output"]["ownership"]["openedBy"]) == "other", "frozen, other");
-    ''')
+    Check(OutStr(r2, "verdict") == "frozen", "frozen");
+    auto bad = Json::Object(); bad["sampleMs"] = "x";
+    Check(Code(GetPauseStateCore(g, bad)) == "INVALID_INPUT", "non-number input");
+    auto inf = Json::Object(); inf["sampleMs"] = 1e309;
+    auto r3 = GetPauseStateCore(g, inf);
+    Check(Ok(r3) && OutInt(r3, "sampleMs") == 2000, "infinite input clamped on the plugin side");
+    """)
 
 
 # --- Source contracts -----------------------------------------------------------
@@ -710,7 +574,7 @@ def test_schemas_are_closed():
     assert s["additionalProperties"] is False
     assert s["required"] == ["action"]
     assert s["properties"]["action"]["enum"] == ["pause", "resume", "toggle"]
-    assert set(s["properties"]) == {"action", "holdMs", "timeoutMs", "autoResumeAfterMs"}
+    assert set(s["properties"]) == {"action", "holdMs", "timeoutMs"}
 
 
 FORBIDDEN_RESULTS = ["Quit", "NormalMenu", "AdvancedMenu", "ServerSettings"]
@@ -720,36 +584,40 @@ def test_no_forbidden_close_results_in_new_code():
     code = _strip_comments(TOOLS) + _strip_comments(CORE) + _strip_comments(POLICY.read_text())
     for r in FORBIDDEN_RESULTS:
         assert f"EInGameMenuResult::{r}" not in code, f"{r} must never be used by the pause tools"
-    # Exactly one close call and one show call, both in the live host.
     calls = re.findall(r"\.CloseInGameMenu\(([^)]*)\)", code)
     assert calls == ["CGameScriptHandlerPlaygroundInterface::EInGameMenuResult::Resume"], calls
     assert len(re.findall(r"\.ShowInGameMenu\(\)", code)) == 1
     assert not re.search(r"\.(ShowInGameMenu|CloseInGameMenu)\(", _strip_comments(CORE)), "the core calls the host only"
 
 
-def test_locality_gate_runs_before_show_in_game_menu():
+def test_menu_calls_go_through_the_checked_paths():
     core = _strip_comments(CORE)
-    fn = core[core.index("Json::Value@ ControlPauseCore("):]
-    assert fn.index("ctx.Refusal()") < fn.index("if (refusal.Length > 0)") < fn.index("PauseSampleWindow(")
-    opener = core[core.index("Json::Value@ _PauseOpen("):]
-    assert opener.index("PauseContextStop(host, ctx, true)") < opener.index("host.ShowMenu()")
-    assert opener.index("PauseOwnershipBegin(") < opener.index("host.ShowMenu()"), "ownership before the show (F7)"
+    # ShowMenu only inside ShowChecked, after a fresh Observe and the dialog + deadline checks.
+    assert core.count("host.ShowMenu()") == 1
+    show = core[core.index("bool ShowChecked("):core.index("void Resume()")]
+    assert show.index("Observe();") < show.index("if (dialog)") < show.index("Past(deadline)") < show.index("host.ShowMenu()")
+    # CloseMenuResume only inside PauseCall.Resume.
+    assert core.count("host.CloseMenuResume()") == 1
+    assert "host.Yield()" in core and core.count("host.Yield()") == 1, "every yield goes through PauseCall.Step"
+    step = core[core.index("void Step()"):core.index("bool Past(")]
+    assert step.index("host.Yield()") < step.index("Observe();")
+
+
+def test_nothing_outlives_a_call():
+    code = _strip_comments(TOOLS) + _strip_comments(CORE) + _strip_comments(POLICY.read_text())
+    for banned in ["startnew", "g_pause", "autoResume", "StartWatcher", "PauseWatch", "Ownership"]:
+        assert banned not in code, banned
+    main = _strip_comments((SRC / "Main.as").read_text())
+    assert "Pause" not in main
 
 
 def test_verdict_never_comes_from_menu_flag():
-    """IsServerOrSolo is reported only; the pause verdict is the clocks."""
     tools = _strip_comments(TOOLS)
     assert "IsServerOrSolo" in tools
     core = _strip_comments(CORE)
     gate_call = re.search(r"PauseRefusalCode\(([^)]*)\)", core).group(1)
     assert "serverOrSolo" not in gate_call
     assert "PauseVerdict(" in core
-
-
-def test_auto_resume_is_off_by_default_and_watched():
-    tools = _strip_comments(TOOLS)
-    assert "while (PauseWatchStep(g_livePauseHost)) yield();" in tools
-    assert "void StartWatcher() { startnew(_PauseWatchCoro); }" in tools
 
 
 def test_no_os_input_mlhook_or_raw_memory():
@@ -763,14 +631,6 @@ def test_policy_and_core_have_no_game_types():
         body = _strip_comments(text)
         for banned in ["GetApp", "CGame", "CMw", "yield", "Time::", "startnew", "GetCmdBufferCore"]:
             assert banned not in body, banned
-
-
-def test_lifecycle_closes_owned_menu():
-    main = _strip_comments((SRC / "Main.as").read_text())
-    for fn, when in [("OnDisabled", "disable"), ("OnDestroyed", "unload")]:
-        start = main.index(f"void {fn}()")
-        assert f'ClosePauseOnLifecycle("{when}")' in main[start:main.index("}", start)]
-    assert "PauseCloseOwnedOnShutdown(" in _strip_comments(TOOLS)
 
 
 def test_live_host_contexts_hold_no_engine_reference():
@@ -788,3 +648,5 @@ def test_guide_and_docs_mark_live_checks_unproven():
         assert "nproven" in doc or "NPROVEN" in doc
         for q in ["Q1", "Q2", "Q3", "Q4"]:
             assert q in doc, q
+    for doc in [guide, (ROOT / "README.md").read_text(), (ROOT / "AGENTS.md").read_text()]:
+        assert "autoResumeAfterMs" not in doc
