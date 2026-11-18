@@ -590,8 +590,10 @@ change aborts; it refuses online (`ONLINE_NOT_PAUSABLE`) and does not open
 behind a blocking dialog (`DIALOG_BLOCKING`). If a Show did not lead to a
 verified pause, the call attempts **at most one** cleanup Resume, and only if
 it observed the menu open and stay up and the fresh local, non-loading,
-same-context gate passes. It reports `cleanupSkipped` when it cannot dispatch,
-and `menuShownAfter` as observed (or `"unknown"` if it could not read it).
+same-context gate passes. It reports `cleanupSkipped` when it cannot dispatch.
+In explicit Resume and failed-Show cleanup, `menuShown`, `menuShownAfter` and
+`changed` are booleans or `"unknown"` if the menu state could not be read.
+Check for an explicit boolean before acting.
 `CLEANUP_FAILED` means closure wasn't verified after a Resume attempt. A timeout
 or reload isn't evidence of closure. Call `GetPauseState` after any failure;
 if the menu is up, use `ControlPause resume`. If `lateShowPossible:true`, call
@@ -610,7 +612,8 @@ when the requested state is already verified. The per-call budget is
 `GetPauseState` changes nothing and samples online too. Its sample can restart
 on an unreadable clock or loading frame if the context holds; by contrast,
 loading aborts `ControlPause`. `menuShown`, locality and `pausable` reflect the
-end of the read-only sample.
+end of the read-only sample. `menuShownAtStart` and `menuShown` are booleans
+or `"unknown"` if unreadable; check for an explicit boolean before acting.
 
 **Bloom.** `SetDisplaySetting {bloom:none|medium|high}` writes the user's own
 setting. Persistence and deferred `Apply` timing are unproven (Q3);

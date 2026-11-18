@@ -19,7 +19,7 @@ import subprocess
 from pathlib import Path
 
 from test_pack_updates import as_runner  # noqa: F401  (pytest fixture)
-from as_core_fakes import run_pause
+from as_core_fakes import run_core, run_pause
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -243,7 +243,8 @@ def test_core_pause_resume_round_trip(as_runner, tmp_path):
     Check(Ok(r2) && !g.menu && g.closes == closes + 1, "resumed with one Resume: " + Code(r2));
     Check(r2["output"]["jumpMs"].HasKey("clientGameTime"), "jumpMs reported");
     auto again2 = ControlPauseCore(g, PauseInput("resume"));
-    Check(Ok(again2) && OutStr(again2, "plan") == "noop", "idempotent resume");
+    Check(Ok(again2) && OutStr(again2, "plan") == "noop" && !OutHas(again2, "jumpMs"),
+          "idempotent resume has no jumpMs");
     """)
 
 
@@ -664,9 +665,12 @@ def test_guide_and_docs_mark_live_checks_unproven():
     guide = guides[start:guides.index("_RegisterGuide(", start + 1)]
     for name in ["GetPauseState", "ControlPause", "SetDisplaySetting", "RestoreDisplaySetting", "ONLINE_NOT_PAUSABLE"]:
         assert name in guide, name
-    assert re.search(
-        r"Require a measured jumpMs entry for every[^;]*?clock \(clientGameTime, coreSimulationTime, coreGameTime\)",
-        guide, re.S,
+    freeze = guide.split('"Freeze check:', 1)[1].split(r'\n\n', 1)[0]
+    assert "Freeze check:" + "".join(re.split(r'"\s*\+ "', freeze)) == (
+        "Freeze check: ControlPause pause, TakeScreenshot twice a few seconds apart with a fixed"
+        " ControlPlayCamera, compare, then ControlPause resume. Require a measured jumpMs entry for every"
+        " clock (clientGameTime, coreSimulationTime, coreGameTime) and check each jump is small. Missing"
+        " entries are unmeasured, not zero; no-op resume has no jumpMs. Any missing jumpMs entry fails the live check."
     )
     for doc in [guide, (ROOT / "README.md").read_text(), (ROOT / "AGENTS.md").read_text(), (ROOT / "CHANGELOG.md").read_text()]:
         assert "nproven" in doc or "NPROVEN" in doc
@@ -681,6 +685,25 @@ def test_pause_catalog_distinguishes_observation_from_attribution():
     assert "openedByThisCall means observed open after a Show in this call, not who opened it" in text
     assert "Before dispatch, refusals like NO_PLAYGROUND, LOADING, ONLINE_NOT_PAUSABLE" in text
     assert "After Show, those same codes can be in-flight aborts; check cleanupSkipped and menuShownAfter" in text
+
+
+def test_unknown_pause_fields_documented_as_non_boolean_sentinel():
+    get_fields = 'menuShownAtStart and menuShown are booleans or "unknown"'
+    control_fields = 'menuShown, menuShownAfter and changed are booleans or "unknown"'
+    action = "Check for an explicit boolean before acting."
+    get_catalog, control_catalog = (
+        next(line for line in MCP_TOOLS.splitlines() if f'MakeTool("{name}",' in line)
+        .replace(r'\"', '"') for name in PAUSE_TOOLS
+    )
+    assert get_fields in get_catalog and action in get_catalog
+    assert control_fields in control_catalog and "explicit Resume and failed-Show cleanup" in control_catalog
+    assert action in control_catalog
+    guides = (SRC / "Guides.as").read_text().split('_RegisterGuide("pause-bloom",', 1)[1].split("_RegisterGuide(", 1)[0]
+    guide = "".join(re.findall(r'^\s*\+ "(.*)"$', guides, re.M)).replace(r'\"', '"')
+    readme = " ".join((ROOT / "README.md").read_text().replace("`", "").split())
+    for doc in (guide, readme):
+        assert get_fields in doc and control_fields in doc and action in doc
+        assert "explicit Resume and failed-Show cleanup" in doc
 
 
 def test_r4_late_manual_menu_requires_fresh_continuous_hold(as_runner, tmp_path):
@@ -765,13 +788,84 @@ def test_cleanup_retains_first_gate_refusal_even_if_gate_recovers(as_runner, tmp
     ''')
 
 
+def test_live_pause_host_menu_reader_fallback(as_runner, tmp_path):
+    # Compile the real method unchanged. Only the native reader lookups and
+    # their returned objects are stubbed; the rest of the live host needs OP.
+    host = TOOLS.split("class LivePauseHost : PauseHost {", 1)[1]
+    method = host[host.index("bool TryMenuShown("):host.index("bool ReadClock(")]
+    prelude = r'''
+    namespace TmMcp {
+        class MenuReader { bool IsInGameMenuDisplayed; }
+        MenuReader@ client;
+        MenuReader@ handler;
+        MenuReader@ _PauseClientApi() { return client; }
+        MenuReader@ _PauseHandler() { return handler; }
+        class LivePauseHost {
+    ''' + method + "}\n}"
+    run_core(as_runner, tmp_path, [], "", r'''
+    auto host = LivePauseHost();
+    bool shown;
+    @client = MenuReader(); client.IsInGameMenuDisplayed = true;
+    Check(host.TryMenuShown(shown) && shown, "client only: known open");
+    @handler = MenuReader();
+    Check(host.TryMenuShown(shown) && shown, "client is preferred over handler");
+    @client = null;
+    Check(host.TryMenuShown(shown) && !shown, "handler only: known closed");
+    handler.IsInGameMenuDisplayed = true;
+    Check(host.TryMenuShown(shown) && shown, "handler reports its own menu state");
+    @handler = null;
+    Check(!host.TryMenuShown(shown), "neither reader: unknown, not known closed");
+    ''', prelude=prelude)
+
+
+def test_menu_readers_lost_after_observed_open(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, r'''
+    auto g = FakePauseGame();
+    auto call = PauseCall(g, g.now + 500, true);
+    Check(call.ShowChecked(call.deadline) && g.shows == 1, "Show dispatched");
+    call.Observe();
+    Check(call.menuKnown && call.menuSeenOpen && call.OwnMenuStillUp(), "open observed");
+    g.loseMenuReadersAfterShow = true;
+    call.Observe();
+    Check(!call.menuKnown && !call.menuSeenClosedAfterOpen && g.menu, "unknown is not a close edge");
+    Json::Value output = Json::Object();
+    auto r = _PauseFailed(call, call.stop, PAUSE_VERDICT_UNKNOWN, "", g.now, output);
+    Check(Code(r) == "NO_PLAYGROUND" && g.closes == 0 && !call.attemptedResume,
+          "no cleanup Resume without readers");
+    ''')
+
+
+def test_get_pause_state_reports_unknown_menu_fields(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, r'''
+    auto g = FakePauseGame(); g.shows = 1; g.loseMenuReadersAfterShow = true;
+    auto state = GetPauseStateCore(g, SampleInput(0));
+    Check(Ok(state) && OutStr(state, "menuShownAtStart") == "unknown" && OutStr(state, "menuShown") == "unknown",
+          "both snapshot menu fields are string-valued unknown");
+    Check(g.shows == 1 && g.closes == 0, "snapshot is read-only");
+    ''')
+
+
+def test_explicit_resume_reports_unknown_when_menu_readers_are_lost(as_runner, tmp_path):
+    run_pause(as_runner, tmp_path, r'''
+    auto g = FakePauseGame(); g.menu = true; g.closeLagFrames = -1; g.loseMenuReadersAfterResume = true;
+    auto r = ControlPauseCore(g, PauseInput("resume", 100, 100));
+    Check(Code(r) == "NO_PLAYGROUND" && g.closes == 1 && g.shows == 0 && g.menu, "explicit Resume dispatched but unverified");
+    Check(OutStr(r, "menuShown") == "unknown" && OutStr(r, "menuShownAfter") == "unknown"
+          && OutStr(r, "changed") == "unknown", "all three fields are string-valued unknown");
+    ''')
+
+
 def test_menu_readers_lost_after_show(as_runner, tmp_path):
     run_pause(as_runner, tmp_path, r'''
     auto g = FakePauseGame(); g.loseMenuReadersAfterShow = true;
     auto r = ControlPauseCore(g, PauseInput("pause", 100, 100));
     Check(Code(r) == "NO_PLAYGROUND" && g.shows == 1 && g.closes == 0 && g.menu,
           "readers disappeared after Show without closing the menu");
-    Check(OutStr(r, "menuShownAfter") == "unknown" && OutBool(r, "lateShowPossible")
+    Check(OutInt(r, "showCalls") == 1 && OutHas(r, "openedByThisCall")
+          && r["output"]["openedByThisCall"].GetType() == Json::Type::Boolean && !OutBool(r, "openedByThisCall"),
+          "one Show dispatched but this call never observed an opening");
+    Check(OutStr(r, "menuShown") == "unknown" && OutStr(r, "changed") == "unknown"
+          && OutStr(r, "menuShownAfter") == "unknown" && OutBool(r, "lateShowPossible")
           && string(r["hint"]).IndexOf("GetPauseState") >= 0 && string(r["error"]).IndexOf("observed closed") < 0,
           "unavailable after Show is unknown, not closed");
     ''')

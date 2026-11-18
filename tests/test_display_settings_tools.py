@@ -771,6 +771,29 @@ def test_partial_wrapper_load_cannot_make_prior_unanimous(as_runner, tmp_path):
     ''')
 
 
+def test_restore_advice_after_released_post_write_partial_load(as_runner, tmp_path):
+    run_display(as_runner, tmp_path, r'''
+    auto g = FakeDisplayGame();
+    Check(Ok(SetDisplaySettingCore(g, BloomInput("none"))) && g.loads == 3, "set and readbacks");
+    string record = g.Record();
+    @g.onBeforeBloomWrite = @FailNextLoad;
+    auto r = RestoreDisplaySettingTool(g, NoInput());
+    Check(Code(r) == "RESTORE_UNVERIFIED" && OutBool(r, "wrote") && g.systemConfig == 2,
+          "only the post-write wrapper read-back failed");
+    Check(g.loads == 6 && g.unloads == 6 && g.WrapperOwner() == DISPLAY_WRAPPER_NONE
+          && !OutHas(r, "wrapperReleasePending"), "no wrapper remains loaded");
+    Check(OutBool(r, "recordKept") && g.Record() == record, "record retained unchanged");
+    string hint = string(r["hint"]);
+    Check(hint.IndexOf("read-back failed") >= 0 && hint.IndexOf("GetDisplaySetting") >= 0
+          && hint.IndexOf("verify again") >= 0 && hint.IndexOf("still loaded") < 0
+          && hint.IndexOf("close the settings page") < 0, "guide the caller to re-verify: " + hint);
+    ''', prelude=r'''
+    namespace TmMcp {
+        void FailNextLoad(FakeDisplayGame@ g) { g.partialLoad = true; }
+    }
+    ''')
+
+
 def test_r1_runtime_only_restore_keeps_prior_through_restart(as_runner, tmp_path):
     run_display(as_runner, tmp_path, r'''
     auto g = FakeDisplayGame();
@@ -906,6 +929,14 @@ def test_retirement_instructions_preserve_and_confirm_the_matching_record():
         assert "Only retired:true confirms retirement; no record is not confirmation." in doc
         assert "A map reload does not prove the setting was saved or that a deferred Apply finished." in doc
         assert "If Apply is unresolved, keep the record." in doc
+
+    catalog = next(line for line in MCP_TOOLS.splitlines() if 'MakeTool("RestoreDisplaySetting",' in line)
+    assert "verify the same matching pending record and prior" in catalog
+    assert "an in-instance map reload or a same-prefix restart that preserves the upper dir" in catalog
+    assert "The default tmc stop wipe destroys the record" in catalog
+    assert "a map reload does not prove a save or drain a deferred Apply" in catalog
+    assert "Keep the record if Apply is unresolved." in catalog
+    assert "Only retired:true confirms retirement." in catalog
 
 
 def test_r10_persistence_and_side_effects_are_qualified_and_legacy_log_is_manual(as_runner, tmp_path):

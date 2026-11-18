@@ -643,9 +643,13 @@ namespace TmMcp {
         output["now"] = _BloomJson(after.Current());
         output["persisted"] = "assumed";
         if (!after.AllAre(prior)) {
-            return _DisplayErr("the prior did not read back from every source; record kept", "RESTORE_UNVERIFIED", true,
-                after.wrapperUnreadableKnown ? "A DisplaySettings wrapper is still loaded; close the settings page and restore again."
-                                             : "GetDisplaySetting shows the sources; restore again.", output);
+            string hint = "GetDisplaySetting shows the sources; restore again.";
+            if (after.releasePending || (after.owner == DISPLAY_WRAPPER_OTHER && after.wrapperUnreadableKnown)) {
+                hint = "A DisplaySettings wrapper is still loaded; close the settings page and restore again.";
+            } else if (after.wrapperUnreadableKnown) {
+                hint = "The DisplaySettings wrapper read-back failed. Call GetDisplaySetting and verify again before retiring the record.";
+            }
+            return _DisplayErr("the prior did not read back from every source; record kept", "RESTORE_UNVERIFIED", true, hint, output);
         }
         output["restored"] = true;
         output["retireWith"] = "RestoreDisplaySetting {retire:true}";
