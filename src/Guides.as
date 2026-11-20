@@ -402,6 +402,31 @@ namespace TmMcp {
             + "If the game crashes after a capture, check LogCrash_<HASH>.txt (see the"
             + " crash-debugging guide) — repeated crashes overwrite the same file.");
 
+        _RegisterGuide("editor-camera-animation",
+            "Animating the map-editor camera",
+            "AnimateEditorCamera starts a smooth camera move and returns at once with an id;"
+            + " it runs in the background (one at a time) while you keep calling tools."
+            + " WaitEditorCamera {id} blocks until it ends (timeoutMs max 300000).\n"
+            + "\n"
+            + "- Fly-through: {kind:'path', keyframes:[{position:{x,y,z}, lookAt:{x,y,z}}, ...],"
+            + " durationMs:8000}. Keys may instead give x,y,z (point looked at) with distance,"
+            + " hAngle, vAngle in degrees; omitted fields repeat the previous key. Starts from"
+            + " the current view unless fromCurrent:false.\n"
+            + "- Turntable: {kind:'orbit', degrees:360, durationMs:12000} around the current"
+            + " target, or center:{x,y,z}; endDistance/endVAngle spiral in or out;"
+            + " untilStopped:true spins until stopped.\n"
+            + "- Follow: {kind:'follow'} tracks the editor cursor while you place blocks;"
+            + " follow:'point' with target{x,y,z} follows a point you move with"
+            + " {action:'retarget', x,y,z}.\n"
+            + "\n"
+            + "Interruption is the safety rule: SetEditorCamera, ControlCamera actions,"
+            + " SetEditorOrbitalTarget, a focused TakeScreenshot, a new animation, the user"
+            + " moving the camera, another plugin moving it, or leaving edit mode ends the"
+            + " animation as interrupted. WaitEditorCamera then returns an error"
+            + " (CAMERA_ANIM_INTERRUPTED) with reason and interruptedBy, so a script learns its"
+            + " shot was cut. A plain TakeScreenshot does not interrupt: screenshot mid-move"
+            + " for a frame of the animation. vAngle is limited by the editor to 4.5..85.5"
+            + " degrees; steeper keys are clamped with a warning.");
         _RegisterGuide("reflection",
             "Querying Openplanet Reflection type info",
             "GetTypeInfo {className:'CGameCtnChallenge'} is the default call: class"

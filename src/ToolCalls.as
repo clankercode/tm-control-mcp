@@ -208,7 +208,7 @@ namespace TmMcp {
         // Preserve WaitUntil's loading-aware 30-minute wait contract. Other
         // calls get 2 minutes; lifecycle calls get 60 seconds wall time, without
         // changing Openplanet's independent 15-second script execution limit.
-        call.budget = name == "WaitUntil" ? 2100000 : (name == "ControlPlugin" || name == "DismissBlockingScreen" ? 150000 : 120000);
+        call.budget = name == "WaitUntil" ? 2100000 : name == "WaitEditorCamera" ? 330000 : (name == "ControlPlugin" || name == "DismissBlockingScreen" ? 150000 : 120000);
 #if DEV
         if (name == "DevCallGuardProbe") call.budget = 150;
 #endif

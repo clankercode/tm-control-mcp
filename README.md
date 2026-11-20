@@ -424,7 +424,9 @@ checklist: [`docs/dialogs.md`](docs/dialogs.md); in game: `GetGuide {topic:dialo
 | `ControlEditMode` | Inspect/set `EditMode` / `PlaceMode`; optional model select. |
 | `GetEditorCamera` / `SetEditorCamera` | Numeric camera target/angles/distance. |
 | `ControlCamera` | centerOnCursor, watchWholeMap/start/CP/finish, zoom, look, … |
+| `AnimateEditorCamera` / `WaitEditorCamera` | Smooth camera moves in the background: a keyframed `path` (orbital keys or `position`+`lookAt`), an `orbit` (degrees, spiral, or until stopped), or `follow` the cursor / a point you `retarget`. Other camera tools, a new animation, mouse movement or leaving edit mode interrupt it; `WaitEditorCamera` (max 5 min) reports completion, or the interruption as an error. |
 | `FocusCamera` | Focus on world `(x,y,z)` via E++ animation. |
+| `MaxFPS` | Get or set the game's frame limit (`0` = uncapped); session-only, not saved to the config file. |
 | `ControlPlayCamera` | **In-play** camera: read state, switch mode (free / cam 1-3 / backwards / alt), place and aim the free camera. |
 | `TakeScreenshot` | Native viewport screenshot with file detection (`fullName`), `hideOverlay`, `forceRes`. |
 

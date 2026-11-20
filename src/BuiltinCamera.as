@@ -65,6 +65,7 @@ namespace TmMcp {
             return MakeError("orbital camera not available", "no_orbital", true, "Editor");
         }
         vec3 pos = vec3(float(input["x"]), float(input["y"]), float(input["z"]));
+        CameraAnimInterrupt("SetEditorOrbitalTarget");
         try {
             Camera::SetEditorOrbitalTarget(pos);
         } catch {
