@@ -877,6 +877,13 @@ def main() -> int:
         # Plugin default is 20s when timeoutMs is omitted.
         wait_ms = input_data["timeoutMs"] if "timeoutMs" in input_data else int(DEFAULT_WAIT_TIMEOUT_SECONDS * 1000)
         call_timeout = wait_socket_timeout(call_timeout, wait_ms)
+    if args.route_or_tool == "WaitEditorCamera" and isinstance(input_data, dict):
+        # Without timeoutMs the plugin waits out the animation (max 5 min).
+        try:
+            wait_s = min(float(input_data.get("timeoutMs", 300000)), 300000.0) / 1000.0
+            call_timeout = max(call_timeout, wait_s + 5.0)
+        except (TypeError, ValueError):
+            pass
     if args.route_or_tool == "RunManialinkScript" and isinstance(input_data, dict):
         try:
             extra = float(input_data.get("waitMs", 0)) + float(input_data.get("collectMs", 0))

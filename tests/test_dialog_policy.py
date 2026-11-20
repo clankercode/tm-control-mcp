@@ -83,6 +83,23 @@ def test_only_map_module_and_test_starts_need_a_clear_dialog(as_runner, tmp_path
     ''')
 
 
+def test_editor_mutations_are_refused_behind_a_dialog(as_runner, tmp_path):
+    # Live 2026-11-19: a script kept placing blocks behind "save changes?" after its
+    # OpenMapInEditor was refused. Map edits behind a dialog land on a map being left.
+    run_policy(as_runner, tmp_path, r'''
+    string[] mutating = {"PlaceBlock", "RemoveBlock", "ClearBlocks", "ClearItems", "ClearMapContent",
+        "Undo", "Redo", "UndoRedo", "CopyPasteSelection", "SetMoodTimeOfDay",
+        "PlaceBlockViaEditorPlusPlus", "PlaceItemViaEditorPlusPlus", "PlaceNamedMacroblock",
+        "AddBlocksToNamedMacroblock", "AddItemsToNamedMacroblock",
+        "RemoveRecentItems", "RemoveItemsByIndex", "RemoveByTag"};
+    for (uint i = 0; i < mutating.Length; i++) Check(ToolMutatesEditor(mutating[i]), "mutates: " + mutating[i]);
+    // Answering, saving, reading and camera moves stay allowed.
+    string[] free = {"GetDialog", "RespondDialog", "SaveMapFlow", "SaveMapAs", "GetMode", "WaitUntil",
+        "GetBlocks", "GetMapInfo", "ControlCamera", "ControlPlayCamera", "GetVehicleState", "TakeScreenshot"};
+    for (uint i = 0; i < free.Length; i++) Check(!ToolMutatesEditor(free[i]), "free: " + free[i]);
+    ''')
+
+
 def _body(text, signature):
     start = text.index(signature)
     brace = text.index("{", start)

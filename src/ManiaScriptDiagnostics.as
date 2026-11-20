@@ -39,8 +39,30 @@ namespace TmMcp {
         }
         output["messages"] = messages;
         output["healthConfirmed"] = false;
-        output["note"] = "No crash dialog does not prove script health: the prompt may have been dismissed. Preserve the debugger error before restarting. Shift+Scroll Lock is the game's advertised script restart shortcut; verify the failed script becomes green.";
+        output["note"] = "No crash dialog does not prove script health: the prompt may have been dismissed. Preserve the debugger error before restarting. Shift+Scroll Lock is the game's advertised script restart shortcut; verify the failed script becomes green. DismissManiaScriptDebugger hides the overlay.";
         return output;
+    }
+
+    Json::Value@ DismissManiaScriptDebugger(Json::Value &in input) {
+        auto app = cast<CTrackMania>(GetApp());
+        if (app is null || app.SystemOverlay is null || app.SystemOverlay.ScriptDebugger is null) {
+            return MakeError("Script debugger unavailable", "debugger_unavailable");
+        }
+        auto debugger = app.SystemOverlay.ScriptDebugger;
+        // Capture prompts first: hiding the overlay can dismiss crash text.
+        Json::Value before = ManiaScriptDiagnostics();
+        int beforeVisibility = int(debugger.Visibility);
+        debugger.Visibility = CGameScriptDebugger::EVisibility::Hidden;
+        // Let the overlay frame update before reading back.
+        yield();
+        yield();
+        Json::Value output = Json::Object();
+        output["before"] = beforeVisibility;
+        output["after"] = int(debugger.Visibility);
+        output["dismissed"] = int(debugger.Visibility) == int(CGameScriptDebugger::EVisibility::Hidden);
+        output["messages"] = before["messages"];
+        output["note"] = "Hides the native ManiaScript debugger overlay. Does not restart scripts; Shift+Scroll Lock remains the game's script-restart shortcut.";
+        return MakeSuccess(output);
     }
 
     Json::Value@ GetManiaScriptDiagnostics(Json::Value &in input) {

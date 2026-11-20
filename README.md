@@ -424,7 +424,9 @@ checklist: [`docs/dialogs.md`](docs/dialogs.md); in game: `GetGuide {topic:dialo
 | `ControlEditMode` | Inspect/set `EditMode` / `PlaceMode`; optional model select. |
 | `GetEditorCamera` / `SetEditorCamera` | Numeric camera target/angles/distance. |
 | `ControlCamera` | centerOnCursor, watchWholeMap/start/CP/finish, zoom, look, … |
+| `AnimateEditorCamera` / `WaitEditorCamera` | Smooth camera moves in the background: a keyframed `path` (orbital keys or `position`+`lookAt`), an `orbit` (degrees, spiral, or until stopped), or `follow` the cursor / a point you `retarget`. Other camera tools, a new animation, mouse movement or leaving edit mode interrupt it; `WaitEditorCamera` (max 5 min) reports completion, or the interruption as an error. |
 | `FocusCamera` | Focus on world `(x,y,z)` via E++ animation. |
+| `MaxFPS` | Get or set the game's frame limit (`0` = uncapped); session-only, not saved to the config file. |
 | `ControlPlayCamera` | **In-play** camera: read state, switch mode (free / cam 1-3 / backwards / alt), place and aim the free camera. |
 | `GetPauseState` / `ControlPause` | Read the pause state from three game clocks; pause / resume solo or local play with the game's own in-game menu (refuses online). |
 | `GetDisplaySetting` / `SetDisplaySetting` / `RestoreDisplaySetting` | Read / set the game's bloom (none / medium / high) with a recorded restore. |
@@ -495,6 +497,8 @@ Menu stack is **landed**. Clicks use `CControlBase::OnAction` — **not**
 | `EditNewMap` | Title-control new map (env + decoration + mapType). Leaves the current map first; stops with `DIALOG_BLOCKING` on the save prompt; `output.status`. |
 | `BackToMainMenu` | Unwind Editor/Race → menu. Stops with `blockedByDialog:true` on the unsaved-changes dialog (never answers it). |
 | `GetUILayers` / `GetActiveMenuPages` / `GetLayerTree` / `GetLayerXml` | Layer introspection. |
+| `ListManialinkPages` / `ViewManialinkPage` | What is on screen: pages across menu, playground and editor, and a concise text tree of visible controls (type, id, classes, label text). |
+| `ClickManialinkControl` / `WaitUntil {condition:manialink}` | Click a control by page + id in any context (menu, map, editor); wait (max 5 min) for a page or control to be shown, gone, or show some text. |
 | `ListMenuManialinkControls` / `FindMenuButtons` / `FindControlsByClass` / `FindControlsByLabel` | Discovery. |
 | `InspectMenuControl` / `FocusMenuControl` / `SetMenuControlVisible` | Probe / focus / show-hide. |
 | `ClickMenuButton` / `TriggerControlOnAction` | Real click dispatch. |

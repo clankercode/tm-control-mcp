@@ -34,6 +34,34 @@ pub const DEFAULT_NATIVE_PORT: u16 = 30006;
 pub const DEFAULT_HTTP_ADDR: &str = "127.0.0.1:30007";
 pub const MAX_NATIVE_FRAME: usize = 16 * 1024 * 1024;
 pub const NATIVE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Slack over a wait tool's own timeout before the adapter gives up.
+const WAIT_SLACK: Duration = Duration::from_secs(5);
+/// Plugin-side call budgets (src/ToolCalls.as): WaitUntil can run on through a
+/// loading screen for up to 30 minutes; WaitEditorCamera is capped at 5.
+const WAIT_UNTIL_BUDGET: Duration = Duration::from_secs(2100);
+const WAIT_EDITOR_CAMERA_BUDGET: Duration = Duration::from_secs(330);
+
+/// Deadline for one native call. Wait tools block for their timeoutMs, which
+/// can exceed the default, so their deadline follows the input instead.
+pub fn native_call_deadline(tool: &str, input: &Value, default: Duration) -> Duration {
+    let timeout_ms = input.get("timeoutMs").and_then(Value::as_i64);
+    let wanted = match tool {
+        // Past timeoutMs a loading screen extends the wait (up to 30 min);
+        // only an explicit 0 is an immediate check.
+        "WaitUntil" => match timeout_ms {
+            Some(ms) if ms <= 0 => return default,
+            _ => WAIT_UNTIL_BUDGET,
+        },
+        // Without timeoutMs the plugin waits out the animation's remaining
+        // time (capped at 5 min), which the adapter cannot see.
+        "WaitEditorCamera" => match timeout_ms {
+            Some(ms) => Duration::from_millis(ms.clamp(0, 300_000) as u64) + WAIT_SLACK,
+            None => WAIT_EDITOR_CAMERA_BUDGET,
+        },
+        _ => return default,
+    };
+    wanted.max(default)
+}
 pub mod audit;
 pub mod media;
 pub mod monitor;
@@ -191,11 +219,12 @@ impl NativeBackend for NativeTcpClient {
     ) -> BoxFuture<'static, Result<NativeResponse>> {
         let client = self.clone();
         Box::pin(async move {
+            let budget = native_call_deadline(&tool, &input, client.timeout);
             let mut request = json!({"route":"call","tool":tool,"input":input});
             if let Some(expect) = expect {
                 request["expect"] = serde_json::to_value(expect)?;
             }
-            client.request(request, client.timeout).await
+            client.request(request, budget).await
         })
     }
 }
@@ -1154,6 +1183,20 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Notify;
+
+    #[test]
+    fn wait_tools_get_deadlines_past_their_timeout() {
+        let d = NATIVE_TIMEOUT;
+        assert_eq!(native_call_deadline("GetMode", &json!({}), d), d);
+        assert_eq!(native_call_deadline("TakeScreenshot", &json!({"timeoutMs": 900000}), d), d);
+        assert_eq!(native_call_deadline("WaitEditorCamera", &json!({"timeoutMs": 120000}), d), Duration::from_secs(125));
+        assert_eq!(native_call_deadline("WaitEditorCamera", &json!({"timeoutMs": 900000}), d), Duration::from_secs(305));
+        assert_eq!(native_call_deadline("WaitEditorCamera", &json!({"timeoutMs": 1000}), d), d, "never below the default");
+        assert_eq!(native_call_deadline("WaitEditorCamera", &json!({}), d), Duration::from_secs(330));
+        assert_eq!(native_call_deadline("WaitUntil", &json!({"timeoutMs": 60000}), d), Duration::from_secs(2100));
+        assert_eq!(native_call_deadline("WaitUntil", &json!({}), d), Duration::from_secs(2100));
+        assert_eq!(native_call_deadline("WaitUntil", &json!({"timeoutMs": 0}), d), d);
+    }
 
     struct FakeBackend;
     impl NativeBackend for FakeBackend {

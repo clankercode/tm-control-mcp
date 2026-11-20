@@ -57,6 +57,9 @@ void RenderShutdownDialog() {
 
 void Render() {
     RenderShutdownDialog();
+#if DEV
+    RenderCallOverlayIfEnabled();
+#endif
 }
 
 

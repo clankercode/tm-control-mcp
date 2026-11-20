@@ -48,6 +48,21 @@ namespace TmMcp {
         return false;
     }
 
+    // Tools that change map content or editor history. Behind a dialog the editor is mid-way
+    // through leaving, saving or confirming, so an edit lands on a map that is about to be
+    // discarded or saved without it (live 2026-11-19: a script kept editing behind "save
+    // changes?" after its OpenMapInEditor was refused). Refused like the module changes.
+    bool ToolMutatesEditor(const string &in name) {
+        return name == "PlaceBlock" || name == "RemoveBlock"
+            || name == "ClearBlocks" || name == "ClearItems" || name == "ClearMapContent"
+            || name == "Undo" || name == "Redo" || name == "UndoRedo"
+            || name == "CopyPasteSelection" || name == "SetMoodTimeOfDay"
+            || name == "PlaceBlockViaEditorPlusPlus" || name == "PlaceItemViaEditorPlusPlus"
+            || name == "PlaceNamedMacroblock" || name == "AddBlocksToNamedMacroblock"
+            || name == "AddItemsToNamedMacroblock"
+            || name == "RemoveRecentItems" || name == "RemoveItemsByIndex" || name == "RemoveByTag";
+    }
+
     // Menu modals whose right answer is known by frame name; "" otherwise.
     string MenuDialogFrameHint(const string &in frame) {
         if (frame == "FrameDialogJoin") return "Server join card: ClickClassicMenuControl {id:ButtonJoin} joins ({id:ButtonSpectator} spectates), RespondDialog {action:frame-cancel} closes it. JoinServer {link} opens and confirms a card in one call. frame-ok refuses this card: it has several buttons.";

@@ -34,6 +34,7 @@ def test_dispatcher_refuses_before_any_tool_runs():
     assert refusal < body.index('if (name == "GetMode")')
     refuse = _body("Json::Value@ RefuseWhileDialogBlocks(")
     assert "ToolNeedsDialogClear(name, action)" in refuse
+    assert "ToolMutatesEditor(name)" in refuse
     assert 'bool(dialog["blocking"])' in refuse
     assert '"DIALOG_BLOCKING"' in refuse
     assert 'output["started"] = false;' in refuse
@@ -64,7 +65,10 @@ def test_unwind_reports_a_late_dialog_instead_of_menu():
     assert '"DIALOG_BLOCKING"' in prepare and '"UNWIND_TIMEOUT"' in prepare
     assert 'unwind["started"] = false;' in prepare
     back = _body("Json::Value@ BackToMainMenu(")
-    assert "_UnwindToMenu(output)" in back
+    # A stalled or timed-out return to the menu is an error (DIALOG_BLOCKING / UNWIND_TIMEOUT
+    # via _PrepareModuleChange), not a success with a note.
+    assert '_PrepareModuleChange("BackToMainMenu")' in back
+    assert back.index("if (err !is null) return err;") < back.index("MakeSuccess(")
 
 
 def test_no_guard_or_unwind_path_answers_a_dialog():

@@ -69,13 +69,23 @@ checked and unit tested; not yet checked in the game (see "Live checks").
   `DIALOG_BLOCKING` with `output.started: false` and `output.dialog` while a
   blocking dialog is up. This is checked in `DispatchTool`, so socket, imported
   `CallTool` and async calls all get it.
+- **Editor edits are refused too** (2026-11-19): tools that change map content or
+  editor history (`ToolMutatesEditor`: `PlaceBlock`, `RemoveBlock`, `Clear*`,
+  `Undo`/`Redo`, `CopyPasteSelection`, `SetMoodTimeOfDay`, E++ place/remove and
+  named-macroblock tools) return the same `DIALOG_BLOCKING`. Answering, saving,
+  reads and camera tools are never refused. Live-checked 2026-11-19 (instance 9):
+  dirty editor -> `BackToMainMenu` `DIALOG_BLOCKING`; `PlaceBlock` / `RemoveBlock`
+  refused behind the prompt; `GetMapInfo` allowed; after `RespondDialog no`,
+  `BackToMainMenu` succeeds.
 - **Map switches unwind first.** `EditNewMap`, `OpenMapInEditor` and `PlayMap`
   leave the current map synchronously (`_UnwindToMenu`) before queueing their
   coroutine. A save prompt stops them with `DIALOG_BLOCKING` and nothing queued;
   the prompt stays up for the caller. A clean map unwinds and proceeds as before.
   Nothing ever answers a save prompt by itself.
 - **`BackToMainMenu`** checks for a dialog every frame and counts only the real
-  main menu (no editor or playground, not loading) as reached.
+  main menu (no editor or playground, not loading) as reached. Not reaching it is
+  an **error** (`DIALOG_BLOCKING` / `UNWIND_TIMEOUT`, via `_PrepareModuleChange`),
+  not a success with a note (2026-11-19).
 - **`EditNewMap`** leaves the map before touching decorations, verifies the
   standard fid before trusting or swapping it (else `EDITNEWMAP_FAILED`, "restart
   the game"), never returns with a swap in place, allows one swap at a time

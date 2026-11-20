@@ -142,7 +142,7 @@ namespace TmMcp {
             if (expect is null || expect.GetType() == Json::Type::Null)
                 return MakeResponse(id, route, null, "expect must be a JSON object");
         }
-        Json::Value@ result = CallToolExpected(tool, input, expect);
+        Json::Value@ result = CallToolExpected(tool, input, expect, "socket");
         if (result is null) {
             return MakeResponse(id, route, null, "unknown tool: " + tool);
         }
