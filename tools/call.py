@@ -3,6 +3,7 @@ import argparse
 import csv
 import difflib
 import json
+import math
 import os
 from pathlib import Path
 import socket
@@ -352,6 +353,64 @@ def tool_result_output(response: dict) -> dict | None:
     return output if isinstance(output, dict) else None
 
 
+# ControlPause: the plugin's PausePolicy.as clamps and one-deadline budget,
+# mirrored here (tests/test_call_timeouts.py checks the two agree).
+PAUSE_HOLD_MS = (300, 100, 2000)      # default, min, max
+PAUSE_TIMEOUT_MS = (3000, 100, 10000)
+PAUSE_CLEANUP_RESERVE_MS = 2000
+PAUSE_SOCKET_SLACK_S = 5.0
+
+
+def pause_input_error(input_data: object) -> str | None:
+    """None when holdMs/timeoutMs are absent or finite integers, else why not.
+
+    The JSON decoder accepts 1e309 as infinity and NaN literals; int() of those
+    raises before any request is sent. The schema says integer, so a
+    fractional value is rejected here too. The plugin clamps again on its side.
+    """
+    if not isinstance(input_data, dict):
+        return None
+    for key in ("holdMs", "timeoutMs"):
+        if key not in input_data:
+            continue
+        value = input_data[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return f"{key} must be an integer number of milliseconds"
+        if isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
+            return f"{key} must be a finite integer number of milliseconds, got {value!r}"
+    return None
+
+
+def _pause_clamp(value: object, spec: tuple[int, int, int]) -> int:
+    default, lo, hi = spec
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    if isinstance(value, float) and not math.isfinite(value):
+        return lo if value != value or value < 0 else hi
+    # Clamp before narrowing, like the plugin.
+    if value < lo:
+        return lo
+    if value > hi:
+        return hi
+    return int(value)
+
+
+def pause_socket_timeout(timeout: float, input_data: object) -> float:
+    """Socket deadline for ControlPause.
+
+    The plugin stops a ControlPause call at budgetMs = 3*holdMs + timeoutMs +
+    2000 (clamped inputs; at most 18 s), checked once per game frame. The
+    socket gets that plus slack for the frames around it, or --timeout if that
+    is longer. If the client still times out, call GetPauseState before
+    pausing or resuming again.
+    """
+    data = input_data if isinstance(input_data, dict) else {}
+    hold = _pause_clamp(data.get("holdMs"), PAUSE_HOLD_MS) if "holdMs" in data else PAUSE_HOLD_MS[0]
+    wait = _pause_clamp(data.get("timeoutMs"), PAUSE_TIMEOUT_MS) if "timeoutMs" in data else PAUSE_TIMEOUT_MS[0]
+    budget_s = (3 * hold + wait + PAUSE_CLEANUP_RESERVE_MS) / 1000.0
+    return max(timeout, budget_s + PAUSE_SOCKET_SLACK_S)
+
+
 def wait_socket_timeout(timeout: float, timeout_ms: object) -> float:
     """Socket deadline for WaitUntil.
 
@@ -692,6 +751,12 @@ def main() -> int:
         print(f"invalid input JSON: {exc}", file=sys.stderr)
         return 2
 
+    if args.route_or_tool == "ControlPause":
+        pause_err = pause_input_error(input_data)
+        if pause_err:
+            print_json_error(f"invalid input for ControlPause: {pause_err}", args.pretty, code="INVALID_INPUT")
+            return 2
+
     if args.route_or_tool == "recover" and not isinstance(input_data, dict):
         print(f"invalid input for recover: input must be an object, got {_json_type(input_data)}", file=sys.stderr)
         return 2
@@ -812,6 +877,13 @@ def main() -> int:
         # Plugin default is 20s when timeoutMs is omitted.
         wait_ms = input_data["timeoutMs"] if "timeoutMs" in input_data else int(DEFAULT_WAIT_TIMEOUT_SECONDS * 1000)
         call_timeout = wait_socket_timeout(call_timeout, wait_ms)
+    if args.route_or_tool == "WaitEditorCamera" and isinstance(input_data, dict):
+        # Without timeoutMs the plugin waits out the animation (max 5 min).
+        try:
+            wait_s = min(float(input_data.get("timeoutMs", 300000)), 300000.0) / 1000.0
+            call_timeout = max(call_timeout, wait_s + 5.0)
+        except (TypeError, ValueError):
+            pass
     if args.route_or_tool == "RunManialinkScript" and isinstance(input_data, dict):
         try:
             extra = float(input_data.get("waitMs", 0)) + float(input_data.get("collectMs", 0))
@@ -826,6 +898,8 @@ def main() -> int:
             call_timeout = max(call_timeout, 7.0)
     if args.route_or_tool == "ControlPlugin":
         call_timeout = max(call_timeout, 15.0)
+    if args.route_or_tool == "ControlPause":
+        call_timeout = pause_socket_timeout(call_timeout, input_data)
 
     try:
         with socket.create_connection((args.host, args.port), timeout=call_timeout) as sock:

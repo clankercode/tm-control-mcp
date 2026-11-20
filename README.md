@@ -424,8 +424,12 @@ checklist: [`docs/dialogs.md`](docs/dialogs.md); in game: `GetGuide {topic:dialo
 | `ControlEditMode` | Inspect/set `EditMode` / `PlaceMode`; optional model select. |
 | `GetEditorCamera` / `SetEditorCamera` | Numeric camera target/angles/distance. |
 | `ControlCamera` | centerOnCursor, watchWholeMap/start/CP/finish, zoom, look, … |
+| `AnimateEditorCamera` / `WaitEditorCamera` | Smooth camera moves in the background: a keyframed `path` (orbital keys or `position`+`lookAt`), an `orbit` (degrees, spiral, or until stopped), or `follow` the cursor / a point you `retarget`. Other camera tools, a new animation, mouse movement or leaving edit mode interrupt it; `WaitEditorCamera` (max 5 min) reports completion, or the interruption as an error. |
 | `FocusCamera` | Focus on world `(x,y,z)` via E++ animation. |
+| `MaxFPS` | Get or set the game's frame limit (`0` = uncapped); session-only, not saved to the config file. |
 | `ControlPlayCamera` | **In-play** camera: read state, switch mode (free / cam 1-3 / backwards / alt), place and aim the free camera. |
+| `GetPauseState` / `ControlPause` | Read the pause state from three game clocks; pause / resume solo or local play with the game's own in-game menu (refuses online). |
+| `GetDisplaySetting` / `SetDisplaySetting` / `RestoreDisplaySetting` | Read / set the game's bloom (none / medium / high) with a recorded restore. |
 | `TakeScreenshot` | Native viewport screenshot with file detection (`fullName`), `hideOverlay`, `forceRes`. |
 
 ### Blocks / items (read)
@@ -493,6 +497,8 @@ Menu stack is **landed**. Clicks use `CControlBase::OnAction` — **not**
 | `EditNewMap` | Title-control new map (env + decoration + mapType). Leaves the current map first; stops with `DIALOG_BLOCKING` on the save prompt; `output.status`. |
 | `BackToMainMenu` | Unwind Editor/Race → menu. Stops with `blockedByDialog:true` on the unsaved-changes dialog (never answers it). |
 | `GetUILayers` / `GetActiveMenuPages` / `GetLayerTree` / `GetLayerXml` | Layer introspection. |
+| `ListManialinkPages` / `ViewManialinkPage` | What is on screen: pages across menu, playground and editor, and a concise text tree of visible controls (type, id, classes, label text). |
+| `ClickManialinkControl` / `WaitUntil {condition:manialink}` | Click a control by page + id in any context (menu, map, editor); wait (max 5 min) for a page or control to be shown, gone, or show some text. |
 | `ListMenuManialinkControls` / `FindMenuButtons` / `FindControlsByClass` / `FindControlsByLabel` | Discovery. |
 | `InspectMenuControl` / `FocusMenuControl` / `SetMenuControlVisible` | Probe / focus / show-hide. |
 | `ClickMenuButton` / `TriggerControlOnAction` | Real click dispatch. |
@@ -566,6 +572,106 @@ Path-based place remains the reliable headless path; `ControlInventory` is for p
 ### Named macroblocks + skins
 
 Block/item specs support `variant`, `bgSkin`, `fgSkin`. Skins apply after successful `PlaceNamedMacroblock` and are verified when possible. Durable JSON is v2-capable (item skins) with v1 load compatibility. In-memory handles alone do not survive reload — use `SaveNamedMacroblock`.
+
+### Pause and bloom (`ControlPause`, `SetDisplaySetting`)
+
+For live checks on a leased instance that need the game paused or bloom
+changed, with no OS input. The agent stays in control the whole time: nothing
+here runs on its own (no timer, no watcher, no automatic restore), so the agent
+resumes and restores itself.
+
+**Pause.** `ControlPause {action:pause}` opens the game's own in-game (ESC)
+menu in solo/local play. It succeeds only after all three clocks
+(`PlaygroundClientScriptAPI.GameTime`, `GetCmdBufferCore().SimulationTime` and
+`.GameTime`) are unchanged and the menu is observed up on every frame of a full
+`holdMs` window (default 300). Every observed change counts (A→B→A isn't frozen).
+If a pre-existing menu wasn't up for the initial hold, the tool samples a fresh
+menu-up window. A pause request never closes a pre-existing menu.
+
+`ControlPause` checks locality, loading, playground, menu and dialog state
+after each frame and before a menu action. A loading, locality or context
+change aborts; it refuses online (`ONLINE_NOT_PAUSABLE`) and does not open
+behind a blocking dialog (`DIALOG_BLOCKING`). If a Show did not lead to a
+verified pause, the call attempts **at most one** cleanup Resume, and only if
+it observed the menu open and stay up and the fresh local, non-loading,
+same-context gate passes. It reports `cleanupSkipped` when it cannot dispatch.
+In explicit Resume and failed-Show cleanup, `menuShown`, `menuShownAfter` and
+`changed` are booleans or `"unknown"` if the menu state could not be read.
+Check for an explicit boolean before acting.
+`CLEANUP_FAILED` means closure wasn't verified after a Resume attempt. A timeout
+or reload isn't evidence of closure. Call `GetPauseState` after any failure;
+if the menu is up, use `ControlPause resume`. If `lateShowPossible:true`, call
+`GetPauseState` again after the menu appears closed. An unobserved or additional
+Show may still land, and the API cannot cancel or drain it. A menu or same-address
+context replacement with no observed edge cannot be distinguished.
+
+`ControlPause {action:resume}` closes the in-game menu with
+`CloseInGameMenu(Resume)` only, never Quit or a sub-menu, whoever opened it.
+`jumpMs` reports the first changed value relative to the pre-resume baseline
+for each clock where both were measured. A missing entry is **unmeasured**, not
+zero; a resume noop has no `jumpMs`. Both actions can succeed with `changed:false`
+when the requested state is already verified. The per-call budget is
+`3×holdMs + timeoutMs + 2 s` (max 18 s; `tools/call.py` waits that plus 5 s, or
+`--timeout` if longer). It is checked per frame, so a hitch can overrun it.
+`GetPauseState` changes nothing and samples online too. Its sample can restart
+on an unreadable clock or loading frame if the context holds; by contrast,
+loading aborts `ControlPause`. `menuShown`, locality and `pausable` reflect the
+end of the read-only sample. `menuShownAtStart` and `menuShown` are booleans
+or `"unknown"` if unreadable; check for an explicit boolean before acting.
+
+**Bloom.** `SetDisplaySetting {bloom:none|medium|high}` writes the user's own
+setting. Persistence and deferred `Apply` timing are unproven (Q3);
+`persisted:"assumed"` is not a save receipt. Set never overwrites the single
+`bloom-restore.txt` record in plugin storage, and refuses without a valid
+`port.override` marker (`IDENTITY_UNKNOWN`), while an older record exists
+(`LEGACY_RECORD_PRESENT`), while a wrapper is busy (`WRAPPER_BUSY`), or when
+readable bloom sources disagree (`SOURCES_DISAGREE`). It reads the prior,
+writes and reads back the record, then writes by one mechanism without
+yielding (`output.mechanism`: the tool's own script wrapper, or a direct
+`Viewport.SystemConfig` display/safe config write). `APPLY_UNVERIFIED` means
+same-frame read-back did not verify the change; the record is kept.
+`sideEffects` lists only changes in the same-frame readings of `dirtyCounter`,
+`displayMode` and `windowSize` (or `"unknown"` if unavailable); it cannot rule
+out a window or device reset.
+
+`RestoreDisplaySetting` requires a valid, matching record. If all readable
+sources hold the target and no known source is unreadable, it writes the prior
+and reads back all sources. If all are already at the prior, it writes nothing
+(`restored:false`, reason `already at prior`). Normal Restore **always keeps
+the record**. A conflict keeps it too. `{force:true}` can overwrite the user's
+current value **only within the same identity and config**. A user's same-value
+edit cannot be distinguished from the tool's write (limitation). Startup,
+disable and unload only report records, never apply or delete them.
+
+Before retiring, `GetDisplaySetting` must show the same matching pending record
+and the prior on every readable source, with none known unreadable, after
+an in-instance map reload or a same-prefix restart that preserves the upper dir.
+The default `tmc stop` wipe destroys the record; it is not a confirmation step.
+A map reload does not prove the setting was saved or that a deferred Apply finished.
+If Apply is unresolved, keep the record. Otherwise call
+`RestoreDisplaySetting {retire:true}`. Only `retired:true` confirms retirement;
+`no record` is not confirmation. Retire rechecks the identity, config and sources,
+refuses if a display call is busy, never writes bloom and cannot combine with
+`force:true`. Don't retire on immediate read-back alone.
+
+**What the record binds to.** The hash covers the prefix's user, app and plugin
+storage paths, active profile and display/safe config, and the tmc port marker.
+`tmc` overlays keep plugin storage in a private per-instance upper directory
+that `tmc stop` wipes by default. The primary has no marker, so Set refuses
+there. **Limitation:** prefixes with identical paths, profile, config and
+marker collide. This is a prefix-marker check, not a lease check.
+
+Manual recovery (an older build's `display-restore.json` / `.txt`, or a record
+from another instance): `GetDisplaySetting` shows `legacyRecord` /
+`restoreRecord` with its path and recorded value if readable. Check which
+instance wrote it, keep a copy, set bloom in Settings > Graphics if that is the
+value to restore, then delete the file. Never copy a record between instances.
+
+**Unproven live (2026-11-18):** Q1, whether a programmatic menu freezes the
+clocks the way ESC does (ESC in solo was measured to); Q2, whether bloom none
+takes effect without a restart; Q3, whether `Apply` resets the window or
+device or saves the config at once; Q4, whether a locally hosted server with
+no other clients pauses. Guide: `pause-bloom`.
 
 ### In-play camera (`ControlPlayCamera`)
 

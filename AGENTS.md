@@ -33,6 +33,19 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
   `set_position`. Pass `x,y,z` **and** `target{x,y,z}` for an exact camera point + look-at; angles alone do
   not rotate the view. `set_mode` can be silently dropped — check `switched`, not `success`. Editor camera is
   still `SetEditorCamera` / `ControlCamera`.
+- **Pause / bloom (live checks on a leased instance, no OS input):** no automatic timer, watcher or restore.
+  `GetPauseState` samples online too; loading can restart its read-only window. `ControlPause {action:pause|resume|toggle}`
+  refuses online/dialogs before acting and aborts on locality, loading or context changes. Pause requires unchanged
+  clocks and a menu observed up on every frame of a full hold; it never closes a pre-existing menu. Failed Show
+  verification attempts at most one cleanup Resume for the menu it saw open, if the fresh gate and context match.
+  Check `menuShownAfter` (or `"unknown"`) and `cleanupSkipped`; if `lateShowPossible`, recheck with `GetPauseState`
+  after apparent closure. Explicit resume uses Resume only, whoever opened the menu. Missing `jumpMs` is unmeasured.
+  `SetDisplaySetting {bloom}` needs a valid prefix marker (not a lease check) and never overwrites a record.
+  Always call `RestoreDisplaySetting` afterwards; it keeps the record, and `force:true` can overwrite a current
+  value only within the same identity and config. After a map reload or game restart confirms the prior stuck,
+  `RestoreDisplaySetting {retire:true}` deletes the matching record without writing bloom. Persistence is assumed.
+  UNPROVEN live: Q1 programmatic pause freezes like ESC, Q2 bloom none applies without a restart,
+  Q3 Apply timing, persistence and window/device effects, Q4 local hosted play pauses. Guide: `pause-bloom`.
 - **Cursor:** `GetCursor` / `ControlCursor` relative/cardinal — absolute optional.
 - **Item delete:** `RemoveRecentItems` / `RemoveItemsByIndex` → E++ `DeleteItems`. Prefer **`SetAgentTag` + `RemoveByTag`** for agent smoke cleanup.
 - **Inventory:** browse tools + **`ControlInventory`**. Path-place still preferred for headless placement.

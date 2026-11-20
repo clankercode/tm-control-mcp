@@ -14,6 +14,10 @@ namespace TmMcp {
         Json::Value@ result;
         string instance;
         string packGeneration;
+        string source = "direct";     // "socket" only for Protocol.as requests
+        array<string> observers;      // subscriptions that sampled the admission
+        uint64 observedFrame = 0, observedWallMs = 0;
+        bool observerTruncated = false;
     }
     ToolCallRegistry g_ToolCalls;
     array<ToolInvocation@> g_UnfinishedWorkers;
@@ -57,7 +61,9 @@ namespace TmMcp {
         @call.result = result;
         call.finished = true;
         g_ToolCalls.Release(call.id);
+        CallOverlayFinish(call.id, call.name, call.started, result);
         ToolCallEvent("tool done " + call.name + " #" + call.id + " " + reason + " " + (Time::Now - call.started) + "ms");
+        if (call.observers.Length > 0) ObserveCall(call, "completed");
     }
 
     void SweepToolCalls() {
@@ -85,11 +91,19 @@ namespace TmMcp {
     }
 
     void MonitorToolCalls() {
-        while (g_MonitorToolCalls) { SweepToolCalls(); yield(); }
+        uint64 observerSweep = 0;
+        while (g_MonitorToolCalls) {
+            SweepToolCalls();
+            if (Time::Now - observerSweep >= 1000) { SweepCallObservers(); observerSweep = Time::Now; }
+            yield();
+        }
     }
 
     void StopToolCalls() {
         g_MonitorToolCalls = false;
+        // Shutdown drops subscriptions first: their owners see a lost subscription,
+        // never a shutdown completion for a call they may not have admitted.
+        StopCallObservers();
         auto calls = g_ToolCalls.calls;
         for (uint i = 0; i < calls.Length; i++) {
             auto call = cast<ToolInvocation@>(calls[i]);
@@ -157,7 +171,8 @@ namespace TmMcp {
         return null;
     }
 
-    Json::Value@ CallToolExpected(const string &in name, Json::Value &in input, Json::Value@ expect) {
+    Json::Value@ CallToolExpected(const string &in name, Json::Value &in input, Json::Value@ expect,
+                                  const string &in source = "direct") {
         auto stale = ValidateToolExpectation(name, expect);
         if (stale !is null) return stale;
         auto invalidName = ValidateToolCallName(name);
@@ -193,11 +208,12 @@ namespace TmMcp {
         // Preserve WaitUntil's loading-aware 30-minute wait contract. Other
         // calls get 2 minutes; lifecycle calls get 60 seconds wall time, without
         // changing Openplanet's independent 15-second script execution limit.
-        call.budget = name == "WaitUntil" ? 2100000 : (name == "ControlPlugin" || name == "DismissBlockingScreen" ? 150000 : 120000);
+        call.budget = name == "WaitUntil" ? 2100000 : name == "WaitEditorCamera" ? 330000 : (name == "ControlPlugin" || name == "DismissBlockingScreen" ? 150000 : 120000);
 #if DEV
         if (name == "DevCallGuardProbe") call.budget = 150;
 #endif
         call.instance = g_ToolCallInstance;
+        call.source = source;
         GetPackToolGeneration(name, call.packGeneration);
         auto owner = CoroutineCallOwner();
         @call.owner = owner;
@@ -209,9 +225,13 @@ namespace TmMcp {
             err["inFlight"] = ToolCallToJson(held);
             return err;
         }
+        CallOverlayBegin(call.id, name);
         try {
             // Copy caller-owned input before crossing the worker boundary.
             @call.input = Json::Parse(Json::Write(input));
+            call.observedFrame = Time::FrameCount;
+            call.observedWallMs = Time::Now;
+            ObserveCall(call, "admitted");
             ToolCallEvent("tool start " + name + " #" + call.id);
             @owner.worker = startnew(CoroutineFuncUserdata(TmMcp_RunToolCall), call);
         } catch {
@@ -261,6 +281,8 @@ namespace TmMcp {
         for (uint i = 0; i < g_ToolCalls.calls.Length; i++) active.Add(ToolCallToJson(g_ToolCalls.calls[i]));
         for (uint i = 0; i < g_UnfinishedWorkers.Length; i++) expired.Add(ToolCallToJson(g_UnfinishedWorkers[i]));
         o["instance"] = g_ToolCallInstance; o["uptimeMs"] = Time::Now - g_ToolCallsStarted;
+        o["callOverlayTotal"] = g_callOverlayCalls;
+        o["callOverlayHidden"] = g_callOverlayHidden;
         o["active"] = active; o["expiredWorkers"] = expired;
         o["recoveryRequired"] = g_UnfinishedWorkers.Length > 0;
         o["eventLog"] = TmMcpRequestTracePath();

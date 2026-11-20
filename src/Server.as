@@ -18,7 +18,6 @@ namespace TmMcp {
     const uint CLIENT_READ_TIMEOUT_MS = 10000;
     const uint CLIENT_MAX_REQUEST_BYTES = 16 * 1024 * 1024;
     const uint CLIENT_READ_CHUNK_BYTES = 1024;
-    const int PORT_FALLBACK_SPAN = 100;
 
     Net::Socket@ g_socket = null;
     bool g_running = false;
@@ -181,24 +180,13 @@ namespace TmMcp {
     // PluginStorage/tm-control-mcp/port.override per game prefix).
     // Returns the setting port when no valid override file exists.
     int TmMcpResolveWantedPort() {
-        g_portOverride = 0;
-        string path = IO::FromStorageFolder("port.override");
-        if (!IO::FileExists(path)) return S_TmMcpPort;
-        try {
-            IO::File f(path, IO::FileMode::Read);
-            string raw = f.ReadToEnd().Trim();
-            f.Close();
-            if (raw.Length == 0) return S_TmMcpPort;
-            int parsed = Text::ParseInt(raw);
-            if (parsed >= 1 && parsed <= 65535 - PORT_FALLBACK_SPAN) {
-                g_portOverride = parsed;
-                trace("TM Control MCP port.override -> " + parsed);
-                return parsed;
-            }
-            error("TM Control MCP ignoring invalid port.override '" + raw + "'");
-        } catch {
-            error("TM Control MCP failed reading port.override: " + getExceptionInfo());
+        string mark, why;
+        g_portOverride = ReadPortOverride(mark, why);
+        if (g_portOverride != 0) {
+            trace("TM Control MCP port.override -> " + g_portOverride);
+            return g_portOverride;
         }
+        if (why.Length > 0) error("TM Control MCP ignoring port override: " + why);
         return S_TmMcpPort;
     }
 

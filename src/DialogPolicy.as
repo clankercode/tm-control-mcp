@@ -33,16 +33,34 @@ namespace TmMcp {
         return kind != "none" && kind != "wait" && kind != "unavailable" && kind.Length > 0;
     }
 
-    // Tools that leave the map, change module, or start a test. They refuse
-    // while a blocking dialog is up instead of queueing behind it.
+    // Tools that leave the map, change module, start a test, open the pause
+    // menu or change a display setting. They refuse while a blocking dialog
+    // is up instead of queueing behind it. Recovery and reads stay available:
+    // RestoreDisplaySetting, GetPauseState, GetDisplaySetting.
     bool ToolNeedsDialogClear(const string &in name, const string &in action) {
         if (name == "EditNewMap" || name == "OpenMapInEditor" || name == "PlayMap"
             || name == "BackToMainMenu" || name == "CreateMapViaMenu") return true;
+        if (name == "ControlPause" || name == "SetDisplaySetting") return true;
         if (name == "ControlValidation") {
             return action == "validate" || action == "requestEnterPlayground"
                 || action == "testFromStart" || action == "testFromCoord";
         }
         return false;
+    }
+
+    // Tools that change map content or editor history. Behind a dialog the editor is mid-way
+    // through leaving, saving or confirming, so an edit lands on a map that is about to be
+    // discarded or saved without it (live 2026-11-19: a script kept editing behind "save
+    // changes?" after its OpenMapInEditor was refused). Refused like the module changes.
+    bool ToolMutatesEditor(const string &in name) {
+        return name == "PlaceBlock" || name == "RemoveBlock"
+            || name == "ClearBlocks" || name == "ClearItems" || name == "ClearMapContent"
+            || name == "Undo" || name == "Redo" || name == "UndoRedo"
+            || name == "CopyPasteSelection" || name == "SetMoodTimeOfDay"
+            || name == "PlaceBlockViaEditorPlusPlus" || name == "PlaceItemViaEditorPlusPlus"
+            || name == "PlaceNamedMacroblock" || name == "AddBlocksToNamedMacroblock"
+            || name == "AddItemsToNamedMacroblock"
+            || name == "RemoveRecentItems" || name == "RemoveItemsByIndex" || name == "RemoveByTag";
     }
 
     // Menu modals whose right answer is known by frame name; "" otherwise.

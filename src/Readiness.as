@@ -367,6 +367,10 @@ namespace TmMcp {
             return string(snap["kind"]).ToLower() == eq;
         }
 
+        if (cond == "manialink") {
+            return ManialinkConditionMet(input, last);
+        }
+
         if (cond == "readiness" || cond == "ready") {
             string want = input.HasKey("want") ? string(input["want"]) : "editor";
             auto snap = BuildReadinessSnapshot(want);
@@ -428,7 +432,7 @@ namespace TmMcp {
 
     Json::Value@ WaitUntil(Json::Value &in input) {
         if (!input.HasKey("condition")) {
-            return MakeError("missing condition", "INVALID_INPUT", false, "", "condition: mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness|shadowsClear|menuReached|blockingScreen");
+            return MakeError("missing condition", "INVALID_INPUT", false, "", "condition: mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness|shadowsClear|menuReached|blockingScreen|manialink");
         }
         string condition = string(input["condition"]);
         int timeoutMs = input.HasKey("timeoutMs") ? int(input["timeoutMs"]) : 20000;
@@ -451,9 +455,23 @@ namespace TmMcp {
             || condLower == "menureached" || condLower == "menu_reached" || condLower == "menu-reached"
             || condLower == "blockingscreen" || condLower == "blocking_screen" || condLower == "blocking-screen"
             || condLower == "shadowsclear" || condLower == "shadows_clear" || condLower == "shadows-clear"
-            || condLower == "calculatingshadows" || condLower == "calculating_shadows";
+            || condLower == "calculatingshadows" || condLower == "calculating_shadows"
+            || condLower == "manialink";
         if (!known) {
-            return MakeError("unknown condition: " + condition, "INVALID_INPUT", false, "", "mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness|shadowsClear|menuReached|blockingScreen");
+            return MakeError("unknown condition: " + condition, "INVALID_INPUT", false, "", "mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness|shadowsClear|menuReached|blockingScreen|manialink");
+        }
+
+        // UI waits: page required; the whole wait (loading included) is capped
+        // at 5 minutes, so a click that never lands cannot hold the caller.
+        bool uiWait = condLower == "manialink";
+        if (uiWait) {
+            if (!input.HasKey("page") || string(input["page"]).Length == 0)
+                return MakeError("manialink needs page (ref or name)", "INVALID_INPUT", false, "", "{condition:'manialink', page:'Page_HomePage', id?, text?, state?:'shown'|'gone', timeoutMs<=300000}");
+            string st = input.HasKey("state") ? string(input["state"]).ToLower() : "shown";
+            if (st != "shown" && st != "gone") return MakeError("state must be shown or gone", "INVALID_INPUT");
+            if (input.HasKey("text") && (!input.HasKey("id") || string(input["id"]).Length == 0))
+                return MakeError("text needs id", "INVALID_INPUT");
+            timeoutMs = MlClampWaitMs(input.HasKey("timeoutMs") ? int(input["timeoutMs"]) : ML_WAIT_DEFAULT_MS);
         }
 
         uint64 t0 = Time::Now;
@@ -462,14 +480,17 @@ namespace TmMcp {
         bool sawLoading = false;
         Json::Value@ last;
         bool ok = false;
+        bool pageEverFound = false;
         while (true) {
             ok = ConditionSatisfied(condition, input, last);
+            if (uiWait && last !is null && last.HasKey("pageFound") && bool(last["pageFound"])) pageEverFound = true;
             if (ok) break;
             uint64 now = Time::Now;
             uint dt = uint(now - lastTick);
             lastTick = now;
             auto app = cast<CTrackMania>(GetApp());
             bool loading = IsLoadingLike(app);
+            if (uiWait && now - t0 >= uint64(timeoutMs)) break;
             if (loading) {
                 sawLoading = true;
                 if (now - t0 >= 1800000) break;
@@ -480,6 +501,11 @@ namespace TmMcp {
             uint slice = uint(pollMs);
             if (!loading && timeoutMs > 0 && uint(timeoutMs) > chargedMs) {
                 slice = Math::Min(slice, uint(timeoutMs) - chargedMs);
+            }
+            // UI waits: never sleep past the wall-clock budget (loading included).
+            if (uiWait) {
+                uint64 used = now - t0;
+                slice = used >= uint64(timeoutMs) ? 0 : Math::Min(slice, uint(uint64(timeoutMs) - used));
             }
             uint64 sliceStart = Time::Now;
             while (Time::Now - sliceStart < slice) {
@@ -498,6 +524,11 @@ namespace TmMcp {
         output["timeoutMs"] = timeoutMs;
         output["pollMs"] = pollMs;
         if (last !is null) output["last"] = last;
+        if (uiWait) {
+            output["pageEverFound"] = pageEverFound;
+            if (ok && !pageEverFound)
+                output["warning"] = "page never matched during this wait: 'gone' is trivially true, so check the page selector (ListManialinkPages)";
+        }
         if (!ok) {
             output["code"] = "TIMEOUT";
             output["retryable"] = true;
