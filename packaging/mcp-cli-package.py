@@ -65,7 +65,11 @@ def copy_package(source: Path, destination: Path) -> None:
     if source.name == ROOT_PACKAGE_DIR:
         (destination / "bin").mkdir()
         launcher = destination / "bin" / "tm-control-mcp.js"
-        shutil.copy2(source / "bin" / "tm-control-mcp.js", launcher)
+        # A CRLF launcher shebang does not work on POSIX (and the verifier
+        # rejects it), so the packed launcher is LF no matter how the
+        # source tree was checked out.
+        data = (source / "bin" / "tm-control-mcp.js").read_bytes()
+        launcher.write_bytes(data.replace(b"\r\n", b"\n"))
         launcher.chmod(0o755)
 
 
