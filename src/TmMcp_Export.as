@@ -44,4 +44,10 @@ namespace TmMcp {
     import Json::Value@ RegisterToolPackEx(ToolPackBuilder@ builder, Json::Value &in options) from "TmMcp";
     import Json::Value@ UnregisterToolPack(const string &in packId) from "TmMcp";
     import Json::Value@ ListToolPacks(Json::Value &in input) from "TmMcp";
+
+    // Call observers: opt-in, owner-scoped records of
+    // allowlisted socket calls. Empty id / false / null on refusal.
+    import string AddCallObserver(Json::Value@ spec) from "TmMcp";
+    import bool RemoveCallObserver(const string &in id, const string &in claimed = "") from "TmMcp";
+    import Json::Value@ DrainCallObserver(const string &in id, uint limit, const string &in claimed = "") from "TmMcp";
 }
