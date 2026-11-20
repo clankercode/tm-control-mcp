@@ -12,7 +12,10 @@
 [Setting name="Show tool call overlay" description="Bottom-left HUD listing recent MCP tool calls: name, duration, ok/ERR code."]
 bool S_TmMcpShowCallOverlay = true;
 
-void RenderInterface() {
+// Drawn from Render() (SettingsSocket.as), not RenderInterface: Present hides the
+// Openplanet overlay during takes, which suppresses RenderInterface, and the
+// overlay must appear in recordings.
+void RenderCallOverlayIfEnabled() {
     if (!S_TmMcpShowCallOverlay) return;
     TmMcp::RenderCallOverlay();
 }
@@ -102,7 +105,7 @@ namespace TmMcp {
         float lineH = fontH + 3.0;
         float pad = 6.0;
 
-        float longest = float(g_callOverlayHeader.Length);
+        float longest = UI::MeasureString(g_callOverlayHeader).x;
         for (uint i = 0; i < g_callOverlayRows.Length; i++) {
             CallOverlayRow@ row = g_callOverlayRows[i];
             // Live duration for running rows, throttled to ~4 Hz so steady
@@ -111,13 +114,12 @@ namespace TmMcp {
                 row.line = row.name + " " + (Time::Now - row.start) + "ms ...";
                 row.lineAt = Time::Now;
             }
-            if (float(row.line.Length) > longest) longest = float(row.line.Length);
+            vec2 measured = UI::MeasureString(row.line);  // exact drawn width (user report 2026-11-20)
+            if (measured.x > longest) longest = measured.x;
         }
 
-        // No CalcTextSize in this API; a per-character estimate is enough
-        // for a semi-transparent backing panel.
         float x0 = 14.0;
-        float width = fontH * 0.58 * longest + pad * 2.0;
+        float width = longest + pad * 2.0;
         float blockH = lineH * float(g_callOverlayRows.Length + 1) + pad;
         float y0 = float(Display::GetHeight()) - 16.0 - blockH;
 
