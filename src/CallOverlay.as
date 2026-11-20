@@ -12,6 +12,9 @@
 [Setting name="Show tool call overlay" description="Bottom-left HUD listing recent MCP tool calls: name, duration, ok/ERR code."]
 bool S_TmMcpShowCallOverlay = true;
 
+[Setting name="Tool call overlay: hide tools" description="Comma-separated tool names that get no overlay row (still counted in the header as hidden). Default hides the presentation director's own polling."]
+string S_TmMcpCallOverlayHide = "Present.Events,Present.Heartbeat";
+
 // Drawn from Render() (SettingsSocket.as), not RenderInterface: Present hides the
 // Openplanet overlay during takes, which suppresses RenderInterface, and the
 // overlay must appear in recordings.
@@ -40,7 +43,28 @@ namespace TmMcp {
     // refresh), so the bridge hot paths stay allocation-free per frame.
     array<CallOverlayRow@> g_callOverlayRows;
     uint64 g_callOverlayCalls = 0;  // admitted calls this dispatch session
+    uint64 g_callOverlayHidden = 0; // of those, calls on the hide list (no row)
     string g_callOverlayHeader = "";
+
+    // Parsed S_TmMcpCallOverlayHide, re-split only when the setting changes.
+    string g_callOverlayHideRaw = "\x01";  // never equals a real setting value
+    array<string> g_callOverlayHideNames;
+
+    bool CallOverlayHidden(const string &in name) {
+#if DEV
+        if (S_TmMcpCallOverlayHide != g_callOverlayHideRaw) {
+            g_callOverlayHideRaw = S_TmMcpCallOverlayHide;
+            g_callOverlayHideNames = CallOverlayParseHideList(g_callOverlayHideRaw);
+        }
+        return g_callOverlayHideNames.Find(name) >= 0;
+#else
+        return false;
+#endif
+    }
+
+    void CallOverlayUpdateHeader() {
+        g_callOverlayHeader = CallOverlayHeaderText(g_callOverlayCalls, g_callOverlayHidden);
+    }
 
     void CallOverlayPushRow(CallOverlayRow@ row) {
         // Evict the oldest finished row first: a burst of overlapping calls
@@ -57,7 +81,10 @@ namespace TmMcp {
     // Called in CallToolExpected right after a call is admitted.
     void CallOverlayBegin(uint64 id, const string &in name) {
         g_callOverlayCalls++;
-        g_callOverlayHeader = "MCP tools: " + g_callOverlayCalls;
+        bool hidden = CallOverlayHidden(name);
+        if (hidden) g_callOverlayHidden++;
+        CallOverlayUpdateHeader();
+        if (hidden) return;
         auto row = CallOverlayRow();
         row.id = id;
         row.name = name;
@@ -83,6 +110,8 @@ namespace TmMcp {
             }
         }
         if (row is null) {
+            // Hidden calls never had a row: do not recreate one.
+            if (CallOverlayHidden(name)) return;
             // Evicted while still running (8+ newer calls since it started).
             // Recreate it so the outcome is still shown.
             row = CallOverlayRow();

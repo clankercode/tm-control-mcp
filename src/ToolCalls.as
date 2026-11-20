@@ -282,6 +282,7 @@ namespace TmMcp {
         for (uint i = 0; i < g_UnfinishedWorkers.Length; i++) expired.Add(ToolCallToJson(g_UnfinishedWorkers[i]));
         o["instance"] = g_ToolCallInstance; o["uptimeMs"] = Time::Now - g_ToolCallsStarted;
         o["callOverlayTotal"] = g_callOverlayCalls;
+        o["callOverlayHidden"] = g_callOverlayHidden;
         o["active"] = active; o["expiredWorkers"] = expired;
         o["recoveryRequired"] = g_UnfinishedWorkers.Length > 0;
         o["eventLog"] = TmMcpRequestTracePath();
