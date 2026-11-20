@@ -493,6 +493,7 @@ Menu stack is **landed**. Clicks use `CControlBase::OnAction` — **not**
 | `EditNewMap` | Title-control new map (env + decoration + mapType). Leaves the current map first; stops with `DIALOG_BLOCKING` on the save prompt; `output.status`. |
 | `BackToMainMenu` | Unwind Editor/Race → menu. Stops with `blockedByDialog:true` on the unsaved-changes dialog (never answers it). |
 | `GetUILayers` / `GetActiveMenuPages` / `GetLayerTree` / `GetLayerXml` | Layer introspection. |
+| `ListManialinkPages` / `ViewManialinkPage` | What is on screen: pages across menu, playground and editor, and a concise text tree of visible controls (type, id, classes, label text). |
 | `ListMenuManialinkControls` / `FindMenuButtons` / `FindControlsByClass` / `FindControlsByLabel` | Discovery. |
 | `InspectMenuControl` / `FocusMenuControl` / `SetMenuControlVisible` | Probe / focus / show-hide. |
 | `ClickMenuButton` / `TriggerControlOnAction` | Real click dispatch. |

@@ -73,7 +73,7 @@ namespace TmMcp {
                 if (keys[k] == "tools") hasTools = true;
                 else if (keys[k] == "owner") hasOwner = true;
             }
-            if (!hasTools || keys.Length != (hasOwner ? 2 : 1) || spec["tools"].GetType() != Json::Type::Array) return "";
+            if (!hasTools || keys.Length != uint(hasOwner ? 2 : 1) || spec["tools"].GetType() != Json::Type::Array) return "";
             auto tools = spec["tools"];
             if (tools.Length == 0 || tools.Length > OBSERVER_MAX_TOOLS) return "";
             auto observer = CallObserver();
