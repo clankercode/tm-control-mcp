@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 
@@ -158,6 +159,11 @@ class PackagingTests(unittest.TestCase):
         packed = self.base / "packages"
         stage_tool.pack(self.output, packed, "linux-x64")
         verify_tool.verify_artifacts(packed, "0.1.0", "linux-x64")
+        with tarfile.open(next(packed.glob("*linux-x64*.tgz")), "r:gz") as archive:
+            for member in archive.getmembers():
+                if member.isfile() and member.name.endswith(("/bin/tm-control-mcp", "/bin/tm-control-mcp.js")):
+                    self.assertEqual(member.mode, 0o755,
+                                     f"{member.name} must stay executable regardless of the packing host")
         if sys.platform == "linux":
             smoke_tool.smoke(packed, self.binary, "linux-x64")
 

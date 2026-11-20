@@ -8,6 +8,7 @@ downloads dependencies, or runs an install hook.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 
 
 ROOT_PACKAGE_DIR = "tm-control-mcp"
@@ -122,6 +124,28 @@ def stage(source_root: Path, output_root: Path, platform: str, binary: Path, ver
     print(f"staged {descriptor['package']} {version} at {platform_destination}")
 
 
+EXECUTABLE_MEMBERS = ("/bin/tm-control-mcp", "/bin/tm-control-mcp.js")
+
+
+def normalize_pack_modes(pack_output: Path) -> None:
+    # npm pack inherits file modes from the host filesystem, and Windows
+    # cannot represent POSIX exec bits. Rewrite every tarball so the
+    # launcher and platform binaries stay executable no matter which
+    # host packed them.
+    for tarball in sorted(pack_output.glob("*.tgz")):
+        with tarfile.open(tarball, "r:gz") as archive:
+            members = archive.getmembers()
+            payloads = [archive.extractfile(member).read() if member.isfile() else None
+                        for member in members]
+        temporary = tarball.with_name(tarball.name + ".tmp")
+        with tarfile.open(temporary, "w:gz") as archive:
+            for member, payload in zip(members, payloads):
+                if member.isfile() and member.name.endswith(EXECUTABLE_MEMBERS):
+                    member.mode = 0o755
+                archive.addfile(member, io.BytesIO(payload) if payload is not None else None)
+        temporary.replace(tarball)
+
+
 def pack(output_root: Path, pack_output: Path, platform: str) -> None:
     npm = shutil.which("npm.cmd" if os.name == "nt" else "npm")
     if npm is None:
@@ -133,6 +157,7 @@ def pack(output_root: Path, pack_output: Path, platform: str) -> None:
              str((output_root / directory).resolve())],
             check=True, shell=False,
         )
+    normalize_pack_modes(pack_output)
 
 
 def main(argv: list[str] | None = None) -> int:
