@@ -162,7 +162,7 @@ def schema(name):
 def test_schemas():
     assert schema("ListManialinkPages")["properties"] == {"includeHidden": {"type": "boolean"}}
     view = schema("ViewManialinkPage")
-    assert set(view["properties"]) == {"page", "full", "maxLines", "maxDepth", "includeHidden", "rawText"}
+    assert set(view["properties"]) == {"page", "full", "find", "maxLines", "maxDepth", "includeHidden", "rawText"}
     assert view.get("required") is None, "page is optional: no page views every visible page"
     for name in TOOLS:
         assert schema(name)["additionalProperties"] is False
@@ -211,3 +211,111 @@ def test_truncation_is_reported():
 def test_every_layer_source_is_collected():
     for source in ('"menu"', '"playground"', '"ui"', '"clientUi"', '"uiConfig"', '"editor"'):
         assert source in VIEW, f"layer source {source} not collected"
+
+
+ACTIONS = (ROOT / "src" / "ManialinkActions.as").read_text()
+READINESS = (ROOT / "src" / "Readiness.as").read_text()
+
+
+def test_text_filter_and_wait_cap(as_runner, tmp_path):
+    run_policy(as_runner, tmp_path, r'''
+    Check(MlIdLooksClickable("button-toggle-ghost"), "quad icon button by id");
+    Check(MlIdLooksClickable("button_ok"), "underscore form");
+    Check(!MlIdLooksClickable("label-button-text"), "button later in the id");
+    Check(!MlIdLooksClickable(""), "anonymous");
+    Check(MlTextContains("frame#button-play \"Play\"", "PLAY"), "case-insensitive");
+    Check(MlTextContains("anything", ""), "empty needle matches");
+    Check(!MlTextContains("Records", "rank"), "no match");
+    Check(MlClampWaitMs(-5) == 0, "negative to zero");
+    Check(MlClampWaitMs(20000) == 20000, "kept");
+    Check(MlClampWaitMs(300000) == 300000, "cap is allowed");
+    Check(MlClampWaitMs(1800000) == 300000, "capped at 5 minutes");
+    ''')
+
+
+def test_click_tool_registered():
+    assert 'name == "ClickManialinkControl"' in MCP_TOOLS
+    assert 'if (name == "ClickManialinkControl") return ClickManialinkControl(input);' in MCP_TOOLS
+    s = schema("ClickManialinkControl")
+    assert s["required"] == ["page", "id"]
+    assert set(s["properties"]) == {"page", "id", "index", "full", "allowHidden"}
+
+
+def test_click_refuses_what_a_player_cannot_click():
+    body = ACTIONS[ACTIONS.index("Json::Value@ ClickManialinkControl"):ACTIONS.index("bool ManialinkConditionMet")]
+    assert '"NOT_DRAWN"' in body and "allowHidden" in body
+    assert body.index("ManialinkControlDrawn") < body.index("OnAction()"), "drawn check before the click"
+    # Live 2026-11-20: ids repeat per list row (18 button-toggle-ghost on the
+    # records list). index counts the lines the view prints with that id, so
+    # the click lands on the line the agent read (review 2026-11-20).
+    assert "ManialinkPrintedControls(page, controlId, full, allowHidden)" in body
+    assert 'output["matches"]' in body
+    assert "_FindNavZoneInSubtree" in body, "clicks the Nadeo hitbox like ClickMenuButton"
+
+
+def test_printed_controls_mirror_the_view():
+    body = VIEW[VIEW.index("void _MlPrintedById"):VIEW.index("void _MlEmit")]
+    # same build as the view, same collapse rule as _MlEmit, no cuts
+    assert "_MlBuild(w, mainFrame, 0)" in body
+    assert "MlCollapseFrame(n.isFrame, n.id, n.classes.Length, n.kids.Length, n.hidden, n.focused)" in body
+    assert "w.maxDepth = 64" in body and "ML_VIEW_MAX_LINES_CAP" in body
+    assert "@n.ctrl = ctrl;" in VIEW
+
+
+def test_find_matches_only_printed_text_and_keeps_depth_markers():
+    filt = VIEW[VIEW.index("_MlNode@ _MlFilter"):VIEW.index("void _MlPrintedById")]
+    assert "_MlShownValue(n, full)" in filt
+    assert "n.cutChildren = 0" not in filt
+
+
+def test_gone_flags_a_page_that_never_matched():
+    assert 'last["pageFound"]' in ACTIONS
+    wait = READINESS[READINESS.index("Json::Value@ WaitUntil"):]
+    assert 'output["pageEverFound"]' in wait and "trivially true" in wait
+
+
+def test_ui_wait_never_sleeps_past_its_budget():
+    wait = READINESS[READINESS.index("Json::Value@ WaitUntil"):]
+    assert "used >= uint64(timeoutMs) ? 0 : Math::Min(slice, uint(uint64(timeoutMs) - used))" in wait
+
+
+def test_name_lookups_are_cached_across_polls():
+    assert "_MlCachedName(pages[i])" in ACTIONS
+    assert "e.xmlLength != len" in ACTIONS, "refresh when a layer's page is replaced"
+
+
+def test_drawn_walks_every_ancestor():
+    body = ACTIONS[ACTIONS.index("bool ManialinkControlDrawn"):ACTIONS.index("string ManialinkControlText")]
+    assert "_MlLayerVisible(page.layer)" in body and "cur.Parent" in body and "cur.Visible" in body
+
+
+def test_manialink_wait_is_capped_at_five_minutes():
+    assert 'condLower == "manialink"' in READINESS
+    assert 'cond == "manialink"' in READINESS
+    wait = READINESS[READINESS.index("Json::Value@ WaitUntil"):]
+    assert "MlClampWaitMs(" in wait
+    # The cap covers loading too: checked before the loading branch.
+    assert wait.index("if (uiWait && now - t0 >= uint64(timeoutMs)) break;") < wait.index("if (loading) {")
+    assert 'string(input["page"]).Length == 0' in wait, "page is required"
+    wait_schema = schema("WaitUntil")
+    assert {"id", "index", "full", "text", "state"} <= set(wait_schema["properties"])
+    line = next(l for l in MCP_TOOLS.splitlines() if 'MakeTool("WaitUntil"' in l)
+    assert "300000 (5 min)" in line
+
+
+def test_entry_values_strip_format_codes():
+    # Live 2026-11-20: Page_LocalServer entries read "$t$iServer name".
+    assert VIEW.count("rawText ? v : Text::StripFormatCodes(v)") == 2, "entry and textedit"
+
+
+def test_find_filters_after_brief_build():
+    assert "_MlFilter(root, w.find, w.full)" in VIEW
+    assert 'output["noMatchPages"]' in VIEW
+    assert '"find":{"type":"string"}' in next(l for l in MCP_TOOLS.splitlines() if 'MakeTool("ViewManialinkPage"' in l)
+
+
+def test_menu_only_tools_point_at_context_wide_ones():
+    for name in ("GetUILayers", "GetLayerTree", "ListMenuManialinkControls", "FindControlsByLabel",
+                 "FindMenuButtons", "ClickMenuButton", "GetActiveMenuPages"):
+        line = next(l for l in MCP_TOOLS.splitlines() if f'MakeTool("{name}", "' in l)
+        assert "Menu only" in line, name

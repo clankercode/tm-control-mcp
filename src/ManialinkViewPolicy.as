@@ -77,6 +77,12 @@ namespace TmMcp {
         return false;
     }
 
+    // Nadeo names clickable quads "button-..." without a navigation class
+    // (the record list's button-toggle-ghost, button-spec-record).
+    bool MlIdLooksClickable(const string &in id) {
+        return id.StartsWith("button-") || id.StartsWith("button_");
+    }
+
     // Brief view: keep text-bearing controls, clickables, the focus, and
     // frames that still hold something. Drops decoration (quads, empty
     // labels, empty frames).
@@ -95,6 +101,20 @@ namespace TmMcp {
     // child is a plain, visible, unfocused leaf label.
     bool MlBriefAbsorb(const string &in childType, uint childKids, bool childHidden, bool childFocused) {
         return childType == "label" && childKids == 0 && !childHidden && !childFocused;
+    }
+
+    // Case-insensitive (ASCII) substring test, for text filters.
+    bool MlTextContains(const string &in haystack, const string &in needle) {
+        return needle.Length == 0 || MlLower(haystack).IndexOf(MlLower(needle)) >= 0;
+    }
+
+    // WaitUntil caps for UI waits: the tool contract is a 5-minute ceiling.
+    const int ML_WAIT_MAX_MS = 300000;
+    const int ML_WAIT_DEFAULT_MS = 20000;
+
+    int MlClampWaitMs(int requested) {
+        if (requested < 0) return 0;
+        return requested > ML_WAIT_MAX_MS ? ML_WAIT_MAX_MS : requested;
     }
 
     // "menu:12" style selectors name a ref; anything else is a manialink name.

@@ -159,14 +159,16 @@ namespace TmMcp {
         if (entry !is null) {
             try {
                 if (_MlIsPasswordFormat(int(entry.TextFormat))) return "value=<password>";
-                return "value=" + MlQuoteText(string(entry.Value));
+                string v = string(entry.Value);
+                return "value=" + MlQuoteText(rawText ? v : Text::StripFormatCodes(v));
             } catch { return ""; }
         }
         auto edit = cast<CGameManialinkTextEdit>(ctrl);
         if (edit !is null) {
             try {
                 if (_MlIsPasswordFormat(int(edit.TextFormat))) return "value=<password>";
-                return "value=" + MlQuoteText(string(edit.Value));
+                string v = string(edit.Value);
+                return "value=" + MlQuoteText(rawText ? v : Text::StripFormatCodes(v));
             } catch { return ""; }
         }
         auto quad = cast<CGameManialinkQuad>(ctrl);
@@ -193,6 +195,7 @@ namespace TmMcp {
         bool rawText;
         bool includeHidden;
         bool full;               // false: brief view (decoration pruned)
+        string find;             // keep matching lines (+ ancestors); "" keeps all
         uint controls = 0;       // control lines printed
         bool truncated = false;  // maxLines cut the output
         bool depthLimited = false;
@@ -200,6 +203,7 @@ namespace TmMcp {
     }
 
     class _MlNode {
+        CGameManialinkControl@ ctrl;
         string type, id, value;
         array<string> classes;
         bool isFrame, hidden, focused, clickable;
@@ -217,6 +221,7 @@ namespace TmMcp {
     // controls that carry nothing an agent acts on (see MlBriefKeep).
     _MlNode@ _MlBuild(_MlWalk@ w, CGameManialinkControl@ ctrl, uint depth) {
         auto n = _MlNode();
+        @n.ctrl = ctrl;
         auto frame = cast<CGameManialinkFrame>(ctrl);
         n.isFrame = frame !is null;
         try { n.id = ctrl.ControlId; } catch { n.id = ""; }
@@ -227,7 +232,7 @@ namespace TmMcp {
         try { visible = ctrl.Visible; } catch { visible = false; }
         n.hidden = !visible;
         n.focused = ctrl is w.focused;
-        n.clickable = MlIsClickable(n.classes);
+        n.clickable = MlIsClickable(n.classes) || MlIdLooksClickable(n.id);
         try { n.type = MlShortType(Reflection::TypeOf(ctrl).Name); } catch { n.type = "?"; }
         n.value = _MlControlValue(ctrl, w.rawText);
         if (frame !is null) {
@@ -265,6 +270,57 @@ namespace TmMcp {
         return n;
     }
 
+    // find: keep nodes whose own line matches, plus their ancestors; a
+    // matching node keeps its whole subtree. Runs on the finished tree so
+    // brief-mode absorbing and collapsing happen first.
+    // The value a line prints: brief mode hides quad values (image paths).
+    string _MlShownValue(_MlNode@ n, bool full) {
+        return full || n.type != "quad" ? n.value : "";
+    }
+
+    _MlNode@ _MlFilter(_MlNode@ n, const string &in find, bool full) {
+        // Match only what the printed line shows.
+        if (MlTextContains(MlNodeLine(0, n.type, n.id, n.classes, {_MlShownValue(n, full)}), find)) return n;
+        array<_MlNode@> kept;
+        for (uint i = 0; i < n.kids.Length; i++) {
+            auto kid = _MlFilter(n.kids[i], find, full);
+            if (kid !is null) kept.InsertLast(kid);
+        }
+        if (kept.Length == 0) return null;
+        n.kids = kept;
+        // cutChildren stays: those children were never read, so the
+        // "(+N children)" marker still tells the truth about them.
+        return n;
+    }
+
+    // Nodes ViewManialinkPage would print with ControlId == id, in print
+    // order: mirrors _MlEmit, so a collapsed (unprinted) node never matches.
+    void _MlPrintedById(_MlNode@ n, const string &in id, bool full, array<_MlNode@>@ found) {
+        if (full && MlCollapseFrame(n.isFrame, n.id, n.classes.Length, n.kids.Length, n.hidden, n.focused)) {
+            _MlPrintedById(n.kids[0], id, full, found);
+            return;
+        }
+        if (n.id == id) found.InsertLast(n);
+        for (uint i = 0; i < n.kids.Length; i++) _MlPrintedById(n.kids[i], id, full, found);
+    }
+
+    // Build a page's tree exactly as ViewManialinkPage {full, includeHidden}
+    // prints it (no depth or line cut) and return the printed nodes with id.
+    array<_MlNode@>@ ManialinkPrintedControls(MlPageRef@ page, const string &in id, bool full, bool includeHidden) {
+        array<_MlNode@> found;
+        auto mainFrame = _MlMainFrame(page.layer);
+        if (mainFrame is null || id.Length == 0) return found;
+        auto w = _MlWalk();
+        w.maxLines = ML_VIEW_MAX_LINES_CAP;
+        w.maxDepth = 64;
+        w.full = full;
+        w.includeHidden = includeHidden;
+        try { @w.focused = page.layer.LocalPage.FocusedControl; } catch { /* none */ }
+        auto root = _MlBuild(w, mainFrame, 0);
+        if (root !is null) _MlPrintedById(root, id, full, found);
+        return found;
+    }
+
     void _MlEmit(_MlWalk@ w, _MlNode@ n, uint depth) {
         if (w.truncated) return;
         // Brief mode collapsed its wrappers in _MlBuild.
@@ -274,7 +330,7 @@ namespace TmMcp {
         }
         if (w.lines.Length >= w.maxLines) { w.truncated = true; return; }
         array<string> extras;
-        extras.InsertLast(w.full || n.type != "quad" ? n.value : "");
+        extras.InsertLast(_MlShownValue(n, w.full));
         if (n.hidden) extras.InsertLast("[hidden]");
         if (n.focused) extras.InsertLast("[focused]");
         if (n.cutChildren > 0) extras.InsertLast("(+" + n.cutChildren + " children)");
@@ -291,11 +347,13 @@ namespace TmMcp {
         w.rawText = bool(input.Get("rawText", false));
         w.includeHidden = bool(input.Get("includeHidden", false));
         w.full = bool(input.Get("full", false));
+        w.find = input.HasKey("find") ? string(input["find"]) : "";
         auto pages = CollectManialinkPages();
         auto viewed = Json::Array();
         auto omitted = Json::Array();
         auto empty = Json::Array();
         auto skippedLoading = Json::Array();
+        auto noMatch = Json::Array();
         uint matchedNoPage = 0;
         for (uint i = 0; i < pages.Length; i++) {
             auto r = pages[i];
@@ -325,6 +383,10 @@ namespace TmMcp {
             if (type != "Normal") header += " [" + type + "]";
             if (!_MlLayerVisible(r.layer)) header += " [not drawn]";
             auto root = _MlBuild(w, mainFrame, 0);
+            if (root !is null && w.find.Length > 0) {
+                @root = _MlFilter(root, w.find, w.full);
+                if (root is null) { noMatch.Add(r.ref); continue; }
+            }
             if (root is null) {
                 // Brief mode: nothing but decoration. List the page, print nothing.
                 empty.Add(r.ref);
@@ -334,7 +396,7 @@ namespace TmMcp {
             _MlEmit(w, root, 0);
             viewed.Add(r.ref);
         }
-        if (viewed.Length == 0 && omitted.Length == 0 && empty.Length == 0 && skippedLoading.Length == 0) {
+        if (viewed.Length == 0 && omitted.Length == 0 && empty.Length == 0 && skippedLoading.Length == 0 && noMatch.Length == 0) {
             if (matchedNoPage > 0) return MakeError((selector.Length > 0 ? "'" + selector + "' matched only layers" : "every visible layer is a layer")
                                                     + " with no loaded page (LocalPage/MainFrame missing)", "NO_PAGE");
             if (selector.Length > 0) return MakeError("no page matches '" + selector + "'; call ListManialinkPages for refs and names", "NOT_FOUND");
@@ -353,6 +415,7 @@ namespace TmMcp {
         if (omitted.Length > 0) output["omittedPages"] = omitted;
         if (empty.Length > 0) output["emptyPages"] = empty;
         if (skippedLoading.Length > 0) output["loadingScreenPages"] = skippedLoading;
+        if (noMatch.Length > 0) output["noMatchPages"] = noMatch;
         return MakeSuccess(output);
     }
 }

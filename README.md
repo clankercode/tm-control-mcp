@@ -494,6 +494,7 @@ Menu stack is **landed**. Clicks use `CControlBase::OnAction` — **not**
 | `BackToMainMenu` | Unwind Editor/Race → menu. Stops with `blockedByDialog:true` on the unsaved-changes dialog (never answers it). |
 | `GetUILayers` / `GetActiveMenuPages` / `GetLayerTree` / `GetLayerXml` | Layer introspection. |
 | `ListManialinkPages` / `ViewManialinkPage` | What is on screen: pages across menu, playground and editor, and a concise text tree of visible controls (type, id, classes, label text). |
+| `ClickManialinkControl` / `WaitUntil {condition:manialink}` | Click a control by page + id in any context (menu, map, editor); wait (max 5 min) for a page or control to be shown, gone, or show some text. |
 | `ListMenuManialinkControls` / `FindMenuButtons` / `FindControlsByClass` / `FindControlsByLabel` | Discovery. |
 | `InspectMenuControl` / `FocusMenuControl` / `SetMenuControlVisible` | Probe / focus / show-hide. |
 | `ClickMenuButton` / `TriggerControlOnAction` | Real click dispatch. |
