@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -118,5 +119,5 @@ test("launcher source keeps the no-shell and argument-forwarding contract visibl
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]) {
     assert.match(launcherText, new RegExp(signal));
   }
-  assert.ok(here.endsWith("/test/"));
+  assert.ok(here.endsWith(path.sep + "test" + path.sep));
 });
