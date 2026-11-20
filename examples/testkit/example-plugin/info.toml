@@ -1,0 +1,11 @@
+[meta]
+name = "TestKit Sample"
+author = "XertroV"
+category = "Development"
+version = "0.1.0"
+
+[script]
+defines = ["DEV"]
+optional_dependencies = ["tm-control-mcp"]
+module = "TestKitSample"
+timeout = 15000

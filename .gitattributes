@@ -1,0 +1,4 @@
+# The npm launcher's shebang must survive Windows checkouts: a CRLF
+# `#!/usr/bin/env node\r\n` fails on POSIX and the artifact verifier
+# rejects it. Keep JS sources LF everywhere.
+*.js text eol=lf

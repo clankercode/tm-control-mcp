@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import stat
 import sys
@@ -189,7 +190,10 @@ def verify_artifacts(artifact_root: Path, version: str | None, platform: str | N
                 fail(f"{descriptor['package']} does not match downloaded build output {built_binary}")
         if package.metadata.get("bin"):
             fail("platform packages must not compete with the launcher CLI entrypoint")
-        if platform_name == "linux-x64" and not binary[0] & stat.S_IXUSR:
+        # Windows filesystems cannot represent POSIX exec bits, and pack()
+        # normalizes tar member modes after npm pack, so this on-disk check
+        # only means something on POSIX hosts.
+        if platform_name == "linux-x64" and os.name != "nt" and not binary[0] & stat.S_IXUSR:
             fail("Linux x64 binary is not executable")
 
 

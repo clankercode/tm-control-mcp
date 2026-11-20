@@ -1188,14 +1188,39 @@ mod tests {
     fn wait_tools_get_deadlines_past_their_timeout() {
         let d = NATIVE_TIMEOUT;
         assert_eq!(native_call_deadline("GetMode", &json!({}), d), d);
-        assert_eq!(native_call_deadline("TakeScreenshot", &json!({"timeoutMs": 900000}), d), d);
-        assert_eq!(native_call_deadline("WaitEditorCamera", &json!({"timeoutMs": 120000}), d), Duration::from_secs(125));
-        assert_eq!(native_call_deadline("WaitEditorCamera", &json!({"timeoutMs": 900000}), d), Duration::from_secs(305));
-        assert_eq!(native_call_deadline("WaitEditorCamera", &json!({"timeoutMs": 1000}), d), d, "never below the default");
-        assert_eq!(native_call_deadline("WaitEditorCamera", &json!({}), d), Duration::from_secs(330));
-        assert_eq!(native_call_deadline("WaitUntil", &json!({"timeoutMs": 60000}), d), Duration::from_secs(2100));
-        assert_eq!(native_call_deadline("WaitUntil", &json!({}), d), Duration::from_secs(2100));
-        assert_eq!(native_call_deadline("WaitUntil", &json!({"timeoutMs": 0}), d), d);
+        assert_eq!(
+            native_call_deadline("TakeScreenshot", &json!({"timeoutMs": 900000}), d),
+            d
+        );
+        assert_eq!(
+            native_call_deadline("WaitEditorCamera", &json!({"timeoutMs": 120000}), d),
+            Duration::from_secs(125)
+        );
+        assert_eq!(
+            native_call_deadline("WaitEditorCamera", &json!({"timeoutMs": 900000}), d),
+            Duration::from_secs(305)
+        );
+        assert_eq!(
+            native_call_deadline("WaitEditorCamera", &json!({"timeoutMs": 1000}), d),
+            d,
+            "never below the default"
+        );
+        assert_eq!(
+            native_call_deadline("WaitEditorCamera", &json!({}), d),
+            Duration::from_secs(330)
+        );
+        assert_eq!(
+            native_call_deadline("WaitUntil", &json!({"timeoutMs": 60000}), d),
+            Duration::from_secs(2100)
+        );
+        assert_eq!(
+            native_call_deadline("WaitUntil", &json!({}), d),
+            Duration::from_secs(2100)
+        );
+        assert_eq!(
+            native_call_deadline("WaitUntil", &json!({"timeoutMs": 0}), d),
+            d
+        );
     }
 
     struct FakeBackend;

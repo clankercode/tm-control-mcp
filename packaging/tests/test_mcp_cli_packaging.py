@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 
@@ -67,6 +68,19 @@ class PackagingTests(unittest.TestCase):
             self.verify()
         self.stage("win32-x64")
         self.verify()
+
+    def test_stage_normalizes_crlf_launcher_to_lf(self):
+        # Windows checkouts hand the source launcher CRLF endings; the
+        # packed launcher must still carry a working POSIX shebang.
+        source = self.base / "npm-crlf"
+        shutil.copytree(self.source, source)
+        launcher = source / "tm-control-mcp/bin/tm-control-mcp.js"
+        launcher.write_bytes(launcher.read_bytes().replace(b"\n", b"\r\n"))
+        stage_tool.stage(source, self.output, "linux-x64", self.binary, "0.1.0")
+        staged = (self.output / "tm-control-mcp/bin/tm-control-mcp.js").read_bytes()
+        self.assertTrue(staged.startswith(b"#!/usr/bin/env node\n"))
+        self.assertNotIn(b"\r", staged)
+        verify_tool.verify_artifacts(self.output, "0.1.0", "linux-x64")
 
     def test_stage_copies_exact_binary_and_replaces_stale_output(self):
         original_metadata = (self.source / "tm-control-mcp/package.json").read_bytes()
@@ -145,6 +159,11 @@ class PackagingTests(unittest.TestCase):
         packed = self.base / "packages"
         stage_tool.pack(self.output, packed, "linux-x64")
         verify_tool.verify_artifacts(packed, "0.1.0", "linux-x64")
+        with tarfile.open(next(packed.glob("*linux-x64*.tgz")), "r:gz") as archive:
+            for member in archive.getmembers():
+                if member.isfile() and member.name.endswith(("/bin/tm-control-mcp", "/bin/tm-control-mcp.js")):
+                    self.assertEqual(member.mode, 0o755,
+                                     f"{member.name} must stay executable regardless of the packing host")
         if sys.platform == "linux":
             smoke_tool.smoke(packed, self.binary, "linux-x64")
 
