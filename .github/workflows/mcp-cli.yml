@@ -138,7 +138,7 @@ jobs:
       - name: Upload platform packages
         uses: actions/upload-artifact@v4
         with:
-          name: mcp-cli-packages-${{ matrix.platform }}
+          name: mcp-cli-package-${{ matrix.platform }}
           if-no-files-found: error
           path: dist/packages/*-${{ matrix.platform }}-*.tgz
       - name: Upload root launcher package once
