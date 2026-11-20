@@ -357,6 +357,7 @@ namespace TmMcp {
             if (c is null) continue;
             Json::Value f = Json::Object();
             f["idName"] = c.Id.GetName();
+            f["visible"] = c.IsVisible && !c.IsHiddenExternal && !c.IsHiddenInternal;
             frames.Add(f);
         }
         return frames;
@@ -408,7 +409,7 @@ namespace TmMcp {
         auto editor = app is null ? null : cast<CGameCtnEditorFree>(app.Editor);
         if (editor is null || editor.EditorInterface is null || editor.EditorInterface.InterfaceRoot is null) return "";
         auto frame = _DlgFindChild(editor.EditorInterface.InterfaceRoot, "FrameTempMsg");
-        if (frame is null) return "";
+        if (frame is null || !frame.IsVisible || frame.IsHiddenExternal || frame.IsHiddenInternal) return "";
         auto label = cast<CControlLabel>(_DlgFindChild(cast<CControlContainer>(frame), "LabelTempMsg"));
         if (label is null) return "";
         // The live text sits on the label's nod (like the SaveAs entry), not the
@@ -507,6 +508,19 @@ namespace TmMcp {
         return MakeSuccess(output);
     }
 
+    // First modal-looking frame on app.ActiveMenus ("" when none). Ordinary
+    // menu pages are not dialogs.
+    string _ModalMenuFrameName(CTrackMania@ app) {
+        if (app is null) return "";
+        for (uint i = 0; i < app.ActiveMenus.Length; i++) {
+            auto menu = app.ActiveMenus[i];
+            if (menu is null || menu.CurrentFrame is null) continue;
+            string id = menu.CurrentFrame.IdName;
+            if (IsModalDialogFrameName(id)) return id;
+        }
+        return "";
+    }
+
     Json::Value BasicDialogSummary() {
         auto app = cast<CTrackMania>(GetApp());
         Json::Value output = Json::Object();
@@ -517,10 +531,15 @@ namespace TmMcp {
 
         auto bd = app.BasicDialogs;
         auto frame = bd.Dialogs is null ? null : bd.Dialogs.CurrentFrame;
+        string menuFrame = _ModalMenuFrameName(app);
+        // dialog is the raw BasicDialogs enum; dialogKind also covers the
+        // AskYesNo/SaveAs frames the enum reports as None (DialogPolicy.as).
+        string kind = ClassifyDialogKind(int(bd.Dialog), frame is null ? "" : string(frame.IdName), menuFrame);
         output["available"] = true;
         output["dialog"] = int(bd.Dialog);
-        output["dialogKind"] = bd.Dialog == CGameDialogs::EDialog::None ? "none"
-            : (bd.Dialog == CGameDialogs::EDialog::Message ? "message" : "wait");
+        output["dialogKind"] = kind;
+        output["blocking"] = DialogKindBlocks(kind);
+        if (menuFrame.Length > 0) output["menuFrameIdName"] = menuFrame;
         output["hasFrame"] = frame !is null;
         if (frame !is null) {
             output["frameIdName"] = frame.IdName;
@@ -585,6 +604,26 @@ namespace TmMcp {
         if (lower == "tga") return ".tga";
         if (lower == "dds") return ".dds";
         return ".jpg";
+    }
+
+    string ScreenshotPathKey(const string &in path) {
+        return path.Replace("\\", "/").ToLower();
+    }
+
+    void SnapshotScreenshotFile(Json::Value &inout files, const string &in path) {
+        if (!IO::FileExists(path)) return;
+        auto state = Json::Object();
+        state["size"] = int64(IO::FileSize(path));
+        state["modified"] = IO::FileModifiedTime(path);
+        files[ScreenshotPathKey(path)] = state;
+    }
+
+    void SnapshotScreenshotFolder(Json::Value &inout files, const string &in folder, const string &in ext) {
+        if (!IO::FolderExists(folder)) return;
+        auto paths = IO::IndexFolder(folder, false);
+        for (uint i = 0; i < paths.Length; i++) {
+            if (paths[i].ToLower().EndsWith(ext)) SnapshotScreenshotFile(files, paths[i]);
+        }
     }
 
     string SafeMapFileStem(const string &in name) {
@@ -996,8 +1035,12 @@ namespace TmMcp {
             || name == "SaveMapFlow"
             || name == "GetDialog"
             || name == "RespondDialog"
+            || name == "GetBlockingScreen"
+            || name == "DismissBlockingScreen"
             || name == "GetEditorInterfaceTree"
             || name == "GetMenuFrameTree"
+            || name == "ClickClassicMenuControl"
+            || name == "JoinServer"
             || name == "ControlValidation"
             || name == "ControlSelection"
             || name == "GetCursor"
@@ -1005,6 +1048,8 @@ namespace TmMcp {
             || name == "GetEditorCamera"
             || name == "SetEditorCamera"
             || name == "ControlCamera"
+            || name == "AnimateEditorCamera"
+            || name == "WaitEditorCamera"
             || name == "TakeScreenshot"
             || name == "GetBlocks"
             || name == "GetRecentBlocks"
@@ -1046,6 +1091,9 @@ namespace TmMcp {
             || name == "GetUILayers"
             || name == "GetActiveMenuPages"
             || name == "GetLayerTree"
+            || name == "ListManialinkPages"
+            || name == "ViewManialinkPage"
+            || name == "ClickManialinkControl"
             || name == "FindMenuButtons"
             || name == "FindControlsByClass"
             || name == "FindControlsByLabel"
@@ -1057,6 +1105,7 @@ namespace TmMcp {
             || name == "TriggerControlOnAction"
             || name == "CreateMapViaMenu"
             || name == "GetManiaScriptDiagnostics"
+            || name == "DismissManiaScriptDebugger"
             || name == "RunManialinkScript"
             || name == "GetReadiness"
             || name == "GetLightmapComputeState"
@@ -1077,16 +1126,25 @@ namespace TmMcp {
             || name == "GetRaceData"
             || name == "GetPlayers"
             || name == "GetServerInfo"
+            || name == "GetInputBindings"
+            || name == "ResolveMwIds"
             || name == "GetVehicleState"
             || name == "ListVehicleVis"
             || name == "GetVehicleVis"
             || name == "GetRenderCamera"
             || name == "ControlPlayCamera"
             || name == "ControlOverlay"
+            || name == "GetPauseState"
+            || name == "ControlPause"
+            || name == "GetDisplaySetting"
+            || name == "SetDisplaySetting"
+            || name == "RestoreDisplaySetting"
+            || name == "MaxFPS"
             || name == "ProjectWorldToScreen"
             || name == "SetEditorOrbitalTarget"
             || name == "GetResult"
             || name == "ListToolPacks"
+            || name == "ListTools"
             || name == "GetTypeInfo"
             || name == "PatchLayerXml"
             || name == "ControlEditorScriptPlugins"
@@ -1104,6 +1162,8 @@ namespace TmMcp {
         if (ToolRequiresEditorPlusPlus(name) && !IsEditorPlusPlusAvailable()) {
             return EditorPlusPlusMissingError();
         }
+        auto dialogRefusal = RefuseWhileDialogBlocks(name, input);
+        if (dialogRefusal !is null) return dialogRefusal;
         if (name == "GetMode") return GetMode(input);
         if (name == "OpenMapInEditor") return OpenMapInEditor(input);
         if (name == "PlayMap") return PlayMap(input);
@@ -1119,8 +1179,12 @@ namespace TmMcp {
         if (name == "UndoRedo") return UndoRedo(input);
         if (name == "GetDialog") return GetDialog(input);
         if (name == "RespondDialog") return RespondDialog(input);
+        if (name == "GetBlockingScreen") return GetBlockingScreen(input);
+        if (name == "DismissBlockingScreen") return DismissBlockingScreen(input);
         if (name == "GetEditorInterfaceTree") return GetEditorInterfaceTree(input);
         if (name == "GetMenuFrameTree") return GetMenuFrameTree(input);
+        if (name == "ClickClassicMenuControl") return ClickClassicMenuControl(input);
+        if (name == "JoinServer") return JoinServer(input);
         if (name == "ControlValidation") return ControlValidation(input);
         if (name == "ControlSelection") return ControlSelection(input);
         if (name == "GetCursor") return GetCursor(input);
@@ -1129,6 +1193,8 @@ namespace TmMcp {
         if (name == "GetEditorCamera") return GetEditorCamera(input);
         if (name == "SetEditorCamera") return SetEditorCamera(input);
         if (name == "ControlCamera") return ControlCamera(input);
+        if (name == "AnimateEditorCamera") return AnimateEditorCamera(input);
+        if (name == "WaitEditorCamera") return WaitEditorCamera(input);
         if (name == "FocusCamera") return FocusCamera(input);
         if (name == "TakeScreenshot") return TakeScreenshot(input);
         if (name == "GetBlocks") return GetBlocks(input);
@@ -1191,6 +1257,9 @@ namespace TmMcp {
         if (name == "GetUILayers") return GetUILayers(input);
         if (name == "GetActiveMenuPages") return GetActiveMenuPages(input);
         if (name == "GetLayerTree") return GetLayerTree(input);
+        if (name == "ListManialinkPages") return ListManialinkPages(input);
+        if (name == "ViewManialinkPage") return ViewManialinkPage(input);
+        if (name == "ClickManialinkControl") return ClickManialinkControl(input);
         if (name == "FindMenuButtons") return FindMenuButtons(input);
         if (name == "FindControlsByClass") return FindControlsByClass(input);
         if (name == "FindControlsByLabel") return FindControlsByLabel(input);
@@ -1202,6 +1271,7 @@ namespace TmMcp {
         if (name == "TriggerControlOnAction") return TriggerControlOnAction(input);
         if (name == "CreateMapViaMenu") return CreateMapViaMenu(input);
         if (name == "GetManiaScriptDiagnostics") return GetManiaScriptDiagnostics(input);
+        if (name == "DismissManiaScriptDebugger") return DismissManiaScriptDebugger(input);
         if (name == "RunManialinkScript") return RunManialinkScript(input);
         if (name == "GetReadiness") return GetReadiness(input);
         if (name == "GetLightmapComputeState") return GetLightmapComputeState(input);
@@ -1230,16 +1300,25 @@ namespace TmMcp {
         if (name == "GetRaceData") return GetRaceData(input);
         if (name == "GetPlayers") return GetPlayers(input);
         if (name == "GetServerInfo") return GetServerInfo(input);
+        if (name == "GetInputBindings") return GetInputBindings(input);
+        if (name == "ResolveMwIds") return ResolveMwIds(input);
         if (name == "GetVehicleState") return GetVehicleState(input);
         if (name == "ListVehicleVis") return ListVehicleVis(input);
         if (name == "GetVehicleVis") return GetVehicleVis(input);
         if (name == "GetRenderCamera") return GetRenderCamera(input);
         if (name == "ControlPlayCamera") return ControlPlayCamera(input);
         if (name == "ControlOverlay") return ControlOverlay(input);
+        if (name == "GetPauseState") return GetPauseState(input);
+        if (name == "ControlPause") return ControlPause(input);
+        if (name == "GetDisplaySetting") return GetDisplaySetting(input);
+        if (name == "SetDisplaySetting") return SetDisplaySetting(input);
+        if (name == "RestoreDisplaySetting") return RestoreDisplaySetting(input);
+        if (name == "MaxFPS") return MaxFPS(input);
         if (name == "ProjectWorldToScreen") return ProjectWorldToScreen(input);
         if (name == "SetEditorOrbitalTarget") return SetEditorOrbitalTarget(input);
         if (name == "GetResult") return GetResult(input);
         if (name == "ListToolPacks") return ListToolPacks(input);
+        if (name == "ListTools") return ListTools(input);
         if (name == "GetTypeInfo") return GetTypeInfo(input);
         if (name == "PatchLayerXml") return PatchLayerXml(input);
         if (name == "ControlEditorScriptPlugins") return ControlEditorScriptPlugins(input);
@@ -1247,7 +1326,7 @@ namespace TmMcp {
         if (name == "ScanKinematicItems") return ScanKinematicItems(input);
         Json::Value@ packResult = DispatchPackTool(name, input);
         if (packResult !is null) return packResult;
-        return MakeError("unknown tool: " + name, "unknown_tool", false, "", "");
+        return UnknownToolError(name);
     }
 
     // Tool-list cache. GetToolList() rebuilt ~90 tool schemas (a Json::Parse
@@ -1255,18 +1334,51 @@ namespace TmMcp {
     // (~2.3–3.4ms/frame — most of the render budget). The built-in tools are
     // static; only the appended pack tools vary with g_Packs. We cache the
     // fully-built array and rebuild only when the pack registry mutates
-    // (g_ToolListVersion is bumped on register/unregister/sweep).
+    // (g_ToolListVersion is bumped on register/unregister/sweep). The cache is
+    // never returned directly: imported callers and socket responses receive a
+    // JSON round-trip clone because AngelScript JSON assignment may retain
+    // nested references.
     Json::Value@ g_ToolListCache = null;
-    uint g_ToolListBuiltVersion = 0;
-    uint g_ToolListVersion = 1;
+    uint64 g_ToolListBuiltVersion = 0;
+    uint64 g_ToolListVersion = 1;
+    uint64 g_ToolRegistryRevision = 1;
+    string g_ToolListSerialized = "";
+    string g_ToolCatalogSerialized = "";
+    uint64 g_ToolCatalogSerializedRevision = 0;
     // Diagnostics: confirm the cache is actually hit at runtime (vs. the
     // version being bumped unexpectedly). Exposed via the MCP GetResult-free
     // debug path / readable in the log.
     uint g_ToolListHits = 0;
     uint g_ToolListMisses = 0;
-    void InvalidateToolList() { g_ToolListVersion++; }
+    void InvalidateToolList() {
+        g_ToolListVersion++;
+        g_ToolRegistryRevision++;
+    }
 
-    Json::Value@ GetToolList() {
+    Json::Value@ CloneJsonValue(Json::Value@ value) {
+        if (value is null) return null;
+        try {
+            return Json::Parse(Json::Write(value));
+        } catch {
+            warn("TM Control MCP: failed to detach JSON value: " + getExceptionInfo());
+            return null;
+        }
+    }
+
+    Json::Value@ ParseCachedJson(const string &in serialized) {
+        if (serialized.Length == 0) return null;
+        try {
+            return Json::Parse(serialized);
+        } catch {
+            warn("TM Control MCP: failed to parse cached JSON: " + getExceptionInfo());
+            return null;
+        }
+    }
+
+    Json::Value@ GetToolListCached() {
+        // A dead pack must not survive behind a warm cache. Sweep before the
+        // hit check so removal also advances the registry revision.
+        SweepDeadPacks();
         if (g_ToolListCache !is null && g_ToolListBuiltVersion == g_ToolListVersion) {
             g_ToolListHits++;
             return g_ToolListCache;
@@ -1275,34 +1387,128 @@ namespace TmMcp {
         Json::Value tools = BuildToolList();
         @g_ToolListCache = tools;
         g_ToolListBuiltVersion = g_ToolListVersion;
+        g_ToolListSerialized = Json::Write(tools);
         return g_ToolListCache;
     }
+
+    Json::Value@ GetToolList() {
+        GetToolListCached();
+        return ParseCachedJson(g_ToolListSerialized);
+    }
+
+    int CompareCanonicalToolNames(const string &in left, const string &in right) {
+        uint common = Math::Min(uint(left.Length), uint(right.Length));
+        for (uint i = 0; i < common; i++) {
+            if (left[i] == right[i]) continue;
+            return left[i] < right[i] ? -1 : 1;
+        }
+        if (left.Length == right.Length) return 0;
+        return left.Length < right.Length ? -1 : 1;
+    }
+
+    // Stable merge sort of descriptor indices: O(n log n), once per revision.
+    void SortToolCatalogIndices(array<string> &in names, array<uint> &inout order,
+                                array<uint> &inout scratch, uint begin, uint end) {
+        if (end - begin < 2) return;
+        uint middle = begin + (end - begin) / 2;
+        SortToolCatalogIndices(names, order, scratch, begin, middle);
+        SortToolCatalogIndices(names, order, scratch, middle, end);
+        uint left = begin, right = middle;
+        for (uint outIndex = begin; outIndex < end; outIndex++) {
+            if (left < middle && (right >= end
+                || CompareCanonicalToolNames(names[order[left]], names[order[right]]) <= 0)) {
+                scratch[outIndex] = order[left++];
+            } else scratch[outIndex] = order[right++];
+        }
+        for (uint i = begin; i < end; i++) order[i] = scratch[i];
+    }
+
+    Json::Value@ ToolCatalogIdentity() {
+        SweepDeadPacks();
+        auto output = Json::Object();
+        output["schemaVersion"] = 1;
+        output["instance"] = g_ToolCallInstance;
+        output["revision"] = "" + g_ToolRegistryRevision;
+        return output;
+    }
+
+    Json::Value@ BuildToolCatalog() {
+        SweepDeadPacks();
+        GetToolListCached();
+        if (g_ToolCatalogSerializedRevision == g_ToolRegistryRevision
+            && g_ToolCatalogSerialized.Length > 0) {
+            return ParseCachedJson(g_ToolCatalogSerialized);
+        }
+
+        // Parse the serialized list once. The detached working tree is sorted
+        // and annotated without touching the internal cache; the published
+        // catalog is then serialized once for all subsequent callers.
+        auto source = ParseCachedJson(g_ToolListSerialized);
+        auto catalog = Json::Object();
+        catalog["schemaVersion"] = 1;
+        catalog["instance"] = g_ToolCallInstance;
+        catalog["revision"] = "" + g_ToolRegistryRevision;
+
+        auto tools = Json::Array();
+        if (source !is null && source.GetType() == Json::Type::Array) {
+            array<string> names;
+            array<uint> order, scratch;
+            scratch.Resize(source.Length);
+            for (uint i = 0; i < source.Length; i++) {
+                names.InsertLast(string(source[i]["name"])); order.InsertLast(i);
+            }
+            SortToolCatalogIndices(names, order, scratch, 0, order.Length);
+            for (uint i = 0; i < order.Length; i++) {
+                auto tool = source[order[i]];
+                if (tool is null) continue;
+                if (!tool.HasKey("pack")) tool["pack"] = "";
+                string generation = "";
+                if (string(tool["pack"]).Length > 0
+                    && GetPackToolGeneration(string(tool["name"]), generation)) {
+                    tool["generation"] = generation;
+                }
+                tools.Add(tool);
+            }
+        }
+        catalog["tools"] = tools;
+        g_ToolCatalogSerialized = Json::Write(catalog);
+        g_ToolCatalogSerializedRevision = g_ToolRegistryRevision;
+        return ParseCachedJson(g_ToolCatalogSerialized);
+    }
+
+    Json::Value@ GetToolCatalog() { return BuildToolCatalog(); }
 
     Json::Value@ BuildToolList() {
         Json::Value tools = Json::Array();
         tools.Add(MakeTool("GetMode", "Get current game mode: Menu, Race, Loading, or a specific editor (MapEditor, MapEditor_Test, MapEditor_Validate, MapEditor_Playground, ItemEditor, MediatrackerEditor, MeshEditor, SkinEditor, ModuleEditor). In-editor test/validate/playground stay MapEditor_* (not Race). Unknown editor classes return Editor. WaitUntil equals=Editor matches any editor; equals=MapEditor matches MapEditor and MapEditor_*. Also returns curGameModeStr from ServerInfo (TM_PlayMap_Local, hotseat, matchmaking, …) when ServerInfo is present.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("OpenMapInEditor", "Open a local map file in the editor. Optional decoration overrides the map inferred decoration FID. Waits waitMs (default 1500) and reports any blocking dialog (e.g. unsaved-changes AskYesNo when leaving a dirty map) with a warning — answer it via RespondDialog or SaveMapFlow.", '{"type":"object","properties":{"path":{"type":"string"},"decoration":{"type":"string"},"waitMs":{"type":"integer"}},"required":["path"],"additionalProperties":false}'));
-        tools.Add(MakeTool("PlayMap", "Play a local map (or URL) via ManiaTitleControlScriptAPI.PlayMap. Same path style as OpenMapInEditor (e.g. SkinUrlDemo3.Map.Gbx). Optional mode (empty = vanilla local play) and settingsXml. Unwinds editor/race to the menu first. waitMs (default 1500) reports a blocking leave dialog.", '{"type":"object","properties":{"path":{"type":"string"},"mode":{"type":"string"},"settingsXml":{"type":"string"},"waitMs":{"type":"integer"}},"required":["path"],"additionalProperties":false}'));
+        tools.Add(MakeTool("OpenMapInEditor", "Open a local map file in the editor. Optional decoration overrides the map inferred decoration FID. Refused (DIALOG_BLOCKING) while a dialog is up. Leaves the current map first: if that raises the unsaved-changes prompt it stops with DIALOG_BLOCKING and output.started=false, nothing queued; answer with SaveMapFlow {name} or {save:false}, then call again. Then waits waitMs (default 1500) and reports any later dialog with a warning.", '{"type":"object","properties":{"path":{"type":"string"},"decoration":{"type":"string"},"waitMs":{"type":"integer"}},"required":["path"],"additionalProperties":false}'));
+        tools.Add(MakeTool("PlayMap", "Play a local map (or URL) via ManiaTitleControlScriptAPI.PlayMap. Same path style as OpenMapInEditor (e.g. SkinUrlDemo3.Map.Gbx). Optional mode (empty = vanilla local play) and settingsXml. Refused (DIALOG_BLOCKING) while a dialog is up. Unwinds editor/race to the menu first; if that raises the unsaved-changes prompt it stops with DIALOG_BLOCKING, nothing queued (answer with SaveMapFlow, then call again). waitMs (default 1500) reports a later dialog.", '{"type":"object","properties":{"path":{"type":"string"},"mode":{"type":"string"},"settingsXml":{"type":"string"},"waitMs":{"type":"integer"}},"required":["path"],"additionalProperties":false}'));
         tools.Add(MakeTool("ShutdownGame", "Immediately start a 30-second shutdown countdown and show an Openplanet ImGui dialog. The dialog offers Close TM now, Add +60s, and Cancel shutdown; the game terminates when the countdown reaches zero unless cancelled. Requires confirm:true. Unsaved work may be lost on termination.", '{"type":"object","properties":{"confirm":{"type":"boolean"}},"required":["confirm"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapInfo", "Get current map name and counts via app.RootMap. Works in MapEditor and Race/play.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetMapEnvironment", "Read map collection, decoration, map type/style, mood, and collection-unit metadata.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("SetMoodTimeOfDay", "Set CGameCtnEditorFree.MoodTimeOfDay01 (0..1). Optional dynamic sets MoodIsDynamicTime. Returns previous+new timeOfDay01/timeOfDayStr. Change time of day before a second ComputeShadows — the game refuses a rebake when shadows are already cached for that mood.", '{"type":"object","properties":{"timeOfDay01":{"type":"number"},"dynamic":{"type":"boolean"}},"required":["timeOfDay01"],"additionalProperties":false}'));
         tools.Add(MakeTool("ComputeShadows", "Start editor.PluginMapType.ComputeShadows1 (does not wait; use WaitUntil condition=shadowsClear). quality is CGameEditorPluginMap::EShadowsQuality name or 0..5 (default Default). bustCache (default true) zeros CHmsLightMapCache.m_Quality so a bake actually starts.", '{"type":"object","properties":{"quality":{"type":["string","integer"]},"bustCache":{"type":"boolean"}},"additionalProperties":false}'));
 
-        tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx. Response includes dialogPre and a warning when a dialog was up (the save may have been blocked; TM has several dialog systems, so check GetDialog first).", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("SaveMapAs", "Save the current editor map to a named file under the user Maps folder. Use fileName for an explicit path relative to Maps, or name/folder for Maps/folder/name.Map.Gbx. Fails with DIALOG_BLOCKING (saved:false, dialog left up) when the game answers the save with a prompt, e.g. a map holding an item it will not embed. Response includes dialogPre and a warning when a dialog was already up (the save may have been blocked).", '{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"},"fileName":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("SaveMapFlow", "Drive the whole save-dialog chain in one call: answers 'save changes?' (yes, or no when save=false), fills + validates the SaveAs dialog (optional name), answers the overwrite confirm per overwrite (default false -> cancel), waits through WaitMessage, and dismisses the post-save challenge card (dismissCard default true). Returns a step log, final dialog state, and map name/file. Use after OpenMapInEditor warns about a save prompt, or standalone.", '{"type":"object","properties":{"name":{"type":"string"},"save":{"type":"boolean"},"overwrite":{"type":"boolean"},"dismissCard":{"type":"boolean"},"maxIters":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("UndoRedo", "Undo or redo editor actions (CGameEditorPluginMapMapType Undo/Redo). action: undo (default) | redo; count: repeat N times (default 1).", '{"type":"object","properties":{"action":{"type":"string"},"count":{"type":"integer"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("GetDialog", "Inspect Trackmania's current dialog state across the dialog systems: BasicDialogs (kind/frame), SaveAs frame filename, and editor interface frames (where e.g. the 'map saved' temp message lives).", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetDialog", "Inspect Trackmania's current dialog state across the dialog systems: BasicDialogs (kind/frame), SaveAs frame filename, menu modals, and editor interface frames (where e.g. the 'map saved' temp message lives). dialogKind: askYesNo|saveAs|message|wait|frameDialog|menuDialog|none; blocking=true when it needs an answer. dialog is the raw BasicDialogs enum (None for AskYesNo/SaveAs). Every socket response also carries a compact data.dialog; see guide 'dialogs'.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetBlockingScreen", "Detect the full-page menu screens that block menu-only agents and that GetDialog cannot see (they are ManiaLink pages, not BasicDialogs): kind start-screen|connecting|connection-failed|connection-error|ubi-connect|welcome-back|none, with error/status text and the visible buttons (id, label, action). blocking=true while any is up; needsAction/suggestedAction say whether and how to dismiss (DismissBlockingScreen). Leased instances: poll this when GetReadiness want=menu reports a blocking screen.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("DismissBlockingScreen", "Dismiss a blocking menu screen (see GetBlockingScreen) by clicking its safe button through the game's own click dispatch. action=auto takes the suggested action per kind (start-screen->click start, connection-error->Confirm, connection-failed/ubi-connect->Play offline, welcome-back->Maybe later); explicit start|confirm|play-offline|retry|later must fit the kind (WRONG_KIND). waitMs (default 15000, max 120000) waits for the screen state to change and reports the after snapshot + menuReached. Never clicks Quit game. Returns acted:false when auto finds nothing to do (connecting resolves on its own).", '{"type":"object","properties":{"action":{"type":"string"},"waitMs":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetMenuFrameTree", "Recursive dump of the CurrentFrame on app.ActiveMenus[menuIndex] (default 0) — where modal menu dialogs like the 'map saved' challenge card live. Params: menuIndex, maxDepth (default 8), maxNodes (default 4000).", '{"type":"object","properties":{"menuIndex":{"type":"integer"},"maxDepth":{"type":"integer"},"maxNodes":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetEditorInterfaceTree", "Read-only recursive dump of the active editor control tree: CGameEditorItem.FrameRoot in Item Editor, otherwise CGameCtnEditorFree.EditorInterface.InterfaceRoot. Includes per-node id, class, visibility/read-only/hidden flags, tooltip, and children. Expensive; use maxDepth (default 6), maxNodes (default 4000), and optional rootId to dump a subtree (e.g. FrameTempMsg).", '{"type":"object","properties":{"maxDepth":{"type":"integer"},"maxNodes":{"type":"integer"},"rootId":{"type":"string"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("RespondDialog", "Respond to Trackmania dialogs (BasicDialogs + SaveAs frame). action: yes, no, cancel, ok, wait-ok, validate/saveas-validate, saveas-cancel, saveas-up, saveas-setname (with name), hide, frame-ok (dismiss modal menu dialog like the map-saved challenge card via its ButtonOk). By default yields one frame and includes an 'after' summary of the next dialog in the chain; set disable1FrameYieldAndWarning=true to return immediately.", '{"type":"object","properties":{"action":{"type":"string"},"name":{"type":"string"},"disable1FrameYieldAndWarning":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
-        tools.Add(MakeTool("ControlValidation", "Inspect or trigger map validation/test/playground controls. Actions: status, validate, requestEnterPlayground, requestLeavePlayground, testFromStart, testFromCoord.", '{"type":"object","properties":{"action":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("ClickClassicMenuControl", "Click a control in a 'classic' engine menu frame (app.ActiveMenus: server join card, map-saved card, ...) by its id name, via CControlButton.OnAction. A card (e.g. ButtonJoin, ButtonSpectator, ButtonCancel on FrameDialogJoin) is clicked through its ButtonSelection child. Searches the topmost active menu first; menuIndex restricts it. List ids with GetMenuFrameTree {menuIndex}. Not for ManiaLink pages (use ClickMenuButton / TriggerControlOnAction).", '{"type":"object","properties":{"id":{"type":"string"},"menuIndex":{"type":"integer"},"requireVisible":{"type":"boolean","default":true}},"required":["id"],"additionalProperties":false}'));
+        tools.Add(MakeTool("JoinServer", "From the main menu, join a server by link '#join=host:password:port' (password may be empty: '#join=host::port'; '#spectate=' or spectate:true joins as spectator): opens the link, confirms the server card that the game shows, and waits until the playground has started. Fails with JOIN_FAILED if the card never appears or the playground does not start within timeoutMs (default 60000).", '{"type":"object","properties":{"link":{"type":"string"},"spectate":{"type":"boolean"},"timeoutMs":{"type":"integer","minimum":1000,"maximum":300000}},"required":["link"],"additionalProperties":false}'));
+        tools.Add(MakeTool("RespondDialog", "Respond to Trackmania dialogs (BasicDialogs + SaveAs frame). action: yes, no, cancel, ok, wait-ok, validate/saveas-validate, saveas-cancel, saveas-up, saveas-setname (with name), hide, frame-ok (dismiss a modal menu dialog like the map-saved challenge card via its one card or its ButtonOk; refuses with AMBIGUOUS_FRAME, clicking nothing, on a frame of several cards such as the server join card: use ClickClassicMenuControl {id}), frame-cancel. frame-ok/cancel report output.frameClosed. By default yields one frame and includes an 'after' summary of the next dialog in the chain; set disable1FrameYieldAndWarning=true to return immediately.", '{"type":"object","properties":{"action":{"type":"string"},"name":{"type":"string"},"disable1FrameYieldAndWarning":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
+        tools.Add(MakeTool("ControlValidation", "Inspect or trigger map validation/test/playground controls. Actions: status, validate, requestEnterPlayground, requestLeavePlayground, testFromStart, testFromCoord. Starts (validate, requestEnterPlayground, testFrom*) are refused with DIALOG_BLOCKING while a dialog is up. testFromStart/testFromCoord wait up to waitMs (default 10000, max 30000, 0 = do not wait) for the playground and fail with PLAYGROUND_NOT_STARTED if it never starts (seen after requestLeavePlayground: one test start per map load), output.playgroundStarted otherwise.", '{"type":"object","properties":{"action":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},"dir":{"type":"string"},"waitMs":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlSelection", "Inspect or control editor copy-paste/custom selection. Actions: status, showCustom, hideCustom, resetSelection, selectAll, addSelection, copy, cut, remove, symmetrize.", '{"type":"object","properties":{"action":{"type":"string"},"x1":{"type":"integer"},"y1":{"type":"integer"},"z1":{"type":"integer"},"x2":{"type":"integer"},"y2":{"type":"integer"},"z2":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetCursor", "Get editor cursor coordinate and selected block.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlCursor", "Use the editor cursor API: status, raise, lower, rotate, move, moveToCameraTarget, followCamera, disableMouseDetection, releaseLock, resetRGB, setRGB.", '{"type":"object","properties":{"action":{"type":"string"},"direction":{"type":"string"},"directionKind":{"type":"string"},"count":{"type":"integer"},"clockwise":{"type":"boolean"},"follow":{"type":"boolean"},"disable":{"type":"boolean"},"r":{"type":"number"},"g":{"type":"number"},"b":{"type":"number"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetEditorCamera", "Get editor camera target, angles, distance, and current orbital position.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("SetEditorCamera", "Set editor camera target, angles, and target distance. Angles default to degrees; use hAngleRad/vAngleRad for radians. vAngle beyond +/-90 degrees flips the camera upside-down (world appears rotated 180); the response carries a warning with the equivalent upright vAngle/hAngle when that happens.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"hAngle":{"type":"number"},"vAngle":{"type":"number"},"hAngleRad":{"type":"number"},"vAngleRad":{"type":"number"},"distance":{"type":"number"},"animate":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("SetEditorCamera", "Set editor camera target, angles, and target distance. Angles default to degrees; use hAngleRad/vAngleRad for radians. Interrupts a running AnimateEditorCamera animation (use that tool for smooth moves; animate here is ignored). vAngle beyond +/-90 degrees flips the camera upside-down (world appears rotated 180); the response carries a warning with the equivalent upright vAngle/hAngle when that happens.", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"hAngle":{"type":"number"},"vAngle":{"type":"number"},"hAngleRad":{"type":"number"},"vAngleRad":{"type":"number"},"distance":{"type":"number"},"animate":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlCamera", "Use the editor camera API: status, centerOnCursor, moveToMapCenter, watchWholeMap, watchStart, watchClosestFinishLine, watchClosestCheckpoint, zoom, zoomIn, zoomOut, look, followCursor, ignoreCollisions, releaseLock, setVStep.", '{"type":"object","properties":{"action":{"type":"string"},"smooth":{"type":"boolean"},"loop":{"type":"boolean"},"clockwise":{"type":"boolean"},"halfSteps":{"type":"boolean"},"level":{"type":"string"},"direction":{"type":"string"},"directionKind":{"type":"string"},"follow":{"type":"boolean"},"ignore":{"type":"boolean"},"step":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("AnimateEditorCamera", "Smoothly animate the map-editor camera (edit mode). Returns at once with an id; the animation runs in the background, one at a time. kind:'path' flies through keyframes [{x,y,z (point looked at), distance, hAngle, vAngle (degrees)} or {position:{x,y,z}, lookAt:{x,y,z}}]; omitted fields carry over from the previous key; fromCurrent (default true) starts from the current camera; spline (default true) passes smoothly through every key (false = straight segments); timing: durationMs for the whole path (default 3000 per segment, split by travel distance) or ms on each key (time to reach it); ease (linear|in|out|inOut, default inOut) shapes the whole path. kind:'orbit' circles center {x,y,z} (default the current target) at distance/vAngle (default current): degrees (default 360, negative = other way) over durationMs or at degreesPerSecond (default 30); endDistance/endVAngle make a spiral; untilStopped:true orbits forever at degreesPerSecond (default 20); hAngle sets the start heading. kind:'follow' keeps the camera on follow:'cursor' (the editor cursor's block, default) or follow:'point' with target {x,y,z} moved by {action:'retarget', x,y,z}; distance/hAngle/vAngle set the view, lagMs (default 400, 0 = rigid) the smoothing, degreesPerSecond an optional slow spin; runs until stopped unless durationMs. orbit/follow ease in from the current view over blendMs (default 1000). vAngle is clamped to the editor's 4.5..85.5 degree range (warnings say so). action:'stop' ends the running animation, 'status' reports it, 'retarget' moves a follow point. Interruption: SetEditorCamera, ControlCamera actions, SetEditorOrbitalTarget, TakeScreenshot focus, a new animation, the camera moved by the mouse/keyboard or another plugin, or leaving edit mode end it as interrupted. Learn the outcome with WaitEditorCamera {id}.", '{"type":"object","properties":{"action":{"type":"string","enum":["start","stop","status","retarget"]},"kind":{"type":"string","enum":["path","orbit","follow"]},"keyframes":{"type":"array","items":{"type":"object"}},"fromCurrent":{"type":"boolean"},"spline":{"type":"boolean"},"durationMs":{"type":"integer"},"ease":{"type":"string","enum":["linear","in","out","inOut"]},"center":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}}},"distance":{"type":"number"},"endDistance":{"type":"number"},"hAngle":{"type":"number"},"vAngle":{"type":"number"},"endVAngle":{"type":"number"},"degrees":{"type":"number"},"degreesPerSecond":{"type":"number"},"untilStopped":{"type":"boolean"},"blendMs":{"type":"integer"},"follow":{"type":"string","enum":["cursor","point"]},"target":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}}},"lagMs":{"type":"number"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("WaitEditorCamera", "Wait for an AnimateEditorCamera animation to end (id, default the latest). Success when it completed; an error with code CAMERA_ANIM_INTERRUPTED (output.reason/interruptedBy say what: another camera tool, a new animation, external camera movement, leaving edit mode), CAMERA_ANIM_STOPPED or CAMERA_ANIM_FAILED otherwise; output carries the animation and the final camera. timeoutMs (max 300000 = 5 min) defaults to the time left plus 2 s, or 20000 for an untilStopped/endless animation; on timeout it returns success with timedOut:true and the animation still running. A finished animation answers at once (the last 16 are kept).", '{"type":"object","properties":{"id":{"type":"integer"},"timeoutMs":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("TakeScreenshot", "Native viewport screenshot. Waits for the file and returns its game-side path (fullName) + size. Options: format jpg|webp|tga|dds (default jpg), waitMs (default 5000, 0 or noWait skips waiting), hideOverlay (omit HUD/overlays for one frame), forceRes+width+height (render at a forced resolution, restored after). focus:{x,y,z} aims the editor camera at a world position for the shot (e.g. a placed checkpoint from GetBlockLocation pos) with distance (meters, default 80 — smaller = tighter zoom), optional vAngle/hAngle (degrees), then restores the camera afterwards unless restore:false. preset (with focus): fixed named camera angles for consistent shots — top (near-overhead), iso (default 3/4 view), high (steep 3/4), front, side, back. currentView:true captures the view exactly as-is (no camera change; cannot combine with focus/preset). Capture is asynchronous; on timeout output includes timedOut=true — see the 'screenshots' guide.", '{"type":"object","properties":{"format":{"type":"string"},"waitMs":{"type":"integer"},"noWait":{"type":"boolean"},"hideOverlay":{"type":"boolean"},"forceRes":{"type":"boolean"},"width":{"type":"integer"},"height":{"type":"integer"},"focus":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}}},"distance":{"type":"number"},"vAngle":{"type":"number"},"hAngle":{"type":"number"},"preset":{"type":"string","enum":["top","iso","high","front","side","back"]},"currentView":{"type":"boolean"},"restore":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetBlocks", "Get blocks by optional grid/world radius, model query, and freeblock filter. Works in MapEditor and Race/play (RootMap).", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"radius":{"type":"number"},"world":{"type":"boolean"},"query":{"type":"string"},"isFree":{"type":"boolean"},"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetRecentBlocks", "Get the last N blocks in map block order, useful for freeblock placement readback. Works in MapEditor and Race/play (RootMap).", '{"type":"object","properties":{"count":{"type":"integer"}},"additionalProperties":false}'));
@@ -1338,33 +1544,37 @@ namespace TmMcp {
         tools.Add(MakeTool("ListGuides", "List available self-documentation guides. Each has a short title; call GetGuide {topic} to fetch the full body.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetGuide", "Fetch the full body of a named guide. Use ListGuides to see topics.", '{"type":"object","properties":{"topic":{"type":"string"}},"required":["topic"],"additionalProperties":false}'));
         tools.Add(MakeTool("ListMapDecorations", "List all map decoration (vista) fids per environment (Stadium, RedIsland, GreenCoast, BlueBay, WhiteShore) found under GameData/<env>/GameCtnDecoration, with file/fid base names and loaded nod IdNames.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("EditNewMap", "Create a new map in the editor. Supports all 12 vistas via the vista param: <base>-<mood> where base = nostadium | stadiumold (alias base) | stadium155 (alias screen155, default day), mood = day | night | sunset | sunrise. Non-standard vistas load via decoration fid swap (tm-map-together's SwapDecoHack). decoration = raw fid basename passthrough (e.g. NoStadium48x48Night). Optional: car (CarSport|CarSnow|CarRally|CarDesert), size 'WxHxD' (e.g. 64x64x64; mutates the decoration size for the new map), mapType (default empty). Waits waitMs (default 1500) and warns if leaving a dirty map pops AskYesNo — answer via RespondDialog or SaveMapFlow. Otherwise poll GetMode until MapEditor.", '{"type":"object","properties":{"environment":{"type":"string"},"decoration":{"type":"string"},"mapType":{"type":"string"},"vista":{"type":"string"},"car":{"type":"string"},"size":{"type":"string"},"sizeX":{"type":"integer"},"sizeY":{"type":"integer"},"sizeZ":{"type":"integer"},"waitMs":{"type":"integer"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("ListMenuManialinkControls", "Walk the main-menu UI layer tree and return controls with their ControlId, classes, visibility, and path. Used to discover button IDs before firing Manialink events. maxDepth default 8; onlyWithId default true (skip anonymous frames); includeHidden default false.", '{"type":"object","properties":{"maxDepth":{"type":"integer"},"onlyWithId":{"type":"boolean"},"includeHidden":{"type":"boolean"},"maxResults":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("EditNewMap", "Create a new map in the editor. Supports all 12 vistas via the vista param: <base>-<mood> where base = nostadium | stadiumold (alias base) | stadium155 (alias screen155, default day), mood = day | night | sunset | sunrise. Non-standard vistas load via decoration fid swap (tm-map-together's SwapDecoHack). decoration = raw fid basename passthrough (e.g. NoStadium48x48Night). Optional: car (CarSport|CarSnow|CarRally|CarDesert), size 'WxHxD' (e.g. 64x64x64; mutates the decoration size for the new map), mapType (default empty). Refused (DIALOG_BLOCKING) while a dialog is up. Leaves the current map first: if that raises the unsaved-changes prompt it stops with DIALOG_BLOCKING and output.started=false, nothing queued; answer with SaveMapFlow {name} or {save:false}, then call again. Waits waitMs (default 1500); output.status is requested|opened, and a failed request returns EDITNEWMAP_FAILED. Then poll GetMode until MapEditor.", '{"type":"object","properties":{"environment":{"type":"string"},"decoration":{"type":"string"},"mapType":{"type":"string"},"vista":{"type":"string"},"car":{"type":"string"},"size":{"type":"string"},"sizeX":{"type":"integer"},"sizeY":{"type":"integer"},"sizeZ":{"type":"integer"},"waitMs":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("ListMenuManialinkControls", "Walk the main-menu UI layer tree and return controls with their ControlId, classes, visibility, and path. Used to discover button IDs before firing Manialink events. maxDepth default 8; onlyWithId default true (skip anonymous frames); includeHidden default false. Menu only: ViewManialinkPage covers every context.", '{"type":"object","properties":{"maxDepth":{"type":"integer"},"onlyWithId":{"type":"boolean"},"includeHidden":{"type":"boolean"},"maxResults":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("FocusMenuControl", "Find a menu control by ControlId across all UI layers and call Focus() on it. Probe step before trying synthetic click events. Does not perform click.", '{"type":"object","properties":{"controlId":{"type":"string"}},"required":["controlId"],"additionalProperties":false}'));
-        tools.Add(MakeTool("GetUILayers", "Lightweight: list main-menu UI layers with index, type, visibility, attachId, pageUrl, and (default) the extracted <manialink name> attribute. Does NOT traverse the control tree. Use GetLayerTree for per-layer introspection. Use includeXmlSize=true to also return the XML length (avoids returning the full XML).", '{"type":"object","properties":{"includeName":{"type":"boolean"},"includeXmlSize":{"type":"boolean"},"onlyVisible":{"type":"boolean"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("GetActiveMenuPages", "Return visible main-menu layers named Page_* (e.g. Page_HomePage, Page_Create, Page_MapEditorSettings). Use after SetMenuPage to verify the route actually rendered, and as a cheap 'where am I in the menu' check.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("GetLayerTree", "Walk the control tree of one UI layer (by layerIndex) with optional rootPath (slash-separated ControlIds). Returns controls starting at that point. Used with GetUILayers to drill in without dumping every layer.", '{"type":"object","properties":{"layerIndex":{"type":"integer"},"maxDepth":{"type":"integer"},"rootPath":{"type":"string"},"onlyWithId":{"type":"boolean"},"includeHidden":{"type":"boolean"},"maxResults":{"type":"integer"}},"required":["layerIndex"],"additionalProperties":false}'));
-        tools.Add(MakeTool("FindMenuButtons", "High-level: flat list of visible main-menu navigation buttons across all visible UI layers. Default classFilter is \"component-navigation-item\" (Nadeo menu button pattern). For each match, includes layerIndex, layerName, controlId, classes, absPos/size, raw label (|PageName|Text), and stripped displayText (Text).", '{"type":"object","properties":{"onlyVisible":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxResults":{"type":"integer"},"className":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetUILayers", "Lightweight: list main-menu UI layers with index, type, visibility, attachId, pageUrl, and (default) the extracted <manialink name> attribute. Does NOT traverse the control tree. Use GetLayerTree for per-layer introspection. Use includeXmlSize=true to also return the XML length (avoids returning the full XML). Menu only: ListManialinkPages covers menu, map and editor.", '{"type":"object","properties":{"includeName":{"type":"boolean"},"includeXmlSize":{"type":"boolean"},"onlyVisible":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetActiveMenuPages", "Return visible main-menu layers named Page_* (e.g. Page_HomePage, Page_Create, Page_MapEditorSettings). Use after SetMenuPage to verify the route actually rendered, and as a cheap 'where am I in the menu' check. Menu only: ListManialinkPages / WaitUntil {condition:manialink} cover every context.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetLayerTree", "Walk the control tree of one UI layer (by layerIndex) with optional rootPath (slash-separated ControlIds). Returns controls starting at that point. Used with GetUILayers to drill in without dumping every layer. Menu only, verbose JSON: ViewManialinkPage gives a concise tree in any context.", '{"type":"object","properties":{"layerIndex":{"type":"integer"},"maxDepth":{"type":"integer"},"rootPath":{"type":"string"},"onlyWithId":{"type":"boolean"},"includeHidden":{"type":"boolean"},"maxResults":{"type":"integer"}},"required":["layerIndex"],"additionalProperties":false}'));
+        tools.Add(MakeTool("ListManialinkPages", "List the ManiaLink pages (UI layers) the game holds now, across the menu, the playground client and its UI configs, and the map editor plugin app (current context first; MediaTracker/item editors not covered). Each page: ref (e.g. 'menu:12', 'playground:3'; pass to ViewManialinkPage), source, name (the <manialink name>, e.g. Page_HomePage), visible (layer visible and its root frame shown; menu pages stay layer-visible under a map but their root frame is hidden), type, attachId, hasPage. Visible pages only unless includeHidden. Read-only.", '{"type":"object","properties":{"includeHidden":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("ViewManialinkPage", "Concise indented tree of the ManiaLink UI on screen: a '== ref name [type]' header per page, then one line per control, 'type#id .classes key', where key is label text (translation prefix and $ codes stripped unless rawText), entry/textedit value ($ codes stripped unless rawText; password-format fields redacted), or gauge ratio. Brief by default: decoration (quads, empty labels/frames) is dropped, layout wrappers are collapsed, and a clickable (.component-navigation-item class, or a button-* id such as a quad icon button) shows its label text on its own line, e.g. 'frame#button-play .component-navigation-item \"Play\"'; pages with nothing left are listed in emptyPages, not printed. full:true prints every shown control (quad image/style too). Hidden controls are skipped unless includeHidden; [focused] marks the page focus. Layer visible is not always on screen: [ScoresTable]/[AltMenu]/[InGameMenu] pages draw only while Tab/Alt/pause is held. page selects one page by ref ('menu:12') or exact name ('Page_HomePage', case-insensitive); omit it for every visible page, current context (menu/map/editor) first; LoadingScreen layers (always layer-visible) are then skipped and listed in loadingScreenPages. maxLines default 400 (cap 4000): truncated=true plus omittedPages when cut; maxDepth default 24: depthLimited=true and '(+N children)' when cut. find keeps only lines whose text contains it (case-insensitive: type, id, classes or value), with their ancestors for context. Read-only. Act on what it shows with ClickManialinkControl {page, id}; wait for a result with WaitUntil {condition:manialink}.", '{"type":"object","properties":{"page":{"type":"string"},"full":{"type":"boolean"},"find":{"type":"string"},"maxLines":{"type":"integer"},"maxDepth":{"type":"integer"},"includeHidden":{"type":"boolean"},"rawText":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("ClickManialinkControl", "Click a ManiaLink control in any context (menu, map, editor), addressed as ViewManialinkPage prints it: page (ref like 'playground:23' or exact name like 'UIModule_PlayMap_EndRaceMenu') and id (ControlId). Ids repeat in list templates (one button-toggle-ghost per record row): index (default 0) counts the lines ViewManialinkPage {page} prints with that id (full:true counts as the full view does; allowHidden counts hidden lines too), and the result reports matches. Clicks the *-navigation-item-zone hitbox under a Nadeo button, else the control itself, via CControlBase::OnAction (what a mouse click runs). Refuses NOT_DRAWN when the control, an ancestor or the page is hidden (allowHidden:true overrides). Not refused behind dialogs, and 'drawn' cannot see occlusion or key-held layers ([InGameMenu] etc.). An id naming a container clicks its first navigation zone; output clicked/zoneId say which. The page script handles the click on later frames: confirm with WaitUntil {condition:manialink, page, id?, text?, state:'shown'|'gone'} or ViewManialinkPage. Menu-only predecessor: ClickMenuButton.", '{"type":"object","properties":{"page":{"type":"string"},"id":{"type":"string"},"index":{"type":"integer"},"full":{"type":"boolean"},"allowHidden":{"type":"boolean"}},"required":["page","id"],"additionalProperties":false}'));
+        tools.Add(MakeTool("FindMenuButtons", "High-level: flat list of visible main-menu navigation buttons across all visible UI layers. Default classFilter is \"component-navigation-item\" (Nadeo menu button pattern). For each match, includes layerIndex, layerName, controlId, classes, absPos/size, raw label (|PageName|Text), and stripped displayText (Text). Menu only: ViewManialinkPage shows buttons with their text in any context.", '{"type":"object","properties":{"onlyVisible":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxResults":{"type":"integer"},"className":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("FindControlsByClass", "Search across main-menu UI layers for controls whose class list matches classPattern. substring=true (default) does Contains match, substring=false requires exact equality. Returns same enriched entries as FindMenuButtons (includes child label text if present).", '{"type":"object","properties":{"classPattern":{"type":"string"},"substring":{"type":"boolean"},"onlyVisible":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxResults":{"type":"integer"}},"required":["classPattern"],"additionalProperties":false}'));
-        tools.Add(MakeTool("FindControlsByLabel", "Search across main-menu UI layers for Label controls whose Value contains the given substring. Case-insensitive by default. Returns layerIndex, layerName, controlId, raw label, displayText (translation prefix stripped), classes, absPos, size.", '{"type":"object","properties":{"substring":{"type":"string"},"caseInsensitive":{"type":"boolean"},"onlyVisible":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxResults":{"type":"integer"}},"required":["substring"],"additionalProperties":false}'));
+        tools.Add(MakeTool("FindControlsByLabel", "Search across main-menu UI layers for Label controls whose Value contains the given substring. Case-insensitive by default. Returns layerIndex, layerName, controlId, raw label, displayText (translation prefix stripped), classes, absPos, size. Menu only: ViewManialinkPage {find} searches every context.", '{"type":"object","properties":{"substring":{"type":"string"},"caseInsensitive":{"type":"boolean"},"onlyVisible":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxResults":{"type":"integer"}},"required":["substring"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetLayerXml", "Read a slice of a UI layer's Manialink XML, or substring-grep it. Either {layerIndex, find, context?=120, maxHits?=20, caseInsensitive?=false} to grep, or {layerIndex, offset?=0, length?=2048} to slice. Use instead of dumping the whole 10-50 KB XML for a layer.", '{"type":"object","properties":{"layerIndex":{"type":"integer"},"find":{"type":"string"},"context":{"type":"integer"},"maxHits":{"type":"integer"},"caseInsensitive":{"type":"boolean"},"offset":{"type":"integer"},"length":{"type":"integer"}},"required":["layerIndex"],"additionalProperties":false}'));
-        tools.Add(MakeTool("BackToMainMenu", "Unwind out of whatever module the game is currently in (Editor, Race) and return to the main menu. Works from a live race, self-hosted solo, or the editor. Stops early and warns if leaving a dirty map pops AskYesNo — answer via RespondDialog or SaveMapFlow. Otherwise poll GetMode until mode=='Menu'.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("ClickMenuButton", "High-level click on a Nadeo main-menu nav-item. Resolve with {controlId} (e.g. 'button-map-editor') or {indexPath, layerIndex|layerName}. Descends to the component-navigation-item-zone leaf and invokes its CControlBase::OnAction — the same dispatch a real click uses. Works across button templates (expendable-button, Trackmania_Button). For non-nav controls without the nav-zone class, use TriggerControlOnAction directly. After firing, poll GetActiveMenuPages / GetMode / GetDialog to observe the route change.", '{"type":"object","properties":{"controlId":{"type":"string"},"indexPath":{"type":"string"},"layerIndex":{"type":"integer"},"layerName":{"type":"string"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("BackToMainMenu", "Unwind out of whatever module the game is currently in (Editor, Race) and return to the main menu. Works from a live race, self-hosted solo, or the editor. Refused (DIALOG_BLOCKING) while a dialog is already up. Waits until the main menu is really reached (no editor/playground) or a dialog needing an answer comes up: blockedByDialog=true for the unsaved-changes prompt, which it never answers; answer with SaveMapFlow {name} or {save:false} and the game finishes returning. reachedMenu=false after 10s idle: poll GetMode.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("ClickMenuButton", "High-level click on a Nadeo main-menu nav-item. Resolve with {controlId} (e.g. 'button-map-editor') or {indexPath, layerIndex|layerName}. Descends to the component-navigation-item-zone leaf and invokes its CControlBase::OnAction — the same dispatch a real click uses. Works across button templates (expendable-button, Trackmania_Button). For non-nav controls without the nav-zone class, use TriggerControlOnAction directly. After firing, poll GetActiveMenuPages / GetMode / GetDialog to observe the route change. Menu only: ClickManialinkControl {page, id} works in any context.", '{"type":"object","properties":{"controlId":{"type":"string"},"indexPath":{"type":"string"},"layerIndex":{"type":"integer"},"layerName":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("InspectMenuControl", "Probe: resolve a ControlId on the active Page_* (or named layer) via LocalPage.GetFirstChild and MainFrame.GetFirstChild. Returns type, classes, visibility, position, plus two path encodings from MainFrame: 'path' is slash-joined child indexes (e.g. '3/0' = MainFrame.Controls[3].Controls[0]), 'idPath' is slash-joined ControlIds (e.g. 'frame-global/button-create'). By default includes up to 32 direct children. Pass recursive:true with maxDepth to return a 'descendants' array walked via the same logic as GetLayerTree. Read-only — safe to call from Angelscript.", '{"type":"object","properties":{"controlId":{"type":"string"},"layerName":{"type":"string"},"recursive":{"type":"boolean"},"maxDepth":{"type":"integer"},"onlyWithId":{"type":"boolean"},"includeHidden":{"type":"boolean"},"maxResults":{"type":"integer"}},"required":["controlId"],"additionalProperties":false}'));
         tools.Add(MakeTool("SetMenuControlVisible", "Call Show()/Hide() on a menu control. Resolve either by {controlId} (global search) or {indexPath, layerIndex|layerName} (direct walk from MainFrame). visible=true calls Show; false calls Hide. Menu may re-render and reset visibility on the next tick — re-observe after to confirm. Works from Angelscript (unlike TriggerPageAction).", '{"type":"object","properties":{"controlId":{"type":"string"},"indexPath":{"type":"string"},"layerIndex":{"type":"integer"},"layerName":{"type":"string"},"visible":{"type":"boolean"}},"required":["visible"],"additionalProperties":false}'));
         tools.Add(MakeTool("TriggerControlOnAction", "Click a menu control by invoking its underlying CControlBase.OnAction() — the same dispatch the game uses when a button is activated. Resolve via {controlId} (global search) or {indexPath, layerIndex|layerName}. For Nadeo expendable-button nav-items (e.g. button-create on Page_HomePage) the click target is the leaf nav-zone at Controls[0]/[4]/[0]; pass that indexPath explicitly. Safe from Angelscript (OnAction is on CControlBase, not the script-handler). Set recursive=true to fire OnAction on every descendant (DFS) — useful when a single nav-zone click does not advance the state machine; tune with maxDepth (default 10), maxFires (default 128), onlyVisible (default true).", '{"type":"object","properties":{"controlId":{"type":"string"},"indexPath":{"type":"string"},"layerIndex":{"type":"integer"},"layerName":{"type":"string"},"recursive":{"type":"boolean"},"maxDepth":{"type":"integer"},"maxFires":{"type":"integer"},"onlyVisible":{"type":"boolean"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("CreateMapViaMenu", "Single-call tool: navigate Page_MapEditorSettings and launch the editor for a chosen map type, environment, mood, input device, and difficulty. Drives the full 7-step click-chain (SetMenuPage + 6 OnAction clicks), polling for each intermediate frame transition. Returns {ok, finalMode, elapsedMs, steps} on success or {ok:false, failedAt, expectedFrame, lastObserved, elapsedMs, steps} on failure. Requires QuickStart disabled (MapEditorUseQuickstart off). Click-chain verified 2026-04-20.", '{"type":"object","properties":{"mapType":{"type":"string","description":"race | royal | stunt | platform"},"environment":{"type":"string","description":"Stadium | RedIsland | GreenCoast | BlueBay | WhiteShore"},"mood":{"type":"string","description":"Sunrise | Day | Sunset | Night"},"inputDevice":{"type":"string","description":"mouse | gamepad"},"difficulty":{"type":"string","description":"simple | advanced"},"timeoutMs":{"type":"integer","description":"Final poll timeout waiting for Editor mode (default 10000ms)"}},"required":["mapType","environment","mood","inputDevice","difficulty","timeoutMs"],"additionalProperties":false}'));
+        tools.Add(MakeTool("CreateMapViaMenu", "Single-call tool: navigate Page_MapEditorSettings and launch the editor for a chosen map type, environment, mood, input device, and difficulty. Drives the full 7-step click-chain (SetMenuPage + 6 OnAction clicks), polling for each intermediate frame transition. Returns {ok, finalMode, elapsedMs, steps} on success or {ok:false, failedAt, expectedFrame, lastObserved, elapsedMs, steps} on failure. Requires QuickStart disabled (MapEditorUseQuickstart off). Refused (DIALOG_BLOCKING) while a dialog is up. Click-chain verified 2026-04-20.", '{"type":"object","properties":{"mapType":{"type":"string","description":"race | royal | stunt | platform"},"environment":{"type":"string","description":"Stadium | RedIsland | GreenCoast | BlueBay | WhiteShore"},"mood":{"type":"string","description":"Sunrise | Day | Sunset | Night"},"inputDevice":{"type":"string","description":"mouse | gamepad"},"difficulty":{"type":"string","description":"simple | advanced"},"timeoutMs":{"type":"integer","description":"Final poll timeout waiting for Editor mode (default 10000ms)"}},"required":["mapType","environment","mood","inputDevice","difficulty","timeoutMs"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetManiaScriptDiagnostics", "Read native ManiaScript crash prompt text and debugger visibility. Reports log API limitations; use an overlay-visible screenshot for the native debugger log. Does not restart or dismiss anything.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("DismissManiaScriptDebugger", "Hide the native ManiaScript debugger overlay (SystemOverlay.ScriptDebugger.Visibility -> Hidden). Captures crash-prompt messages before hiding, then reports before/after visibility. Does not restart scripts; Shift+Scroll Lock remains the game's script-restart shortcut. Use GetManiaScriptDiagnostics to read state.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("RunManialinkScript", "Inject ad-hoc ManiaScript via MLHook (menu/in-map/in-editor). script without outer <manialink>. Optional collectMs>0 registers a result hook: script should SendCustomEvent(\"MLHook_Event_McpAdHoc_Result\", [payload...]) (or resultEvent). Also pageUid/replace/persist/waitMs.", '{"type":"object","properties":{"script":{"type":"string"},"context":{"type":"string"},"pageUid":{"type":"string"},"replace":{"type":"boolean"},"persist":{"type":"boolean"},"waitMs":{"type":"integer"},"collectMs":{"type":"integer"},"resultEvent":{"type":"string"}},"required":["script"],"additionalProperties":false}'));
 
         tools.Add(MakeTool("GetReadiness", "Composite preflight: mode/dialog/editor-ready/inventory/map/calculatingShadows checks. want=editor|menu|any|race. Editor want is not ready while calculating shadows.", '{"type":"object","properties":{"want":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetLightmapComputeState", "Whether the map editor is computing shadows / lightmap. editorFlag is CGameCtnEditorFree.Offset+8; waitLooksLikeLm is BasicDialogs WaitMessage whose text looks like the LM bake. calculatingShadows is either.", '{"type":"object","properties":{},"additionalProperties":false}'));
-        tools.Add(MakeTool("WaitUntil", "Poll until condition is true. condition=mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness|shadowsClear. timeoutMs is the idle budget (default 20000); once a loading screen is up the clock pauses and the wait continues until the map finishes (up to 30 min). Returns ok/timedOut (not a hard error on timeout).", '{"type":"object","properties":{"condition":{"type":"string"},"equals":{"type":"string"},"page":{"type":"string"},"op":{"type":"string"},"count":{"type":"integer"},"want":{"type":"string"},"timeoutMs":{"type":"integer"},"pollMs":{"type":"integer"}},"required":["condition"],"additionalProperties":false}'));
+        tools.Add(MakeTool("WaitUntil", "Poll until condition is true. condition=mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness|shadowsClear|manialink. manialink waits for ManiaLink UI in any context: page (ref or name, required), id (ControlId, optional: without it the page itself; index counts as ClickManialinkControl does, full too), text (case-insensitive substring of the control's text, needs id), state 'shown' (default: drawn, every ancestor visible) or 'gone' (also true if the page never matches: output pageEverFound/warning flag a mistyped selector); its timeoutMs (default 20000) caps the whole wait including loading, at most 300000 (5 min). timeoutMs is the idle budget (default 20000); once a loading screen is up the clock pauses and the wait continues until the map finishes (up to 30 min). Returns ok/timedOut (not a hard error on timeout).", '{"type":"object","properties":{"condition":{"type":"string"},"equals":{"type":"string"},"page":{"type":"string"},"op":{"type":"string"},"count":{"type":"integer"},"want":{"type":"string"},"id":{"type":"string"},"index":{"type":"integer"},"full":{"type":"boolean"},"text":{"type":"string"},"state":{"type":"string"},"timeoutMs":{"type":"integer"},"pollMs":{"type":"integer"}},"required":["condition"],"additionalProperties":false}'));
         tools.Add(MakeTool("MeasureFrameTime", "Yield N frames and report wall time. frames default 10 (1..30), warmupFrames default 1 (0..5). Returns elapsedMs, msPerFrame, minMs, maxMs, fps, capFps=30. At the 30fps cap, 10 frames is ~333ms; 10 frames ~3000ms is a hitch.", '{"type":"object","properties":{"frames":{"type":"integer"},"warmupFrames":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("AssertPlacement", "Verify recent placement: expectItemsDelta/expectBlocksDelta, near{x,y,z,radius}+itemPath/blockName, tag/tagMinCount.", '{"type":"object","properties":{"expectItemsDelta":{"type":"integer"},"expectBlocksDelta":{"type":"integer"},"near":{"type":"object"},"itemPath":{"type":"string"},"blockName":{"type":"string"},"mapPre":{"type":"object"},"tag":{"type":"string"},"tagMinCount":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ListPlugins", "List loaded Openplanet plugins (Meta::AllPlugins). Optional query, includeDisabled (default true), includeUnloaded, includeSourcePath (full paths; default basename only).", '{"type":"object","properties":{"query":{"type":"string"},"includeDisabled":{"type":"boolean"},"includeUnloaded":{"type":"boolean"},"includeSourcePath":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetPlugin", "Get one plugin by id or name. includeSettings=true embeds setting values. includeSourcePath=true adds full SourcePath (may be Wine absolute); default is sourcePathBase only.", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"name":{"type":"string"},"includeSettings":{"type":"boolean"},"includeSourcePath":{"type":"boolean"}},"additionalProperties":false}'));
-        tools.Add(MakeTool("ControlPlugin", "Plugin lifecycle (RemoteBuild-parity): status|enable|disable|setEnabled|reload|unload|load|openSettings|getLogs. load accepts id (Plugins/<id>/ or <id>.op) like tm-remote-build, or absolute path. Already-loaded id is unloaded then reloaded from disk. getLogs tails Openplanet.log filtered by plugin id. Refuses disable/unload/rebuild of self.", '{"type":"object","properties":{"action":{"type":"string"},"id":{"type":"string"},"plugin":{"type":"string"},"name":{"type":"string"},"enabled":{"type":"boolean"},"path":{"type":"string"},"source":{"type":"string"},"type":{"type":"string"},"maxLines":{"type":"integer"},"compileOnly":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
+        tools.Add(MakeTool("ControlPlugin", "Plugin lifecycle (RemoteBuild-parity): status|enable|disable|setEnabled|reload|unload|load|openSettings|getLogs. load accepts id (Plugins/<id>/ or <id>.op) like tm-remote-build, or absolute path. Already-loaded id is unloaded then reloaded from disk. getLogs tails Openplanet.log filtered by plugin id. Refuses disable/unload/rebuild of self. This is the reload tool (there is no ReloadPlugin): {action:reload, id} reloads any plugin, RemoteBuild included when it is stuck.", '{"type":"object","properties":{"action":{"type":"string"},"id":{"type":"string"},"plugin":{"type":"string"},"name":{"type":"string"},"enabled":{"type":"boolean"},"path":{"type":"string"},"source":{"type":"string"},"type":{"type":"string"},"maxLines":{"type":"integer"},"compileOnly":{"type":"boolean"}},"required":["action"],"additionalProperties":false}'));
         tools.Add(MakeTool("ListPluginSettings", "List Meta::PluginSetting for a plugin (default: this MCP plugin). Filters: category, query, includeHidden, includeValues.", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"name":{"type":"string"},"category":{"type":"string"},"query":{"type":"string"},"includeHidden":{"type":"boolean"},"includeValues":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetPluginSetting", "Read one setting by varName (or unique display name). Default plugin = self.", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"varName":{"type":"string"},"setting":{"type":"string"},"name":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("SetPluginSetting", "Write a setting value (typed). save=true (default) calls Meta::SaveSettings. This plugin's socket host/port/enable apply live (no reload).", '{"type":"object","properties":{"id":{"type":"string"},"plugin":{"type":"string"},"varName":{"type":"string"},"setting":{"type":"string"},"value":{},"save":{"type":"boolean"}},"required":["value"],"additionalProperties":false}'));
@@ -1373,16 +1583,25 @@ namespace TmMcp {
         tools.Add(MakeTool("GetRaceData", "Get live race data via MLFeed::GetRaceData_V4. Requires an active playground (Race mode). Returns map name, CP count, lap count, and sorted players.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetPlayers", "Get live player data via MLFeed::GetRaceData_V4. Richer than GetRaceData: includes login, currentLap, teamNum, isMVP, respawnRank. Requires Race mode.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("GetServerInfo", "Get current server connection info from CTrackManiaNetwork. Returns serverName, connected, playerCount, maxPlayers, curGameModeStr.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetInputBindings", "Read-only: the input devices the game sees and every pad's bindings. devices = app.InputPort.ConnectedDevices (class, instance/model name, disabled/unplugged flags). pads = app.InputPort.Script_Pads (type Keyboard/Mouse/Generic/XBox/PlayStation, modelName, idleMs, buttons held and axes off-centre now), each with bindings: one row per action {index, action, player, display, raw} from InputBindings_UpdateList(All, pad), the list Settings > Controls shows for that controller; noDevice is the same list for Device=null. named: per-pad GetActionBinding(pad, actionMap, id) for actionIds (default GiveUp, Respawn, SecondaryRespawn; actionMap default Vehicle), the binding the race UI shows; needs a playground or the main menu. filter: case-insensitive substring of the action name or its binding ('delete' finds every action bound to Delete). boundOnly drops unbound rows. Changes no binding or setting; the shared InputBindings_* list it refills (also read by Settings > Controls and other plugins) is put back and re-read; sharedList.restored says so.", '{"type":"object","properties":{"filter":{"type":"string"},"boundOnly":{"type":"boolean"},"actionMap":{"type":"string"},"actionIds":{"type":"array","items":{"type":"string"},"maxItems":32}},"additionalProperties":false}'));
+        tools.Add(MakeTool("ResolveMwIds", "MwId values to names and names to values; batch arrays in, arrays out. An MwId is a u32: top two bits are a tag (00 numeric #N, 01 interned name = 0x40000000 | table<<16 | slot, 10 error, 11 unassigned; 0xFFFFFFFF is the null id). values (integers, -1 for 0xFFFFFFFF, or \"0x...\" strings) -> {value, hex, tag, defined, name, table/slot, problem}: a tag-01 id is named only after its intern slot is read and found occupied, because GetName() on an unknown one can crash the game, so unknown ids come back defined:false with the reason; tag 10/11 have no name; tag 00 names are #N. internIndex:true ORs 0x40000000 into untagged values, for dumps that store the bare table<<16|slot index. names -> {name, value, hex, tag, existed}: by default a read-only lookup in the intern tables (no side effect; existed:false and no value when the name is not there); the lookup ports the engine's hash and is checked against the live tables first (lookup.verified), and refuses with MWID_LOOKUP_UNAVAILABLE if that fails. register:true uses MwId.SetName instead, which ADDS a missing name to the game's id table (permanent until restart; the only write this tool makes) and reports registered:true for names it added, existed:true for names already there. '', Unassigned and NullId are the null id and never registered. DEV builds only: ptr (+offset/offsets, count default 1, stride default 4) reads count u32 ids from memory and names them in read[]. tables reports the intern tables (count, buckets, blobUsed).", '{"type":"object","properties":{"values":{"type":"array","items":{"type":["integer","string"]},"maxItems":4096},"internIndex":{"type":"boolean"},"names":{"type":"array","items":{"type":"string"},"maxItems":1024},"register":{"type":"boolean"},"ptr":{"type":["string","integer"]},"offset":{"type":"integer"},"offsets":{"type":"array","items":{"type":"integer"}},"count":{"type":"integer"},"stride":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetVehicleState", "VehicleState:: viewing dump: GetViewingPlayer + ViewingPlayerState plus RPM/sideSpeed/turbo/reactor/cruise/vehicleType/wheel dirt+falling. Needs Race/replay vis.", '{"type":"object","properties":{},"additionalProperties":false}'));
         tools.Add(MakeTool("ListVehicleVis", "VehicleState::GetAllVis — all vehicle vis in GameScene. limit default 32.", '{"type":"object","properties":{"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetVehicleVis", "VehicleState::GetSingularVis, GetVisFromId (entityId), or GetVis(player) via name/login.", '{"type":"object","properties":{"entityId":{"type":"integer"},"name":{"type":"string"},"login":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlPlayCamera", "In-play (Race) camera control: read camera state, switch camera mode, and place/aim the free camera. action=get returns the camera type (free|free2|cam1|cam2|cam3|backwards|default), the alt-cam and drivable-free-cam flags, the active camera-control class, the free camera's position/angles/target/radius/fov, and the rendered camera position; raw=true adds every memory offset resolved against the running build. action=set_mode takes mode and/or alt (the alt variant of cam1/2/3) and/or drivable (free cam also drives the car); mechanism (terminal|gamecam|both, default terminal) picks which engine field is written. set_mode also takes spectatorCamera (replay|follow|free), which is what actually frees a stuck camera: the spectator controller re-asserts its wanted camera every tick, so a car cam is set to follow and a free cam to free automatically before the switch. forceCameraType writes UIAll.SpectatorForceCameraType (-1 releases) and needs a locally hosted mode script (solo/local play). action=set_position drives the FREE camera and switches to free cam first unless ensureFreeCam=false. GIVE x,y,z AND target{x,y,z} TOGETHER for the useful case: the camera is placed exactly at x,y,z and aimed exactly at target (verified - target projects to screen centre and the camera position is exact to the millimetre); radius/pitch/yaw are solved from the two points and must not also be passed. x,y,z alone moves the camera and leaves the orientation as-is (any live target is released first, since a target overrides the position). target alone, with radius/pitch/yaw, is the raw orbital form: pos = target - radius * (cos v * sin h, -sin v, cos v * cos h), h=yaw v=pitch, degrees unless radians=true, positive pitch puts the camera above the target. clearTarget=true releases the orbit. fov works. pitch/yaw/roll WITHOUT a target are written and read back but do NOT rotate the view - the free camera only rebuilds its orientation matrix while the player moves the mouse; use a target to aim. Cams 1/2/3 are rigidly attached to the car and cannot be moved. settleFrames (default 2) is how many frames to wait before reading 'after' back. Needs an active playground: solo/local Race, editor test runs, and spectating; NO_PLAYGROUND in menus. In the map editor use SetEditorCamera/ControlCamera instead. A mode switch is only consumed on a live playground tick and is silently dropped while the Openplanet overlay or a game menu is up over the view - check the returned switched flag, and close the overlay if it is false. MediaTracker clips also override this camera. Uses raw memory offsets, so judge success on the 'after' readback, never on the call returning success.", '{"type":"object","properties":{"action":{"type":"string"},"mode":{"type":"string"},"alt":{"type":"boolean"},"drivable":{"type":"boolean"},"mechanism":{"type":"string"},"spectatorCamera":{"type":"string"},"forceCameraType":{"type":"integer"},"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"},"pitch":{"type":"number"},"yaw":{"type":"number"},"roll":{"type":"number"},"radians":{"type":"boolean"},"target":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}}},"clearTarget":{"type":"boolean"},"radius":{"type":"number"},"fov":{"type":"number"},"ensureFreeCam":{"type":"boolean"},"settleFrames":{"type":"integer"},"raw":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlOverlay", "Openplanet's own overlay -- the F3 menu bar and plugin windows -- NOT the game HUD. action=get|show|hide|toggle (default get). Returns before/after/state, each with shown (UI::IsOverlayShown) and rendering (UI::IsRendering), plus changed and asRequested. Judge on asRequested, not on the call succeeding. shown and rendering are different questions: the global option 'Hide overlay on hidden game UI' makes rendering false while shown stays true. Hide this before ControlPlayCamera set_mode -- a mode switch is only consumed on a live playground tick and is silently dropped while the overlay is up over the view -- and before any screenshot that measures rendered pixels. settleFrames (default 2, max 30) yields that many frames before reading back, so the frame on screen has caught up; get never settles and never writes. Uses the documented Openplanet API, no memory offsets, so this does not break on a game update. To hide the GAME HUD (chrono, records, chat) use CGamePlaygroundUIConfig OverlayHide* instead -- not this tool.", '{"type":"object","properties":{"action":{"type":"string"},"settleFrames":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("GetPauseState", "Read-only pause state of the current playground. Samples three clocks once per game frame for sampleMs (default 300, 0..2000): clientGameTime (PlaygroundClientScriptAPI.GameTime), coreSimulationTime and coreGameTime (GetCmdBufferCore), each with value, advancedMs, changesInWindow, msSinceChange. verdict frozen|running|mixed|unknown comes from the clocks only, never from menuShown -- online the menu shows while the game keeps running. frozen means all three clocks were read on every frame and none changed for the whole sampleMs; every observed change counts (A->B->A is not frozen); an unreadable clock or a loading frame restarts the window (clocks.windowRestarts); a playground change ends the sample with verdict unknown. Samples online and in local play alike. menuShown, locality and pausable (whether ControlPause would try: solo/local play, not loading) are read at the END of the window; menuShownAtStart is the menu at its start. menuShownAtStart and menuShown are booleans or \"unknown\" if unreadable. Check for an explicit boolean before acting. sampleMs=0 is one snapshot and always verdict unknown. Changes nothing.", '{"type":"object","properties":{"sampleMs":{"type":"integer"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("ControlPause", "Pause or resume the game with no OS input: action=pause|resume|toggle. Pause opens the game's own in-game menu if it is not already open (PlaygroundInterfaceScriptHandler.ShowInGameMenu, the only pause the API has), then requires all three clocks to be read and unchanged for holdMs (default 300, 100..2000) with the menu up on every frame -- success is paused:true from the clocks, not from the menu. Resume closes the in-game menu with CloseInGameMenu(Resume) only (never Quit or a sub-menu), whoever opened it, and reports measured jumpMs entries when there is a baseline and a changed value; missing entries are unmeasured. Nothing outlives the call: no timer, no watcher, no ownership; the caller resumes. Before dispatch, refusals like NO_PLAYGROUND, LOADING, ONLINE_NOT_PAUSABLE or DIALOG_BLOCKING send no menu action. After Show, those same codes can be in-flight aborts; check cleanupSkipped and menuShownAfter. Only solo/local play pauses (PlaygroundScript local, no server login, not a spectator client). After every frame and immediately before every ShowInGameMenu and every Resume it reads the gate, the menu, the dialog state and the playground: a locality, loading or playground change stops the call (CONTEXT_CHANGED, LOADING, ONLINE_NOT_PAUSABLE), a dialog stops it before the next Show. If a dispatched Show does not lead to a verified pause, the call attempts at most one Resume, only for the menu it saw open and stay up, after a fresh local, non-loading, same-playground gate. Reports cleanupSkipped on refusal. In explicit Resume and failed-Show cleanup, menuShown, menuShownAfter and changed are booleans or \"unknown\" if unreadable. Check for an explicit boolean before acting. CLEANUP_FAILED means closure was not verified after a Resume attempt. lateShowPossible:true means a Show it sent may still be applied later: call GetPauseState again after the menu appears closed. openedByThisCall means observed open after a Show in this call, not who opened it. Idempotent: pause while paused or resume while running is success with changed:false; a pause request never closes a pre-existing menu. One budget per call: output.budgetMs = 3*holdMs + timeoutMs + 2000 (max 18000), checked once per game frame, so a frame hitch can run past it; timeoutMs (default 3000) bounds the show or the close. holdMs/timeoutMs must be numbers; out-of-range values are clamped. UNPROVEN live: that a programmatic menu freezes the clocks like ESC (checked in solo only for ESC).", '{"type":"object","properties":{"action":{"type":"string","enum":["pause","resume","toggle"]},"holdMs":{"type":"integer"},"timeoutMs":{"type":"integer"}},"required":["action"],"additionalProperties":false}'));
+        tools.Add(MakeTool("GetDisplaySetting", "Read-only: the game's bloom setting (Settings > Graphics > Bloom) as none|medium|high from both sources (sources.wrapper = ManiaPlanetScriptAPI.DisplaySettings, sources.systemConfig = Viewport.SystemConfig.Display, or DisplaySafe in safe mode), sources.wrapperLoadedBy none|other|tool, sourcesAgree, isSafeMode, config display|safe, install {known, fingerprint or unknownBecause}, restoreRecord {state valid|invalid, prior, target, config, setAt, identityMatches, restoreWouldDo alreadyPrior|apply|conflict|unavailable} when SetDisplaySetting left one (persistence assumed), and legacyRecord {path, bloom} when an older build's record file is present (never applied or migrated; recover by hand, see the pause-bloom guide).", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("SetDisplaySetting", "Set the game's bloom: bloom=none|medium|high (only bloom). The setting is the user's and persistence is assumed. One restore record slot that Set never overwrites: it refuses, changing nothing, with RESTORE_PENDING (a valid record exists: restore and explicitly retire it after confirming the prior stuck), RESTORE_RECORD_INVALID, RESTORE_CONFLICT (a record from another install/profile/config), LEGACY_RECORD_PRESENT (an older build's record file), IDENTITY_UNKNOWN (no valid port.override prefix marker, e.g. the primary prefix; not a lease check), WRAPPER_BUSY (the DisplaySettings wrapper is loaded by someone else, e.g. the settings page, or the tool's own earlier wrapper is not released) and SOURCES_DISAGREE (the wrapper and systemConfig read different values). Otherwise, in one section with no yield: reads the prior, writes the record {prior, target, config, identity, setAt} to plugin storage, reads it back exactly, writes bloom by ONE mechanism chosen up front (wrapper: DisplaySettings_LoadCurrent / set FxBloomHdr / DisplaySettings_Apply / Unload on a wrapper this tool loaded with no yield; else systemConfig: a direct Viewport.SystemConfig write), and reads every source back. output.mechanism says which. A mismatch is APPLY_UNVERIFIED with the record kept. persisted:assumed (persistence and deferred Apply timing are unproven). sideEffects lists only same-frame observed changes to DirtyCounter, DisplayMode or WindowSize; it cannot rule out window/device resets. UNPROVEN live: that the renderer drops bloom at once without a restart -- compare screenshots (ControlPause pause gives a still frame). Refused while a blocking dialog is up. Nothing restores automatically: always call RestoreDisplaySetting when done.", '{"type":"object","properties":{"bloom":{"type":"string","enum":["none","medium","high"]}},"required":["bloom"],"additionalProperties":false}'));
+        tools.Add(MakeTool("RestoreDisplaySetting", "Explicit restore of the prior bloom (never automatic). Requires a valid record for the same prefix/profile/config. If every readable source holds the target and none is known unreadable, writes the prior by one mechanism and reads back all sources. RESTORE_UNVERIFIED if they do not read back as prior. If already at prior, writes nothing. Both outcomes keep the record. Otherwise RESTORE_CONFLICT keeps the record; force:true can overwrite the current value only within the same identity and config. persisted:assumed; persistence and deferred Apply timing are unproven. Follow the pause-bloom guide before retire:true: verify the same matching pending record and prior after an in-instance map reload or a same-prefix restart that preserves the upper dir. The default tmc stop wipe destroys the record; a map reload does not prove a save or drain a deferred Apply. Keep the record if Apply is unresolved. Only retired:true confirms retirement. Retire requires every readable source at prior, none known unreadable, and no concurrent display call; it cannot combine with force:true. Older records are reported only, never applied or retired.", '{"type":"object","properties":{"force":{"type":"boolean"},"retire":{"type":"boolean"}},"additionalProperties":false}'));
+        tools.Add(MakeTool("MaxFPS", "Get or set the game's frame limit (Settings > Display > Max FPS; CSystemConfig.Display.MaxFps). {} reads it: maxFps (0 = uncapped), averageFps (measured), safeModeMaxFps. {fps:N} sets it: 0 (uncapped) or 10..1000, applied from the next frame, for this session only (not saved to the game's config file); returns before/changed and the new state after settleFrames (default 10, max 120). Works in any context.", '{"type":"object","properties":{"fps":{"type":"integer"},"settleFrames":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetRenderCamera", "Camera::GetCurrent (or find=true → FindCurrent) + GetCurrentPosition + projection/fov/clip.", '{"type":"object","properties":{"find":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ProjectWorldToScreen", "Camera::ToScreen + ToScreenSpace + IsBehind for world (x,y,z).", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}},"required":["x","y","z"],"additionalProperties":false}'));
         tools.Add(MakeTool("SetEditorOrbitalTarget", "Camera::SetEditorOrbitalTarget — focus editor orbital camera on world (x,y,z).", '{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"z":{"type":"number"}},"required":["x","y","z"],"additionalProperties":false}'));
         tools.Add(MakeTool("GetResult", "Poll for async tool result. input: {requestId}. Returns {request_id, status:'pending'|'done'|'error', result?/error?}. Used after DispatchAsync (in-process only).", '{"type":"object","properties":{"requestId":{"type":"string"},"request_id":{"type":"string"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ListToolPacks", "List registered MCP tool packs and the bridge's cached update status. Packs include id, plugin, toolCount, enabled, installedVersion, latestReleaseUrl, latestVersion, updateAvailable, updateStatus, updateStale, timestamps and warnings. output.bridge has the bridge's own version status. Reads never wait for HTTP; false updateAvailable can mean unknown, so inspect updateStatus and updateStale.", '{"type":"object","properties":{},"additionalProperties":false}'));
+        tools.Add(MakeTool("ListTools", "List every callable tool with its owner: {name, pack, plugin, description}. pack is 'core' for built-ins; plugin is the Openplanet plugin id, as in [plugin-id] log tags. output.packs maps each pack to {plugin, generation, toolCount, definedAt:{file, line, function}}, the pack's RegisterToolPack call site. Descriptions are cut to 160 chars unless includeSchemas, which also adds input_schema. pack filters to one pack.", '{"type":"object","properties":{"pack":{"type":"string"},"includeSchemas":{"type":"boolean"}},"additionalProperties":false}'));
         tools.Add(MakeTool("GetTypeInfo", "Openplanet Reflection dump for a class and all its members (default). Pass className (e.g. CGameCtnChallenge); optional classId (int or 0x hex) or from=app|editor|challenge|cursor|pluginMap (TypeOf a live nod). Default includes inherited members (declaredOn); ownOnly:true keeps only this class. Optional member (one name), query (case-insensitive substring), limit. Each member has name, offset/offsetHex, isField (false when offset is 0xFFFF, typically a method), declaredOn. MwMemberInfo has no member type name.", '{"type":"object","properties":{"className":{"type":"string"},"classId":{"type":["string","integer"]},"from":{"type":"string"},"member":{"type":"string"},"ownOnly":{"type":"boolean"},"query":{"type":"string"},"limit":{"type":"integer"}},"additionalProperties":false}'));
         tools.Add(MakeTool("ControlFids", "Openplanet Fids:: — browse and operate on the five file drives (game|user|fake|resource|programData). action: drives (list roots), get (file or folder metadata; kind=file|folder|auto), list (one-level children; query/limit/offset/kind), preload (Fids::Preload — loads the nod; check nod.className / nod.ptr), updateTree (rescan disk; refuses empty game path unless force:true), extract (Fids::Extract to disk, or dest=relative name via CopyToFileRelative; writes files), getFullPath, fromNod (GetFidFromNod of from_ptr — hex or int nod pointer from preload/get includeNod or another tool; not from=app|editor). packStatus/mountPack/unmountPack inspect or confirm preloaded USER-pack mounts using owned identities (mutations Menu only). setText confirms bounded find/replace of user editor scripts only in the idle map editor (confirm:true); getText reads CPlugFileTextScript.Text (find+context grep or offset+length slice, max 65536). Paths are drive-relative (e.g. GameData/Stadium/GameCtnDecoration). list default limit 80 max 400. Guide: GetGuide {topic:fids}.", '{"type":"object","properties":{"action":{"type":"string"},"drive":{"type":"string"},"path":{"type":"string"},"kind":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer"},"offset":{"type":"integer"},"includeNod":{"type":"boolean"},"withFiles":{"type":"boolean"},"force":{"type":"boolean"},"hookMethod":{"type":"boolean"},"dest":{"type":"string"},"failIfExists":{"type":"boolean"},"from_ptr":{"type":["string","integer"]},"fromPtr":{"type":["string","integer"]},"updateTree":{"type":"boolean"},"find":{"type":"string"},"context":{"type":"integer"},"maxHits":{"type":"integer"},"replace":{"type":"string"},"replaceAll":{"type":"boolean"},"confirm":{"type":"boolean"},"caseInsensitive":{"type":"boolean"},"length":{"type":"integer"}},"required":["action"],"additionalProperties":false}'));
         tools.Add(MakeTool("ScanKinematicItems", "Read-only scan of .Item.Gbx files in a fid folder (default game:GameData/Stadium/Items): preload each item, walk EntityModel CPlugPrefab.Ents for NPlugDyna_SKinematicConstraint models, and report per KC the ShaderTcType, ShaderTcAnimFunc keys {durationMs,value} (step-evaluated sub-texture index over time), ShaderTcData.TransSub {NbSubTexture,PerLine,PerCol}, and the Trans/Rot anim-func summaries. Params: drive (default game), path, query (filename substring), limit (default 200 max 1000), offset, includeWithoutKc (also list items without a KC).", '{"type":"object","properties":{"drive":{"type":"string"},"path":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer"},"offset":{"type":"integer"},"includeWithoutKc":{"type":"boolean"},"includeEnts":{"type":"boolean"}},"additionalProperties":false}'));
@@ -1399,7 +1618,7 @@ namespace TmMcp {
         Json::Value tool = Json::Object();
         tool["name"] = name;
         tool["description"] = description + (ShouldObserveDialogAfterTool(name)
-            ? " After one rendered frame, successful public socket calls also return output.dialogAfter (the full GetDialog snapshot) and output.dialogAfterFrameDelay=1."
+            ? " After one rendered frame, successful public socket calls also return output.dialogAfter (the full GetDialog snapshot) and output.dialogAfterFrameDelay=1. Like every socket response, data.dialog flags a dialog that is up (compact)."
             : "");
         tool["input_schema"] = Json::Parse(inputSchemaJson);
         return tool;
@@ -1436,9 +1655,25 @@ namespace TmMcp {
         return RequestShutdownGame();
     }
 
-    Json::Value@ BackToMainMenu(Json::Value &in input) {
+    bool _DialogBlocksNow() {
+        auto d = BasicDialogSummary();
+        return d.HasKey("blocking") && bool(d["blocking"]);
+    }
+
+    // Main menu proper: no editor or playground, not loading, menus module on
+    // the switcher stack. The save prompt keeps the editor alive, so it can
+    // never look like "menu reached".
+    bool _AtMainMenu() {
+        return DetectGameModeName() == "Menu" && MenuModuleAvailable();
+    }
+
+    // Leave the editor/race for the main menu and wait for the outcome:
+    // "menu", "dialog" (one needing an answer came up, usually the
+    // unsaved-changes prompt, which can appear frames after the request) or
+    // "timeout". Never answers a dialog.
+    string _UnwindToMenu(Json::Value &inout output, bool closeInGameMenu = false) {
         auto app = cast<CGameManiaPlanet>(GetApp());
-        if (app is null) return MakeError("app not available", "UNKNOWN", true);
+        if (app is null) return "timeout";
         uint readyWaitedMs = 0;
         bool editorWasReady = true;
         auto editor = cast<CGameCtnEditorFree>(app.Editor);
@@ -1454,37 +1689,96 @@ namespace TmMcp {
             }
             @editor = null;
         }
-        app.BackToMainMenu();
-        uint menuWaitedMs = 0;
-        bool reachedMenu = false;
-        bool blockedByDialog = false;
-        uint64 t1 = Time::Now;
-        while (menuWaitedMs < 10000) {
-            if (_LeaveDialogIsUp()) {
-                blockedByDialog = true;
-                break;
-            }
-            if (app.Switcher.ModuleStack.Length > 0
-                && cast<CTrackManiaMenus>(app.Switcher.ModuleStack[app.Switcher.ModuleStack.Length - 1]) !is null) {
-                reachedMenu = true;
-                break;
-            }
-            yield();
-            menuWaitedMs = uint(Time::Now - t1);
+        if (closeInGameMenu
+            && app.Network !is null
+            && app.Network.PlaygroundClientScriptAPI !is null
+            && app.Network.PlaygroundClientScriptAPI.IsInGameMenuDisplayed
+            && app.Network.PlaygroundInterfaceScriptHandler !is null) {
+            app.Network.PlaygroundInterfaceScriptHandler.CloseInGameMenu(
+                CGameScriptHandlerPlaygroundInterface::EInGameMenuResult::Quit);
         }
-        Json::Value output = Json::Object();
+        app.BackToMainMenu();
+        // 10s idle; time on a loading screen is not charged (cap 30s).
+        string outcome = "timeout";
+        uint64 t1 = Time::Now;
+        uint64 last = t1;
+        uint charged = 0;
+        while (charged < 10000 && Time::Now - t1 < 30000) {
+            if (_DialogBlocksNow()) { outcome = "dialog"; break; }
+            if (_AtMainMenu()) { outcome = "menu"; break; }
+            yield();
+            uint64 now = Time::Now;
+            if (!IsLoadingLike(cast<CTrackMania>(app))) charged += uint(now - last);
+            last = now;
+        }
         output["editorWasReady"] = editorWasReady;
         output["readyWaitedMs"] = int(readyWaitedMs);
-        output["menuWaitedMs"] = int(menuWaitedMs);
-        output["reachedMenu"] = reachedMenu;
-        output["blockedByDialog"] = blockedByDialog;
-        if (blockedByDialog) {
-            output["note"] = "BackToMainMenu() stalled on a dialog (typically unsaved changes).";
-        } else if (!reachedMenu) {
-            output["note"] = "BackToMainMenu() issued but menu module not on top after 10s; poll GetMode manually.";
+        output["menuWaitedMs"] = int(Time::Now - t1);
+        output["reachedMenu"] = outcome == "menu";
+        output["blockedByDialog"] = outcome == "dialog";
+        return outcome;
+    }
+
+    // Shared preflight for EditNewMap / OpenMapInEditor / PlayMap. Leave the
+    // current map synchronously, before anything is queued, so a save prompt
+    // is reported instead of a request waiting behind it (a new-map request
+    // made from a dirty editor broke EditNewMap for the rest of the game run,
+    // 2026-11-15). DispatchTool has already refused if a dialog was up.
+    // Returns null at the main menu, else the error result to return.
+    Json::Value@ _PrepareModuleChange(const string &in tool, bool closeInGameMenu = false) {
+        if (_AtMainMenu()) return null;
+        Json::Value unwind = Json::Object();
+        string outcome = _UnwindToMenu(unwind, closeInGameMenu);
+        if (outcome == "menu") return null;
+        unwind["started"] = false;
+        unwind["unwind"] = outcome;
+        unwind["dialog"] = BasicDialogSummary();
+        Json::Value@ err;
+        if (outcome == "dialog") {
+            string kind = string(unwind["dialog"]["dialogKind"]);
+            @err = MakeError(tool + " stopped before acting: leaving the current map raised a dialog ("
+                + kind + "), usually the unsaved-changes prompt. Nothing was queued; the dialog is still up.",
+                "DIALOG_BLOCKING", false, "",
+                DialogNextCallHint(kind) + " Answering it finishes the return to the menu; then call " + tool + " again.");
         } else {
-            output["note"] = "BackToMainMenu() complete; menu module on top of stack.";
+            @err = MakeError(tool + " stopped before acting: the game did not reach the main menu.",
+                "UNWIND_TIMEOUT", true, "Menu", "Poll GetMode until it returns Menu, then call " + tool + " again.");
         }
+        err["output"] = unwind;
+        return err;
+    }
+
+    // DispatchTool: refuse map/module changes and test starts while a dialog
+    // needs an answer, before the tool does anything (DialogPolicy.as).
+    Json::Value@ RefuseWhileDialogBlocks(const string &in name, Json::Value &in input) {
+        string action = input.HasKey("action") && input["action"].GetType() == Json::Type::String
+            ? string(input["action"]) : "";
+        if (!ToolNeedsDialogClear(name, action) && !ToolMutatesEditor(name)) return null;
+        auto dialog = BasicDialogSummary();
+        if (!dialog.HasKey("blocking") || !bool(dialog["blocking"])) return null;
+        string kind = string(dialog["dialogKind"]);
+        string frame = dialog.HasKey("frameIdName") ? string(dialog["frameIdName"])
+            : (dialog.HasKey("menuFrameIdName") ? string(dialog["menuFrameIdName"]) : "");
+        auto err = MakeError(name + " refused: a game dialog is up (" + kind
+            + (frame.Length > 0 ? ", frame " + frame : "") + "). Nothing was done.",
+            "DIALOG_BLOCKING", false, "", DialogNextCallHint(kind, frame) + " Then call " + name + " again.");
+        Json::Value output = Json::Object();
+        output["started"] = false;
+        output["dialog"] = dialog;
+        err["output"] = output;
+        return err;
+    }
+
+    Json::Value@ BackToMainMenu(Json::Value &in input) {
+        auto app = cast<CGameManiaPlanet>(GetApp());
+        if (app is null) return MakeError("app not available", "UNKNOWN", true);
+        // Failure is an error, not a success with a note: callers that only check success
+        // otherwise carry on as if they were at the menu.
+        auto err = _PrepareModuleChange("BackToMainMenu");
+        if (err !is null) return err;
+        Json::Value output = Json::Object();
+        output["reachedMenu"] = true;
+        output["note"] = "BackToMainMenu() complete; at the main menu.";
         _AttachLeaveDialogWarning(output);
         return MakeSuccess(output);
     }
@@ -1580,14 +1874,67 @@ namespace TmMcp {
         return memberTy.Offset;
     }
 
-    void _EditNewMapCoroutine(string environment, string decoration, string mapType, string vista, string car, nat3 mapSize) {
+    // Latest EditNewMap coroutine status, read back by EditNewMapTool after its
+    // waitMs. "error: ..." means no map was requested.
+    uint g_EditNewMapSeq = 0;
+    string g_EditNewMapStatus = "";
+    // True while the Stadium standard decoration fid holds another decoration
+    // (SwapDecoHack). At most one swap may be in flight; the fid and its own
+    // nod are kept so Shutdown can undo a swap a plugin reload interrupts.
+    bool g_EditNewMapDecoSwapped = false;
+    CSystemFidFile@ g_DecoSwapFid = null;
+    CMwNod@ g_DecoSwapOrigNod = null;
+
+    void RestoreEditNewMapDecoSwap() {
+        if (!g_EditNewMapDecoSwapped) return;
+        Dev::SetOffset(g_DecoSwapFid, _MemberOffset("CSystemFidFile", "Nod"), g_DecoSwapOrigNod);
+        g_DecoSwapOrigNod.MwRelease();
+        @g_DecoSwapOrigNod = null;
+        @g_DecoSwapFid = null;
+        g_EditNewMapDecoSwapped = false;
+    }
+
+    void _EditNewMapStatus(uint seq, const string &in status) {
+        if (seq == g_EditNewMapSeq) g_EditNewMapStatus = status;
+    }
+
+    void _EditNewMapFail(uint seq, const string &in msg) {
+        warn("TM Control MCP EditNewMap: " + msg);
+        _EditNewMapStatus(seq, "error: " + msg);
+    }
+
+    void _EditNewMapCoroutine(string environment, string decoration, string mapType, string vista, string car, nat3 mapSize, uint seq) {
         if (!Permissions::OpenAdvancedMapEditor()) {
-            warn("TM Control MCP EditNewMap: missing advanced map editor permission");
+            _EditNewMapFail(seq, "missing advanced map editor permission");
             return;
         }
         auto app = cast<CGameManiaPlanet>(GetApp());
         if (app is null || app.ManiaTitleControlScriptAPI is null) {
-            warn("TM Control MCP EditNewMap: title control API not available");
+            _EditNewMapFail(seq, "title control API not available");
+            return;
+        }
+
+        // Leave first, touch decorations after. On 2026-11-15 a swap made while
+        // a dirty editor sat behind its save prompt was followed by a broken
+        // standard fid, and EditNewMap did nothing for the rest of the run.
+        app.BackToMainMenu();
+        uint64 tReady = Time::Now;
+        while (!app.ManiaTitleControlScriptAPI.IsReady && Time::Now - tReady < 10000) {
+            if (_LeaveDialogIsUp()) break;
+            yield();
+        }
+        uint64 tMenu = Time::Now;
+        while ((app.Switcher.ModuleStack.Length < 1 || cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0]) is null)
+            && Time::Now - tMenu < 10000) {
+            if (_LeaveDialogIsUp()) break;
+            yield();
+        }
+        if (_LeaveDialogIsUp()) {
+            _EditNewMapFail(seq, "blocked by dialog after BackToMainMenu (unsaved changes?); nothing requested");
+            return;
+        }
+        if (g_EditNewMapDecoSwapped) {
+            _EditNewMapFail(seq, "a previous EditNewMap still has its decoration swap in place; poll GetMode and retry");
             return;
         }
 
@@ -1617,13 +1964,10 @@ namespace TmMcp {
         }
         if (fidBase.Length == 0) fidBase = _VistaToDecoFidBase(vista);
         if (fidBase.Length == 0) {
-            warn("TM Control MCP EditNewMap: unknown vista '" + vista + "' (see map-vistas guide)");
+            _EditNewMapFail(seq, "unknown vista '" + vista + "' (see map-vistas guide)");
             return;
         }
-        bool standard = fidBase == stdFidBase && mapSize.x == 0;
-
         CGameCtnDecoration@ chosenDeco = null;
-        CMwNod@ origStdNod = null;
         nat3 origSize;
         bool swapped = false;
         {
@@ -1632,7 +1976,7 @@ namespace TmMcp {
             auto chosenFid = Fids::GetGame(decoFolder + fidBase + ".Decoration.Gbx");
             @chosenDeco = cast<CGameCtnDecoration>(Fids::Preload(chosenFid));
             if (chosenDeco is null) {
-                warn("TM Control MCP EditNewMap: failed to preload decoration " + fidBase);
+                _EditNewMapFail(seq, "failed to preload decoration " + fidBase);
                 return;
             }
             chosenDeco.MwAddRef();
@@ -1648,71 +1992,67 @@ namespace TmMcp {
             // EditNewMap2 looks up that IdName after preload — no swap needed.
             // Stadium still only accepts the standard 48x48Screen155Day nod
             // name, so non-standard Stadium vistas keep SwapDecoHack.
-            if (environment != "Stadium" || standard) {
+            string fail = "";
+            if (environment != "Stadium") {
                 stdNodName = chosenDeco.IdName;
+                if (stdNodName.Length == 0) fail = "no decoration nod IdName for " + fidBase;
             } else {
+                // Check the shared standard fid before trusting or swapping it.
+                // If an earlier swap was never undone it holds another
+                // decoration (or a dead one with an empty IdName); using it, or
+                // swapping again and returning, left EditNewMap2 doing nothing
+                // for the rest of the game run (2026-11-15).
                 auto stdFid = Fids::GetGame(decoFolder + stdFidBase + ".Decoration.Gbx");
                 auto stdNod = Fids::Preload(stdFid);
-                if (stdNod !is null) {
-                    stdNodName = stdNod.IdName;
-                    if (stdNod.IdName != chosenDeco.IdName) {
-                        @origStdNod = stdNod;
-                        origStdNod.MwAddRef();
-                        Dev::SetOffset(stdFid, _MemberOffset("CSystemFidFile", "Nod"), chosenDeco);
-                        swapped = true;
-                    }
+                string stdId = stdNod is null ? "(null)" : string(stdNod.IdName);
+                if (stdId != STD_DECO_NOD) {
+                    fail = "standard decoration fid holds '" + stdId + "', expected '" + STD_DECO_NOD
+                        + "' (an earlier decoration swap was not undone); refusing. Restart the game to recover.";
+                } else if (stdNod.IdName != chosenDeco.IdName) {
+                    @g_DecoSwapFid = stdFid;
+                    @g_DecoSwapOrigNod = stdNod;
+                    g_DecoSwapOrigNod.MwAddRef();
+                    Dev::SetOffset(stdFid, _MemberOffset("CSystemFidFile", "Nod"), chosenDeco);
+                    swapped = true;
+                    g_EditNewMapDecoSwapped = true;
                 }
             }
-            if (stdNodName.Length == 0) {
-                warn("TM Control MCP EditNewMap: no decoration nod IdName for " + fidBase);
+            if (fail.Length > 0) {
+                // Nothing swapped on this path; undo the size and the ref.
+                chosenDeco.DecoSize.SizeX = origSize.x;
+                chosenDeco.DecoSize.SizeY = origSize.y;
+                chosenDeco.DecoSize.SizeZ = origSize.z;
                 chosenDeco.MwRelease();
                 @chosenDeco = null;
+                _EditNewMapFail(seq, fail);
                 return;
             }
             trace("TM Control MCP EditNewMap: fid=" + fidBase + " nod=" + stdNodName + " swapped=" + swapped);
         }
 
-        app.BackToMainMenu();
-        uint64 tReady = Time::Now;
-        while (!app.ManiaTitleControlScriptAPI.IsReady && Time::Now - tReady < 10000) {
-            if (_LeaveDialogIsUp()) break;
-            yield();
-        }
-        uint64 tMenu = Time::Now;
-        while ((app.Switcher.ModuleStack.Length < 1 || cast<CTrackManiaMenus>(app.Switcher.ModuleStack[0]) is null)
-            && Time::Now - tMenu < 10000) {
-            if (_LeaveDialogIsUp()) break;
-            yield();
-        }
-        if (_LeaveDialogIsUp()) {
-            warn("TM Control MCP EditNewMap: blocked by dialog after BackToMainMenu (unsaved changes?)");
-        } else {
-            yield();
-            app.ManiaTitleControlScriptAPI.EditNewMap2(environment, stdNodName, "", car, mapType, false, "", "");
-            yield();
-            trace("TM Control MCP EditNewMap: EditNewMap2('" + environment + "', '" + stdNodName + "') LatestResult=" + int(app.ManiaTitleControlScriptAPI.LatestResult));
-        }
+        yield();
+        app.ManiaTitleControlScriptAPI.EditNewMap2(environment, stdNodName, "", car, mapType, false, "", "");
+        yield();
+        trace("TM Control MCP EditNewMap: EditNewMap2('" + environment + "', '" + stdNodName + "') LatestResult=" + int(app.ManiaTitleControlScriptAPI.LatestResult));
+        _EditNewMapStatus(seq, "requested");
         // 20s idle to start a load / open the editor; once a loading screen
         // is up, keep waiting (big maps can take many minutes).
         uint waited = 0;
         bool opened = _WaitForEditorAfterMapLoad(20000, 1800000, waited);
         if (opened) {
             trace("TM Control MCP EditNewMap: editor opened after " + waited + "ms");
+            _EditNewMapStatus(seq, "opened");
         } else if (_LeaveDialogIsUp()) {
-            warn("TM Control MCP EditNewMap: blocked by dialog after " + waited + "ms");
+            _EditNewMapFail(seq, "blocked by dialog after " + waited + "ms");
         } else {
-            warn("TM Control MCP EditNewMap: editor did not open after " + waited + "ms (vista '" + vista + "', deco '" + fidBase + "')");
+            _EditNewMapFail(seq, "editor did not open after " + waited + "ms (vista '" + vista + "', deco '" + fidBase + "')");
         }
-        if (swapped) {
-            auto stdFid = Fids::GetGame(decoFolder + stdFidBase + ".Decoration.Gbx");
-            Dev::SetOffset(stdFid, _MemberOffset("CSystemFidFile", "Nod"), origStdNod);
-            origStdNod.MwRelease();
-            @origStdNod = null;
-        }
+        if (swapped) RestoreEditNewMapDecoSwap();
         if (chosenDeco !is null) {
-            if (mapSize.x > 0 && opened) {
-                // Restore the shared deco size only after the map is closed.
-                while (true) {
+            if (mapSize.x > 0) {
+                // Restore the shared deco size only after the map is closed
+                // (at once if it never opened).
+                while (opened) {
                     sleep(500);
                     auto tmApp = cast<CTrackMania>(GetApp());
                     if (tmApp is null || tmApp.Editor is null) break;
@@ -1778,12 +2118,21 @@ namespace TmMcp {
         if (input.HasKey("sizeY")) mapSize.y = uint(int(input["sizeY"]));
         if (input.HasKey("sizeZ")) mapSize.z = uint(int(input["sizeZ"]));
         string sizeStr = mapSize.x + "x" + mapSize.y + "x" + mapSize.z;
+        if (g_EditNewMapDecoSwapped) {
+            return MakeError("a previous EditNewMap is still opening its map (decoration swap in place)",
+                "EDITNEWMAP_BUSY", true, "", "Poll GetMode until MapEditor (the previous call gives up after 20s idle), then call EditNewMap again.");
+        }
+        auto pre = _PrepareModuleChange("EditNewMap");
+        if (pre !is null) return pre;
+        g_EditNewMapSeq++;
+        uint seq = g_EditNewMapSeq;
+        g_EditNewMapStatus = "queued";
         startnew(function(ref@ ctx) {
             auto args = cast<array<string>>(ctx);
             auto p = args[5].Split("x");
             nat3 sz(Text::ParseUInt(p[0]), Text::ParseUInt(p[1]), Text::ParseUInt(p[2]));
-            _EditNewMapCoroutine(args[0], args[1], args[2], args[3], args[4], sz);
-        }, array<string> = { environment, decoration, mapType, vista, car, sizeStr });
+            _EditNewMapCoroutine(args[0], args[1], args[2], args[3], args[4], sz, Text::ParseUInt(args[6]));
+        }, array<string> = { environment, decoration, mapType, vista, car, sizeStr, "" + seq });
         Json::Value output = Json::Object();
         output["environment"] = environment;
         output["decoration"] = decoration;
@@ -1798,6 +2147,16 @@ namespace TmMcp {
             _AttachLeaveDialogWarning(output);
             if (output.HasKey("warning")) {
                 output["note"] = "EditNewMap stalled on a dialog (typically unsaved changes). Answer it before the new map can open.";
+            }
+        }
+        // queued | requested | opened | error: ... (the coroutine outlives this call)
+        if (seq == g_EditNewMapSeq) {
+            output["status"] = g_EditNewMapStatus;
+            if (g_EditNewMapStatus.StartsWith("error: ")) {
+                auto err = MakeError("EditNewMap failed: " + g_EditNewMapStatus.SubStr(7), "EDITNEWMAP_FAILED", false, "",
+                    "No map was created. See output.status and the Openplanet log.");
+                err["output"] = output;
+                return err;
             }
         }
         return MakeSuccess(output);
@@ -1907,6 +2266,8 @@ namespace TmMcp {
         string path = string(input["path"]);
         if (path.Length == 0) return MakeError("path is empty");
         if (!Permissions::OpenAdvancedMapEditor()) return MakeError("advanced map editor permission unavailable");
+        auto pre = _PrepareModuleChange("OpenMapInEditor");
+        if (pre !is null) return pre;
 
         auto spec = Json::Object();
         spec["path"] = path;
@@ -1982,6 +2343,18 @@ namespace TmMcp {
         if (path.Length == 0) return MakeError("path is empty");
         if (!Permissions::PlayLocalMap()) return MakeError("PlayLocalMap permission unavailable");
 
+        auto preflight = PlayMapPreflight(path);
+        if (string(preflight["state"]) == "invalid") {
+            auto error = MakeError("Map file has an invalid or truncated GBX envelope", "INVALID_MAP_FILE", false);
+            auto rejected = Json::Object();
+            rejected["queued"] = false;
+            rejected["preflight"] = preflight;
+            error["output"] = rejected;
+            return error;
+        }
+        auto pre = _PrepareModuleChange("PlayMap", true);
+        if (pre !is null) return pre;
+
         Json::Value spec = Json::Object();
         spec["path"] = path;
         if (input.HasKey("mode")) spec["mode"] = string(input["mode"]);
@@ -1991,6 +2364,8 @@ namespace TmMcp {
         Json::Value output = Json::Object();
         output["queued"] = true;
         output["path"] = path;
+        output["preflight"] = preflight;
+        output["contentWarning"] = string(preflight["warning"]);
         if (input.HasKey("mode")) output["mode"] = string(input["mode"]);
         int waitMs = input.HasKey("waitMs") ? int(input["waitMs"]) : 1500;
         if (waitMs > 0) {
@@ -2029,6 +2404,35 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
             editor.PluginMapType.SaveMap(wstring(fileName));
         } catch {
             return MakeError("SaveMap failed: " + getExceptionInfo());
+        }
+
+        // The game can answer a save with a prompt instead of saving (seen: a yes/no prompt when
+        // the map holds an item it will not embed). Give it a moment; a dialog that was not up
+        // before and needs an answer means nothing is known to be saved.
+        bool wasBlocking = dialogPre.HasKey("blocking") && bool(dialogPre["blocking"]);
+        Json::Value dialogPost = BasicDialogSummary();
+        uint64 saveT0 = Time::Now;
+        while (Time::Now - saveT0 < 1500) {
+            dialogPost = BasicDialogSummary();
+            bool blockingNow = dialogPost.HasKey("blocking") && bool(dialogPost["blocking"]);
+            string kindNow = string(dialogPost["dialogKind"]);
+            if (blockingNow && kindNow != "wait") break;
+            if (!blockingNow && kindNow != "wait" && Time::Now - saveT0 >= 300) break;
+            yield();
+        }
+        if (!wasBlocking && dialogPost.HasKey("blocking") && bool(dialogPost["blocking"])
+                && string(dialogPost["dialogKind"]) != "wait") {
+            string kind = string(dialogPost["dialogKind"]);
+            auto err = MakeError("SaveMapAs: the game answered the save with a dialog (" + kind
+                + "); the map is not known to be saved. The dialog is still up.",
+                "DIALOG_BLOCKING", false, "Editor", DialogNextCallHint(kind) + " Then check the file and save again.");
+            Json::Value eo = Json::Object();
+            eo["saved"] = false;
+            eo["fileName"] = fileName;
+            eo["dialogPre"] = dialogPre;
+            eo["dialog"] = dialogPost;
+            err["output"] = eo;
+            return err;
         }
 
         Json::Value output = Json::Object();
@@ -2192,6 +2596,84 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         return MakeSuccess(BuildDialogSummary());
     }
 
+    // data.dialog on every socket tool response: {up:false} when clear, else
+    // kind/blocking/frame/text/hint. A few field reads; no yield, no tree walk.
+    Json::Value CompactDialogState() {
+        auto full = BasicDialogSummary();
+        Json::Value o = Json::Object();
+        if (!bool(full["available"])) {
+            o["up"] = false;
+            o["available"] = false;
+            return o;
+        }
+        string kind = string(full["dialogKind"]);
+        o["up"] = kind != "none";
+        if (kind == "none") return o;
+        o["kind"] = kind;
+        o["blocking"] = bool(full["blocking"]);
+        string frame = full.HasKey("frameIdName") ? string(full["frameIdName"])
+            : (full.HasKey("menuFrameIdName") ? string(full["menuFrameIdName"]) : "");
+        if (frame.Length > 0) o["frame"] = frame;
+        if (full.HasKey("messageText")) o["text"] = string(full["messageText"]).SubStr(0, 200);
+        else if (full.HasKey("waitText")) o["text"] = string(full["waitText"]).SubStr(0, 200);
+        o["hint"] = DialogNextCallHint(kind, frame);
+        return o;
+    }
+
+    // Every control with id `nameId` under c (same depth bound as _DlgFindChildRecursive).
+    void _DlgCollectNamed(CControlBase@ c, uint nameId, int depth, array<CControlBase@>@ found) {
+        if (c is null || depth > 12 || found.Length >= 32) return;
+        if (c.Id.Value == nameId) { found.InsertLast(c); return; }
+        auto cont = cast<CControlContainer>(c);
+        if (cont is null) return;
+        for (uint i = 0; i < cont.Childs.Length; i++) _DlgCollectNamed(cont.Childs[i], nameId, depth + 1, found);
+    }
+
+    // The card a ButtonSelection belongs to: its nearest named ancestor.
+    string _DlgCardId(CControlBase@ selection) {
+        CControlBase@ p = selection.Parent;
+        for (int up = 0; p !is null && p.IdName.Length == 0 && up < 4; up++) @p = p.Parent;
+        return p is null ? "?" : p.IdName;
+    }
+
+    bool _MenuFrameIsUp(const string &in frameName) {
+        auto app = cast<CTrackMania>(GetApp());
+        if (app is null) return false;
+        for (uint i = 0; i < app.ActiveMenus.Length; i++) {
+            auto m = app.ActiveMenus[i];
+            if (m !is null && m.CurrentFrame !is null && m.CurrentFrame.IdName == frameName) return true;
+        }
+        return false;
+    }
+
+    // frame-ok on a frame of several cards (server join: ButtonJoin, ButtonSpectator,
+    // ButtonCancel, a row per map) used to fire the first ButtonSelection: a map row.
+    Json::Value@ _FrameOkAmbiguousError(int menuIndex, const string &in frame, array<CControlBase@>@ cards) {
+        Json::Value list = Json::Array();
+        string ids = "";
+        for (uint i = 0; i < cards.Length; i++) {
+            string id = _DlgCardId(cards[i]);
+            Json::Value row = Json::Object();
+            row["id"] = id;
+            row["visible"] = cards[i].IsVisible;
+            list.Add(row);
+            if (i < 8) ids += (i == 0 ? "" : ", ") + id;
+        }
+        if (cards.Length > 8) ids += ", ...";
+        string specific = MenuDialogFrameHint(frame);
+        auto err = MakeError("frame-ok refused: " + frame + " has " + cards.Length + " cards (" + ids
+            + ") and no ButtonOk, so there is no single OK to press. Nothing was clicked.",
+            "AMBIGUOUS_FRAME", false, "",
+            specific.Length > 0 ? specific
+                : "Click the card you mean: ClickClassicMenuControl {id} with an id from output.cards (GetMenuFrameTree {menuIndex:" + menuIndex + "} shows the frame). RespondDialog {action:frame-cancel} closes it.");
+        Json::Value output = Json::Object();
+        output["frame"] = frame;
+        output["menuIndex"] = menuIndex;
+        output["cards"] = list;
+        err["output"] = output;
+        return err;
+    }
+
     Json::Value@ RespondDialog(Json::Value &in input) {
         auto app = cast<CTrackMania>(GetApp());
         if (app is null || app.BasicDialogs is null) return MakeError("basic dialogs unavailable");
@@ -2199,6 +2681,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
 
         string action = string(input["action"]).ToLower();
         auto before = BasicDialogSummary();
+        string menuFrameActed = "";
         try {
             if (action == "yes") {
                 app.BasicDialogs.AskYesNo_Yes();
@@ -2219,7 +2702,8 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
             } else if (action == "saveas-setname") {
                 if (!input.HasKey("name")) return MakeError("saveas-setname requires name");
                 if (!_SetSaveAsEntryText(string(input["name"]))) {
-                    return MakeError("no FrameDialogSaveAs / EntryFileName available");
+                    return MakeError("no FrameDialogSaveAs / EntryFileName available", "NOT_FOUND", false, "",
+                        "The SaveAs dialog is not up: GetDialog shows what is. SaveMapFlow {name} drives the whole save chain.");
                 }
             } else if (action == "hide") {
                 app.BasicDialogs.HideDialogs();
@@ -2227,25 +2711,54 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
                 // Dismiss a modal menu dialog (e.g. FrameDialogEditorChallengeCard,
                 // the 'map saved' card) via the menus dialog validate/cancel hooks.
                 bool fired = false;
+                // frame-cancel: the topmost modal frame is the one meant, not whichever menu is
+                // first (at the main menu that is the menu itself, under the server join card).
+                // A modal frame with a ButtonCancel is cancelled by clicking it.
+                if (action == "frame-cancel") {
+                    for (int mi = int(app.ActiveMenus.Length) - 1; mi >= 0 && !fired; mi--) {
+                        auto modal = app.ActiveMenus[mi];
+                        if (modal is null || modal.CurrentFrame is null) continue;
+                        if (!IsModalDialogFrameName(modal.CurrentFrame.IdName)) continue;
+                        menuFrameActed = modal.CurrentFrame.IdName;
+                        auto cancelBtn = _ClassicButtonOf(_DlgFindChildRecursive(modal.CurrentFrame, "ButtonCancel", 0));
+                        if (cancelBtn !is null) {
+                            cancelBtn.OnAction();
+                        } else {
+                            if (!modal.EnableFrameStack) modal.EnableFrameStack = true;
+                            modal.Back();
+                        }
+                        fired = true;
+                    }
+                }
                 for (uint i = 0; i < app.ActiveMenus.Length && !fired; i++) {
                     auto menu = app.ActiveMenus[i];
                     if (menu is null || menu.CurrentFrame is null) continue;
                     if (action == "frame-cancel") {
+                        menuFrameActed = menu.CurrentFrame.IdName;
                         if (!menu.EnableFrameStack) menu.EnableFrameStack = true;
                         menu.Back();
                         fired = true;
                         continue;
                     }
-                    auto btn = _DlgFindChildRecursive(menu.CurrentFrame, "ButtonSelection", 0);
+                    // One card: its ButtonSelection is the OK. Several: only ButtonOk is.
+                    MwId selectionId = MwId();
+                    selectionId.SetName("ButtonSelection");
+                    array<CControlBase@> cards;
+                    _DlgCollectNamed(menu.CurrentFrame, selectionId.Value, 0, cards);
+                    CControlBase@ btn = null;
+                    if (cards.Length == 1) @btn = cards[0];
                     if (btn is null) {
                         @btn = _DlgFindChildRecursive(menu.CurrentFrame, "ButtonOk", 0);
                     }
+                    if (btn is null && cards.Length > 1) return _FrameOkAmbiguousError(int(i), menu.CurrentFrame.IdName, cards);
                     if (btn !is null) {
+                        menuFrameActed = menu.CurrentFrame.IdName;
                         btn.OnAction();
                         fired = true;
                     }
                 }
-                if (!fired) return MakeError("no ButtonOk under any ActiveMenus CurrentFrame");
+                if (!fired) return MakeError("no ButtonOk or ButtonSelection under any ActiveMenus CurrentFrame", "NOT_FOUND", false, "",
+                    "GetDialog shows what is up; GetMenuFrameTree {menuIndex} lists a frame's controls and ClickClassicMenuControl {id} clicks one.");
             } else {
                 return MakeError("action must be one of: yes, no, cancel, ok, wait-ok, validate, saveas-cancel, saveas-up, saveas-setname, hide, frame-ok, frame-cancel");
             }
@@ -2266,7 +2779,34 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         } else {
             output["note"] = "returned immediately (disable1FrameYieldAndWarning); no after summary";
         }
+        if (menuFrameActed.Length > 0) {
+            output["frame"] = menuFrameActed;
+            if (!immediate) {
+                bool stillUp = _MenuFrameIsUp(menuFrameActed);
+                output["frameClosed"] = !stillUp;
+                if (stillUp) output["warning"] = menuFrameActed + " is still up one frame after " + action
+                    + ": the click may not have answered it. GetMenuFrameTree lists its controls; ClickClassicMenuControl {id} clicks one.";
+            }
+        }
         return MakeSuccess(output);
+    }
+
+    void AttachValidationWarning(Json::Value &inout output) {
+        auto summary = BuildDialogSummary();
+        output["dialogAfter"] = summary;
+        output["warning"] = "";
+        bool blocking = DialogIsBlocking(summary) || _LeaveDialogIsUp();
+        auto frames = summary["editorFrames"];
+        for (uint i = 0; i < frames.Length; i++) {
+            if (frames[i].HasKey("visible") && bool(frames[i]["visible"])
+                && _IsLeaveBlockingFrameName(string(frames[i]["idName"]))) blocking = true;
+        }
+        bool message = string(summary["tempMessage"]).Length > 0;
+        if (blocking || message) {
+            output["warning"] = blocking
+                ? "A game dialog is visible after validation. Inspect dialogAfter and answer it with RespondDialog before continuing."
+                : "The editor is showing a message after validation; inspect dialogAfter.tempMessage. If a dialog requires an answer, use RespondDialog.";
+        }
     }
 
     Json::Value@ ControlValidation(Json::Value &in input) {
@@ -2313,7 +2853,53 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["actions"] = actions;
         output["before"] = before;
         output["after"] = ValidationToJson(pmt);
+        AttachValidationWarning(output);
+        int waitMs = input.HasKey("waitMs") ? int(input["waitMs"]) : 10000;
+        if ((action == "testFromStart" || action == "testFromCoord") && waitMs > 0) {
+            // A request can leave isTesting set with no playground for 30-60s
+            // and then fall back without an error (2026-11-15). Confirm it.
+            @pmt = null;
+            @editor = null;
+            uint64 t0 = Time::Now;
+            string outcome = _TestPlaygroundState();
+            while (outcome.Length == 0 && Time::Now - t0 < uint(Math::Min(waitMs, 30000))) {
+                yield();
+                outcome = _TestPlaygroundState();
+            }
+            output["playgroundStarted"] = outcome == "started";
+            output["startWaitedMs"] = int(Time::Now - t0);
+            auto ed = GetEditor();
+            output["after"] = ValidationToJson(ed is null ? null : cast<CGameEditorPluginMapMapType>(ed.PluginMapType));
+            @ed = null;
+            AttachValidationWarning(output);
+            if (outcome != "started") {
+                Json::Value@ err;
+                if (outcome == "dialog") {
+                    string kind = string(BasicDialogSummary()["dialogKind"]);
+                    @err = MakeError(action + " did not start the playground: a dialog came up (" + kind + ").",
+                        "DIALOG_BLOCKING", false, "Editor", DialogNextCallHint(kind));
+                } else {
+                    @err = MakeError(action + " did not start the playground within " + int(output["startWaitedMs"]) + "ms"
+                        + (outcome == "noEditor" ? " (the editor went away)." : " (isTesting set, no playground)."),
+                        "PLAYGROUND_NOT_STARTED", false, "Editor",
+                        "Seen in the stock game: a tool-driven test start works once per map load; after requestLeavePlayground, later starts hang like this and fall back after 30-60s. Wait for GetMode MapEditor, then reload the map (save if needed, BackToMainMenu, OpenMapInEditor) before testing again.");
+                }
+                err["output"] = output;
+                return err;
+            }
+        }
         return MakeSuccess(output);
+    }
+
+    // ControlValidation test start: "started" once the editor reports the
+    // playground, "dialog" if one needing an answer is up, "noEditor", or ""
+    // (keep waiting). Takes no handle across frames.
+    string _TestPlaygroundState() {
+        auto editor = GetEditor();
+        if (editor is null || editor.PluginMapType is null) return "noEditor";
+        if (editor.PluginMapType.IsSwitchedToPlayground) return "started";
+        if (_DialogBlocksNow()) return "dialog";
+        return "";
     }
 
     Json::Value@ ControlSelection(Json::Value &in input) {
@@ -2498,6 +3084,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         if (!hasTarget && !hasDistance && !hasH && !hasV) {
             return MakeError("missing camera fields: pass target x/y/z, hAngle/vAngle, or distance");
         }
+        CameraAnimInterrupt("SetEditorCamera");
 
         auto pmt = editor.PluginMapType;
         vec3 target = hasTarget ? PositionInput(input) : pmt.CameraTargetPosition;
@@ -2540,6 +3127,13 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         return MakeSuccess(output);
     }
 
+    bool ControlCameraMovesCamera(const string &in action) {
+        return action == "centerOnCursor" || action == "moveToMapCenter" || action == "watchWholeMap"
+            || action == "watchStart" || action == "watchClosestFinishLine" || action == "watchClosestCheckpoint"
+            || action == "zoom" || action == "zoomIn" || action == "zoomOut" || action == "look"
+            || action == "followCursor" || action == "setVStep";
+    }
+
     Json::Value@ ControlCamera(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null || editor.PluginMapType is null || editor.PluginMapType.Camera is null) {
@@ -2552,6 +3146,9 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         if (action != "status") {
             auto modeError = EditorCameraModeError(editor);
             if (modeError !is null) return modeError;
+            // Only camera-moving actions interrupt an animation; an unknown
+            // action is rejected below without touching it.
+            if (ControlCameraMovesCamera(action)) CameraAnimInterrupt("ControlCamera " + action);
         }
         bool smooth = input.HasKey("smooth") ? bool(input["smooth"]) : true;
 
@@ -2735,6 +3332,7 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         bool focusApplied = false;
         if (hasFocus && focusEditor !is null && focusEditor.PluginMapType !is null) {
             auto pmt = focusEditor.PluginMapType;
+            CameraAnimInterrupt("TakeScreenshot focus");
             camSaved = true;
             savedTarget = pmt.CameraTargetPosition;
             savedDistance = pmt.CameraToTargetDistance;
@@ -2759,6 +3357,8 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
             return MakeError("focus requires the map editor", "NOT_IN_EDITOR", true, "Editor");
         }
 
+        Json::Value screenshotBefore = Json::Object();
+        bool slotsFull = true;
         try {
             if (hideOverlay) vp.DisableOverlayRender = true;
             if (forceRes) {
@@ -2768,6 +3368,15 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
             }
             // Let override flags apply for at least one rendered frame before queuing the capture.
             yield();
+
+            string ext = ScreenshotExtForFormat(format);
+            SnapshotScreenshotFolder(screenshotBefore, IO::FromUserGameFolder(""), ext);
+            SnapshotScreenshotFolder(screenshotBefore, IO::FromUserGameFolder("ScreenShots"), ext);
+            SnapshotScreenshotFile(screenshotBefore, fullNameBefore);
+            for (uint slot = 1; slot <= 99; slot++) {
+                string name = "ScreenShot" + (slot < 10 ? "0" : "") + slot + ext;
+                if (!IO::FileExists(IO::FromUserGameFolder(name))) { slotsFull = false; break; }
+            }
 
             if (format == "webp") vp.ScreenShotDoCaptureWebp();
             else if (format == "tga") vp.ScreenShotDoCaptureTga();
@@ -2782,24 +3391,30 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
             return MakeError("screenshot capture failed: " + getExceptionInfo());
         }
 
-        // Poll for the finished file. ScreenShotFullName updates to the new capture's
-        // path once the game queues/completes it; file existence + size confirm the write.
+        // The engine publishes the filename when queued. Only changed metadata
+        // or a newly created nonempty file is evidence that the write happened.
         string fullName = "";
         bool detected = false;
         uint64 sizeBytes = 0;
         uint64 waitedStart = Time::Now;
         string pollError = "";
+        bool overwroteExisting = false;
         try {
             while (Time::Now - waitedStart < uint(waitMs)) {
                 yield();
                 string candidate = string(vp.ScreenShotFullName);
-                if (candidate.Length > 0 && candidate != fullNameBefore) {
+                if (candidate.Length > 0 && candidate.ToLower().EndsWith(ScreenshotExtForFormat(format))) {
                     if (IO::FileExists(candidate)) {
                         uint64 sz = uint64(IO::FileSize(candidate));
-                        if (sz > 0) {
+                        string key = ScreenshotPathKey(candidate);
+                        bool existed = screenshotBefore.HasKey(key);
+                        uint64 oldSize = existed ? uint64(int64(screenshotBefore[key]["size"])) : 0;
+                        int64 oldModified = existed ? int64(screenshotBefore[key]["modified"]) : 0;
+                        if (ScreenshotFileChanged(existed, oldSize, oldModified, true, sz, IO::FileModifiedTime(candidate))) {
                             fullName = candidate;
                             sizeBytes = sz;
                             detected = true;
+                            overwroteExisting = existed;
                             break;
                         }
                     }
@@ -2829,6 +3444,9 @@ Json::Value@ GetMapInfo(Json::Value &in input) {
         output["format"] = format;
         output["extension"] = ScreenshotExtForFormat(format);
         output["detected"] = detected;
+        output["slotsFull"] = slotsFull;
+        output["overwroteExisting"] = overwroteExisting;
+        if (slotsFull) output["warning"] = "All ScreenShot01..99 slots for this format exist; the engine may overwrite one. Archive screenshots or choose another format.";
         output["waitMs"] = waitMs;
         output["waitedMs"] = int(Time::Now - waitedStart);
         if (detected) {

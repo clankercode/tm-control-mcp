@@ -144,8 +144,7 @@ namespace TmMcp {
         o["waitLooksLikeLm"] = waitLm;
         auto app = GetApp();
         if (app !is null && app.BasicDialogs !is null) {
-            o["dialogKind"] = app.BasicDialogs.Dialog == CGameDialogs::EDialog::WaitMessage ? "wait"
-                : (app.BasicDialogs.Dialog == CGameDialogs::EDialog::Message ? "message" : "none");
+            o["dialogKind"] = string(BasicDialogSummary()["dialogKind"]);
             o["waitText"] = string(app.BasicDialogs.WaitMessage_LabelText);
             o["waitProgress"] = app.BasicDialogs.WaitMessage_Progress;
         } else {
@@ -212,8 +211,24 @@ namespace TmMcp {
         if (want == "editor" && !hasChallenge) blocking.InsertLast("no challenge/map loaded");
         if (want == "menu" && !menuOk) blocking.InsertLast("menu module not on stack");
 
+        // Full-page menu screens (Page_PressStart / Page_ConnectionError) that
+        // GetDialog cannot see. They only exist in Menu mode; editor/race is
+        // untouched (warning only there, which cannot happen in practice).
+        string menuBlockingScreen = "";
+        if (mode == "Menu") {
+            auto bsSnap = BuildBlockingScreenSnapshot();
+            string bsKind = string(bsSnap["kind"]);
+            if (bsKind != "none" && bsKind.Length > 0) menuBlockingScreen = bsKind;
+        }
+        if (menuBlockingScreen.Length > 0 && (want == "menu" || want == "any")) {
+            blocking.InsertLast("blocking screen: " + menuBlockingScreen + " (DismissBlockingScreen)");
+        }
+
         Json::Value warnings = Json::Array();
         if (want == "editor" && !inventoryReady) warnings.Add("inventory still scanning items");
+        if (menuBlockingScreen.Length > 0 && want != "menu" && want != "any") {
+            warnings.Add("menu blocking screen: " + menuBlockingScreen);
+        }
 
         Json::Value checks = Json::Object();
         checks["socketAlive"] = true;
@@ -227,11 +242,12 @@ namespace TmMcp {
         checks["inventoryReady"] = inventoryReady;
         checks["hasChallenge"] = hasChallenge;
         checks["menuModuleAvailable"] = MenuModuleAvailable();
+        checks["menuBlockingScreen"] = menuBlockingScreen;
         checks["eppToolPack"] = IsEditorPlusPlusAvailable();
 
         bool ready = blocking.Length == 0;
         // Soft: inventory scanning alone shouldn't hard-fail "any"
-        if (want == "any" && mode != "Unknown" && dialogClear) {
+        if (want == "any" && mode != "Unknown" && dialogClear && menuBlockingScreen.Length == 0) {
             ready = true;
             // still list soft reasons
         }
@@ -335,6 +351,26 @@ namespace TmMcp {
             return !baking;
         }
 
+        if (cond == "menureached" || cond == "menu_reached" || cond == "menu-reached") {
+            auto snap = BuildBlockingScreenSnapshot();
+            @last = snap;
+            bool reached = string(snap["kind"]) == "none" && string(snap["mode"]) == "Menu";
+            last["reached"] = reached;
+            return reached;
+        }
+
+        if (cond == "blockingscreen" || cond == "blocking_screen" || cond == "blocking-screen") {
+            auto snap = BuildBlockingScreenSnapshot();
+            @last = snap;
+            string eq = input.HasKey("equals") ? string(input["equals"]).ToLower() : "none";
+            last["equals"] = eq;
+            return string(snap["kind"]).ToLower() == eq;
+        }
+
+        if (cond == "manialink") {
+            return ManialinkConditionMet(input, last);
+        }
+
         if (cond == "readiness" || cond == "ready") {
             string want = input.HasKey("want") ? string(input["want"]) : "editor";
             auto snap = BuildReadinessSnapshot(want);
@@ -396,7 +432,7 @@ namespace TmMcp {
 
     Json::Value@ WaitUntil(Json::Value &in input) {
         if (!input.HasKey("condition")) {
-            return MakeError("missing condition", "INVALID_INPUT", false, "", "condition: mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness|shadowsClear");
+            return MakeError("missing condition", "INVALID_INPUT", false, "", "condition: mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness|shadowsClear|menuReached|blockingScreen|manialink");
         }
         string condition = string(input["condition"]);
         int timeoutMs = input.HasKey("timeoutMs") ? int(input["timeoutMs"]) : 20000;
@@ -416,10 +452,26 @@ namespace TmMcp {
             || condLower == "mapitems" || condLower == "map_items" || condLower == "map-items"
             || condLower == "mapblocks" || condLower == "map_blocks" || condLower == "map-blocks"
             || condLower == "readiness" || condLower == "ready"
+            || condLower == "menureached" || condLower == "menu_reached" || condLower == "menu-reached"
+            || condLower == "blockingscreen" || condLower == "blocking_screen" || condLower == "blocking-screen"
             || condLower == "shadowsclear" || condLower == "shadows_clear" || condLower == "shadows-clear"
-            || condLower == "calculatingshadows" || condLower == "calculating_shadows";
+            || condLower == "calculatingshadows" || condLower == "calculating_shadows"
+            || condLower == "manialink";
         if (!known) {
-            return MakeError("unknown condition: " + condition, "INVALID_INPUT", false, "", "mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness|shadowsClear");
+            return MakeError("unknown condition: " + condition, "INVALID_INPUT", false, "", "mode|dialogClear|editorReady|pageVisible|mapItems|mapBlocks|readiness|shadowsClear|menuReached|blockingScreen|manialink");
+        }
+
+        // UI waits: page required; the whole wait (loading included) is capped
+        // at 5 minutes, so a click that never lands cannot hold the caller.
+        bool uiWait = condLower == "manialink";
+        if (uiWait) {
+            if (!input.HasKey("page") || string(input["page"]).Length == 0)
+                return MakeError("manialink needs page (ref or name)", "INVALID_INPUT", false, "", "{condition:'manialink', page:'Page_HomePage', id?, text?, state?:'shown'|'gone', timeoutMs<=300000}");
+            string st = input.HasKey("state") ? string(input["state"]).ToLower() : "shown";
+            if (st != "shown" && st != "gone") return MakeError("state must be shown or gone", "INVALID_INPUT");
+            if (input.HasKey("text") && (!input.HasKey("id") || string(input["id"]).Length == 0))
+                return MakeError("text needs id", "INVALID_INPUT");
+            timeoutMs = MlClampWaitMs(input.HasKey("timeoutMs") ? int(input["timeoutMs"]) : ML_WAIT_DEFAULT_MS);
         }
 
         uint64 t0 = Time::Now;
@@ -428,14 +480,17 @@ namespace TmMcp {
         bool sawLoading = false;
         Json::Value@ last;
         bool ok = false;
+        bool pageEverFound = false;
         while (true) {
             ok = ConditionSatisfied(condition, input, last);
+            if (uiWait && last !is null && last.HasKey("pageFound") && bool(last["pageFound"])) pageEverFound = true;
             if (ok) break;
             uint64 now = Time::Now;
             uint dt = uint(now - lastTick);
             lastTick = now;
             auto app = cast<CTrackMania>(GetApp());
             bool loading = IsLoadingLike(app);
+            if (uiWait && now - t0 >= uint64(timeoutMs)) break;
             if (loading) {
                 sawLoading = true;
                 if (now - t0 >= 1800000) break;
@@ -446,6 +501,11 @@ namespace TmMcp {
             uint slice = uint(pollMs);
             if (!loading && timeoutMs > 0 && uint(timeoutMs) > chargedMs) {
                 slice = Math::Min(slice, uint(timeoutMs) - chargedMs);
+            }
+            // UI waits: never sleep past the wall-clock budget (loading included).
+            if (uiWait) {
+                uint64 used = now - t0;
+                slice = used >= uint64(timeoutMs) ? 0 : Math::Min(slice, uint(uint64(timeoutMs) - used));
             }
             uint64 sliceStart = Time::Now;
             while (Time::Now - sliceStart < slice) {
@@ -464,6 +524,11 @@ namespace TmMcp {
         output["timeoutMs"] = timeoutMs;
         output["pollMs"] = pollMs;
         if (last !is null) output["last"] = last;
+        if (uiWait) {
+            output["pageEverFound"] = pageEverFound;
+            if (ok && !pageEverFound)
+                output["warning"] = "page never matched during this wait: 'gone' is trivially true, so check the page selector (ListManialinkPages)";
+        }
         if (!ok) {
             output["code"] = "TIMEOUT";
             output["retryable"] = true;

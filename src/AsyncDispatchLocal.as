@@ -13,10 +13,17 @@ namespace TmMcp {
     // the result in g_PendingRequests. Returns {request_id, status:"pending"}.
     Json::Value@ DispatchAsync(const string &in toolName, Json::Value@ input) {
         if (!IsToolName(toolName)) {
-            return MakeError("unknown tool: " + toolName, "unknown_tool", false, "", "");
+            return UnknownToolError(toolName);
         }
         if (input is null) {
             @input = Json::Object();
+        }
+        if (input.GetType() != Json::Type::Object) {
+            return MakeError("input must be a JSON object", "invalid_input");
+        }
+        string validationError = ValidateToolInput(toolName, input);
+        if (validationError.Length > 0) {
+            return MakeError("invalid input: " + validationError, "invalid_input");
         }
         string reqId = GenRequestId();
         AsyncToolResult@ tr = AsyncToolResult(reqId);

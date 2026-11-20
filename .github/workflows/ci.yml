@@ -53,6 +53,15 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install pytest
       - name: Client adapter and wait tests
-        run: python -m pytest tests/test_call_process.py tests/test_call_wait.py -q
+        run: python -m pytest tests/test_call_process.py tests/test_call_wait.py tests/test_crashwatch_windows.py -q
+      - name: Parse crashwatch with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          Get-ChildItem tools/crashwatch/windows/*.ps1 | ForEach-Object {
+            $tokens = $null
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors)
+            if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
+          }
       - name: Exercise native tasklist without a game
         run: python -c "import sys; sys.path.insert(0, 'tools'); import call; assert isinstance(call.find_trackmania_pids(), list)"

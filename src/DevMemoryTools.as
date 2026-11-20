@@ -256,6 +256,18 @@ namespace TmMcp {
         return o;
     }
 
+    // Like NodInfo, for a pointer that is not a CMwNod: label, address, first qword. No handle.
+    Json::Value RawPtrInfo(uint64 ptr, const string &in label) {
+        Json::Value o = Json::Object();
+        o["label"] = label;
+        o["ptr"] = PtrToHex(ptr);
+        o["isNull"] = ptr == 0;
+        Json::Value peek = Json::Object();
+        try { peek["vtable"] = PtrToHex(Dev::SafeReadUInt64(ptr)); } catch { peek["vtableError"] = getExceptionInfo(); }
+        o["peek"] = peek;
+        return o;
+    }
+
     Json::Value@ RunDevGetPointers(Json::Value &in input) {
         auto editor = GetEditor();
         if (editor is null) return MakeError("editor not available");
@@ -841,27 +853,30 @@ namespace TmMcp {
         uint16 listOff = uint16(int(mem.Offset) - 0x18);
         output["mgrListOff"] = int(listOff);
 
-        CMwNod@ mgrs;
+        // Neither the manager list nor the scene manager is a CMwNod. They are read as raw
+        // pointers: a nod handle on them makes Openplanet ref-count and release through whatever
+        // sits where a vtable would be (game crash in CSystemPath_GetBaseName, 2026-11-15).
+        uint64 mgrs = 0;
         uint count = 0;
         try {
-            @mgrs = Dev::GetOffsetNod(scene, listOff);
+            mgrs = Dev::GetOffsetUint64(scene, listOff);
             count = Dev::GetOffsetUint32(scene, listOff + 0x8);
         } catch {
             return MakeError("failed reading mgr list: " + getExceptionInfo());
         }
-        if (mgrs is null) return MakeError("scene mgr list is null");
-        output["mgrList"] = NodInfo(mgrs, "mgrList");
+        if (mgrs == 0) return MakeError("scene mgr list is null");
+        output["mgrList"] = RawPtrInfo(mgrs, "mgrList");
         output["mgrCount"] = int(count);
 
         // Per-scene component mgr (NGameApp scene mgr) lives at scene+0xd10; its +0x79c array
         // marks wanted component slots (u32 per slot, written by NGameApp_GameSceneCreate).
-        CMwNod@ sceneMgr;
-        try { @sceneMgr = Dev::GetOffsetNod(scene, 0xd10); } catch {}
-        if (sceneMgr !is null) {
-            output["sceneMgr"] = NodInfo(sceneMgr, "sceneMgr");
+        uint64 sceneMgr = 0;
+        try { sceneMgr = Dev::GetOffsetUint64(scene, 0xd10); } catch {}
+        if (sceneMgr != 0) {
+            output["sceneMgr"] = RawPtrInfo(sceneMgr, "sceneMgr");
             Json::Value flags = Json::Array();
             for (uint s = 0; s < 64; s++) {
-                try { flags.Add(int(Dev::GetOffsetUint32(sceneMgr, 0x79c + int(s) * 4))); }
+                try { flags.Add(int(Dev::SafeReadUInt32(sceneMgr + 0x79c + uint64(s) * 4))); }
                 catch { flags.Add(-1); }
             }
             output["wantedFlags_0x79c"] = flags;
@@ -892,7 +907,7 @@ namespace TmMcp {
             }
         }
         // Vftable of each nonempty slotArray component (+ first vtable entries) for class matching.
-        if (sceneMgr !is null) {
+        if (sceneMgr != 0) {
             Json::Value vt = Json::Array();
             for (uint s = 0; s < 64; s++) {
                 uint64 comp = 0;
@@ -925,8 +940,8 @@ namespace TmMcp {
             uint typeId = 0;
             uint64 ptr = 0;
             try {
-                typeId = Dev::GetOffsetUint32(mgrs, int(i) * 0x18);
-                ptr = Dev::GetOffsetUint64(mgrs, int(i) * 0x18 + 8);
+                typeId = Dev::SafeReadUInt32(mgrs + uint64(i) * 0x18);
+                ptr = Dev::SafeReadUInt64(mgrs + uint64(i) * 0x18 + 8);
             } catch { continue; }
             string name = "";
             try {

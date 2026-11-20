@@ -1,0 +1,4 @@
+# Cargo reads this when run from mcp-cli/. Scope the CRT setting to Windows;
+# applying it to host proc-macros can make cross-target builds fail.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

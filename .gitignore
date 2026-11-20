@@ -11,3 +11,9 @@ op-next-formatted.json
 .worktrees/
 _site/
 .test-deps/
+
+# MCP CLI release staging and generated platform binaries.
+mcp-cli/dist/
+mcp-cli/npm/tm-control-mcp-linux-x64/bin/*
+mcp-cli/npm/tm-control-mcp-win32-x64/bin/*
+mcp-cli/npm/*.tgz

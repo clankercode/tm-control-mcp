@@ -33,6 +33,19 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
   `set_position`. Pass `x,y,z` **and** `target{x,y,z}` for an exact camera point + look-at; angles alone do
   not rotate the view. `set_mode` can be silently dropped — check `switched`, not `success`. Editor camera is
   still `SetEditorCamera` / `ControlCamera`.
+- **Pause / bloom (live checks on a leased instance, no OS input):** no automatic timer, watcher or restore.
+  `GetPauseState` samples online too; loading can restart its read-only window. `ControlPause {action:pause|resume|toggle}`
+  refuses online/dialogs before acting and aborts on locality, loading or context changes. Pause requires unchanged
+  clocks and a menu observed up on every frame of a full hold; it never closes a pre-existing menu. Failed Show
+  verification attempts at most one cleanup Resume for the menu it saw open, if the fresh gate and context match.
+  Check `menuShownAfter` (or `"unknown"`) and `cleanupSkipped`; if `lateShowPossible`, recheck with `GetPauseState`
+  after apparent closure. Explicit resume uses Resume only, whoever opened the menu. Missing `jumpMs` is unmeasured.
+  `SetDisplaySetting {bloom}` needs a valid prefix marker (not a lease check) and never overwrites a record.
+  Always call `RestoreDisplaySetting` afterwards; it keeps the record, and `force:true` can overwrite a current
+  value only within the same identity and config. After a map reload or game restart confirms the prior stuck,
+  `RestoreDisplaySetting {retire:true}` deletes the matching record without writing bloom. Persistence is assumed.
+  UNPROVEN live: Q1 programmatic pause freezes like ESC, Q2 bloom none applies without a restart,
+  Q3 Apply timing, persistence and window/device effects, Q4 local hosted play pauses. Guide: `pause-bloom`.
 - **Cursor:** `GetCursor` / `ControlCursor` relative/cardinal — absolute optional.
 - **Item delete:** `RemoveRecentItems` / `RemoveItemsByIndex` → E++ `DeleteItems`. Prefer **`SetAgentTag` + `RemoveByTag`** for agent smoke cleanup.
 - **Inventory:** browse tools + **`ControlInventory`**. Path-place still preferred for headless placement.
@@ -41,6 +54,8 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
 - `ListPlugins`, `ControlPlugin`, `ListPluginSettings`, `SetPluginSetting`, `ListToolPacks`.
 - **Type info:** `GetTypeInfo {className}` — class + all members via Openplanet Reflection. `ownOnly` / `member` / `query` / `from=app|editor|challenge|cursor|pluginMap`. No member type names (live API limit).
 - **Fids:** `ControlFids` — `drives` / `get` / `list` / `preload` / `updateTree` / `extract` / `getFullPath` / `fromNod`. Drive `game|user|fake|resource|programData`, path drive-relative. `fromNod` takes `from_ptr` (nod pointer from `nod.ptr` or another tool), not `from=app|editor`. `updateTree` on empty game path needs `force`. `extract` writes to disk. Guide: `fids`.
+- **Input bindings:** `GetInputBindings` (read-only) lists devices, pads and each pad's bindings; `{filter:"delete"}` finds every action bound to Delete. Per-pad lists come from `InputBindings_UpdateList`, a list shared with Settings > Controls; the tool puts it back, but avoid calling it mid-rebind.
+- **MwIds:** `ResolveMwIds {values:[...]}` names ids (unknown tag-01 ids come back `defined:false`, never stringified); `{names:[...]}` looks names up read-only; `register:true` adds missing names to the game's id table (the only write). DEV: `{ptr, offset, count}` reads ids from memory.
 - **Tool packs:** other plugins register via `TmMcp::ToolPackBuilder` + `RegisterToolPack`. Names are `packId.FuncName`. Optional `ToolPackBuilder("id")` / `SetPackId` sets the prefix (default = plugin id). See `docs/tool-packs.md`.
 - **Guides:** `ListGuides` / `GetGuide`.
 
@@ -58,6 +73,10 @@ Local Openplanet bridge (`tm-control-mcp`) exposing Trackmania editor/menu contr
 
 ### Agent habits
 
+- Dialogs: every socket response has `data.dialog` (`up`, `kind`, `blocking`, `hint`). Map switches refuse (`DIALOG_BLOCKING`) behind a dialog and stop on the save prompt instead of queueing; answer with `SaveMapFlow {name}` / `{save:false}`, then call again. Never test `GetDialog.dialog` (raw enum) alone. `docs/dialogs.md`.
+- **Blocking menu screens** (ManiaLink pages `GetDialog` can't see): `GetBlockingScreen` (kind start-screen/connecting/connection-failed/connection-error/ubi-connect/welcome-back), `DismissBlockingScreen {action:auto}` (never clicks Quit game), then `WaitUntil condition=menuReached`. `GetReadiness want=menu` reports them. Guide: `blocking-screens`.
+- Classic menu cards (server join card `FrameDialogJoin`): `ClickClassicMenuControl {id:"ButtonJoin"}` or `JoinServer {link}`; `RespondDialog frame-ok` refuses a frame of several cards (`AMBIGUOUS_FRAME`).
+- Tool names: the list is the `catalog` route (`call.py catalog`), not a tool; unknown names answer `suggestions`. Reload a plugin with `ControlPlugin {action:"reload", id}` (no `ReloadPlugin`; also unsticks RemoteBuild). Guide: `plugins`.
 - Smoke: `GetReadiness want=editor` or `call.py --until-ready editor GetMode`.
 - After menu nav: `WaitUntil condition=pageVisible` / GetMode.
 - Tag places: `SetAgentTag` then place; cleanup with `RemoveByTag`.

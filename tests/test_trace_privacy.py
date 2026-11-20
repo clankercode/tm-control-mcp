@@ -80,8 +80,10 @@ def test_unknown_tool_names_cannot_reach_either_log_sink(as_runner, tmp_path):
     # Openplanet coroutine machinery. The CallTool entry ordering is checked too.
     production = (ROOT / 'src/ToolCalls.as').read_text()
     admission = _function(production, 'Json::Value@ ValidateToolCallName(')
+    unknown = _function(production, 'Json::Value@ UnknownToolError(')
     event = _function(production, 'void ToolCallEvent(')
-    call = _function(production, 'Json::Value@ CallTool(')
+    call = _function(production, 'Json::Value@ CallToolExpected(')
+    assert 'CallToolExpected(name, input, null)' in _function(production, 'Json::Value@ CallTool(')
     assert call.index('ValidateToolCallName(name)') < call.index('SweepToolCalls()')
     mocks = tmp_path / 'mocks.as'
     mocks.write_text(JSON_MOCKS + r'''
@@ -106,15 +108,16 @@ void warn(const string &in s) { logs.InsertLast(s); }
 string getExceptionInfo() { return "IO failure"; }
 namespace TmMcp {
     string g_ToolCallInstance = "fixture";
+    array<string> g_schemaToolNames = {"RegisteredFixture", "ControlPlugin"};
     int FindSchema(const string &in name) { return name == "RegisteredFixture" ? 0 : -1; }
     bool IsToolName(const string &in name) { return name == "GetMode"; }
-    Json::Value@ MakeError(const string &in, const string &in code) {
-        auto v = Json::Object(); v["success"] = false; v["code"] = code; return v;
+    Json::Value@ MakeError(const string &in error, const string &in code, bool = false, const string &in = "", const string &in hint = "") {
+        auto v = Json::Object(); v["success"] = false; v["error"] = error; v["code"] = code; v["hint"] = hint; return v;
     }
 }
 ''')
     funcs = tmp_path / 'functions.as'
-    funcs.write_text('namespace TmMcp {\n' + event + '\n' + admission + '\n}\n')
+    funcs.write_text('namespace TmMcp {\n' + event + '\n' + unknown + '\n' + admission + '\n}\n')
     case = tmp_path / 'case.as'
     case.write_text(r'''
 void RunTests() {
@@ -124,14 +127,21 @@ void RunTests() {
     Check(files.Length == 1 && logs.Length == 1, "fixed refusal reaches both sinks");
     Check(files[0].IndexOf("sentinel") < 0 && logs[0].IndexOf("sentinel") < 0, "no caller text in either sink");
     Check(files[0].IndexOf("<unknown>") >= 0 && logs[0].IndexOf("<unknown>") >= 0, "fixed placeholder");
+    Check(!invalid.HasKey("tool") && string(invalid["error"]).IndexOf("sentinel") < 0, "unshaped name never echoed");
     Check(TmMcp::ValidateToolCallName("GetMode") is null, "known route alias admitted");
     Check(TmMcp::ValidateToolCallName("RegisteredFixture") is null, "registered tool without route alias admitted");
     Check(files.Length == 1 && logs.Length == 1, "admission has no extra log");
+    auto guess = TmMcp::ValidateToolCallName("ReloadPlugin");
+    Check(files.Length == 2 && files[1].IndexOf("ReloadPlugin") < 0 && logs[1].IndexOf("ReloadPlugin") < 0, "shaped names stay out of sinks too");
+    Check(string(guess["tool"]) == "ReloadPlugin", "name-shaped guess echoed to the caller");
+    Check(guess["suggestions"].Length == 1 && string(guess["suggestions"][0]) == "ControlPlugin", "closest real tool");
+    Check(string(guess["error"]).IndexOf("did you mean ControlPlugin?") >= 0, "message names it");
+    Check(string(guess["hint"]).IndexOf("catalog") >= 0, "hint says how to list tools");
     string huge = "x"; for (uint i=0; i<15; i++) huge += huge;
     TmMcp::ToolCallEvent("first\n" + huge);
-    Check(files[1].Length < 600 && logs[1].Length < 600, "both sinks bounded");
-    Check(files[1].IndexOf("\n") < 0 && logs[1].IndexOf("\n") < 0, "both sinks escape newlines");
+    Check(files[2].Length < 600 && logs[2].Length < 600, "both sinks bounded");
+    Check(files[2].IndexOf("\n") < 0 && logs[2].IndexOf("\n") < 0, "both sinks escape newlines");
 }
 ''')
-    r = subprocess.run([str(as_runner), str(mocks), str(ROOT / 'src/RequestTrace.as'), str(funcs), str(case)], capture_output=True, text=True, timeout=30)
+    r = subprocess.run([str(as_runner), str(mocks), str(ROOT / 'src/RequestTrace.as'), str(ROOT / 'src/ToolNameSuggest.as'), str(funcs), str(case)], capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stdout + r.stderr

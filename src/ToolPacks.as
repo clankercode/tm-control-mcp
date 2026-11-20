@@ -9,11 +9,18 @@ namespace TmMcp {
         array<string> descriptions;
         array<Json::Value@> schemas;
         ToolPackDispatch@ dispatch;
+        string generation;
+        array<Json::Value@> metadata;
+        bool retired = false;
+        uint running = 0;
+        Json::Value@ definedAt;  // {file, line, function} of the registering call, or null
 
         RegisteredPack() {}
     }
 
     array<RegisteredPack@> g_Packs;
+    array<RegisteredPack@> g_RetiredPacks;
+    uint64 g_NextPackGeneration = 0;
 
     bool IsReservedPackId(const string &in id) {
         return id == "core" || id == "tm-control-mcp" || id == "TmMcp";
@@ -51,18 +58,26 @@ namespace TmMcp {
         for (uint t = 0; t < pack.toolNames.Length; t++) {
             UnregisterToolSchema(pack.packId + "." + pack.toolNames[t]);
         }
+        pack.retired = true;
+        if (pack.running > 0) g_RetiredPacks.InsertLast(pack);
         trace("TM Control MCP pack dropped " + pack.packId);
         g_Packs.RemoveAt(i);
-        InvalidateToolList();
     }
 
     void SweepDeadPacks() {
+        for (int i = int(g_RetiredPacks.Length) - 1; i >= 0; i--) {
+            auto pack = g_RetiredPacks[uint(i)];
+            if (!IsPackGenerationRunning(pack.generation)) g_RetiredPacks.RemoveAt(uint(i));
+        }
+        bool changed = false;
         for (int i = int(g_Packs.Length) - 1; i >= 0; i--) {
             auto p = Meta::GetPluginFromID(g_Packs[i].pluginId);
             if (p is null || !p.Enabled) {
                 DropPackAt(uint(i));
+                changed = true;
             }
         }
+        if (changed) InvalidateToolList();
     }
 
     bool IsPackToolName(const string &in name) {
@@ -79,95 +94,232 @@ namespace TmMcp {
         return false;
     }
 
+    bool GetPackToolGeneration(const string &in name, string &out generation) {
+        generation = "";
+        string packId;
+        string local;
+        if (!SplitPackToolName(name, packId, local)) return false;
+        int idx = FindPackIndex(packId);
+        if (idx < 0) return false;
+        auto pack = g_Packs[uint(idx)];
+        for (uint i = 0; i < pack.toolNames.Length; i++) {
+            if (pack.toolNames[i] == local) {
+                generation = pack.generation;
+                return generation.Length > 0;
+            }
+        }
+        return false;
+    }
+
+    bool IsValidPublicToolName(const string &in name) {
+        if (name.Length == 0 || name.Length > 128) return false;
+        string allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
+        string packId, local;
+        if (!SplitPackToolName(name, packId, local)) return false;
+        for (uint i = 0; i < uint(name.Length); i++) {
+            if (name[i] == 46) continue;
+            if (allowed.IndexOf(name.SubStr(i, 1)) < 0) return false;
+        }
+        return true;
+    }
+
+    // Structural guard only. The adapter compiles complete Draft 2020-12.
+    bool ValidateMetadataSchemaShape(Json::Value@ schema, uint depth, string &out err) {
+        if (depth > 32) { err = "output schema exceeds structural limits"; return false; }
+        if (schema.GetType() == Json::Type::Boolean) return true;
+        if (schema.GetType() != Json::Type::Object) { err = "schema must be an object or boolean"; return false; }
+        string types;
+        if (!ReadSchemaTypes(schema, types, err)) return false;
+        auto keys = schema.GetKeys();
+        for (uint i = 0; i < keys.Length; i++) {
+            string key = keys[i]; auto value = schema[key];
+            if (key == "properties" || key == "patternProperties" || key == "$defs" || key == "definitions" || key == "dependentSchemas") {
+                if (value.GetType() != Json::Type::Object) { err = key + " must be an object"; return false; }
+                auto children = value.GetKeys();
+                for (uint c = 0; c < children.Length; c++)
+                    if (!ValidateMetadataSchemaShape(value[children[c]], depth + 1, err)) return false;
+            } else if (key == "allOf" || key == "anyOf" || key == "oneOf" || key == "prefixItems") {
+                if (value.GetType() != Json::Type::Array || value.Length > 512) { err = key + " must be a bounded array"; return false; }
+                if (key != "prefixItems" && value.Length == 0) { err = key + " must not be empty"; return false; }
+                for (uint c = 0; c < value.Length; c++)
+                    if (!ValidateMetadataSchemaShape(value[c], depth + 1, err)) return false;
+            } else if (key == "items" || key == "additionalProperties" || key == "unevaluatedProperties"
+                || key == "unevaluatedItems" || key == "contains" || key == "propertyNames"
+                || key == "not" || key == "if" || key == "then" || key == "else") {
+                if (!ValidateMetadataSchemaShape(value, depth + 1, err)) return false;
+            } else if (key == "required") {
+                if (value.GetType() != Json::Type::Array || value.Length > 512) { err = "required must be a bounded array"; return false; }
+                for (uint c = 0; c < value.Length; c++)
+                    if (value[c].GetType() != Json::Type::String) { err = "required entries must be strings"; return false; }
+            } else if (key == "$ref" || key == "$id" || key == "$schema" || key == "$anchor" || key == "$dynamicRef"
+                || key == "$dynamicAnchor" || key == "pattern" || key == "format" || key == "title" || key == "description") {
+                if (value.GetType() != Json::Type::String) { err = key + " must be a string"; return false; }
+            } else if (key == "enum") {
+                if (value.GetType() != Json::Type::Array || value.Length == 0) { err = "enum must be a nonempty array"; return false; }
+            } else if (key == "minimum" || key == "maximum" || key == "exclusiveMinimum" || key == "exclusiveMaximum" || key == "multipleOf"
+                || key == "minLength" || key == "maxLength" || key == "minItems" || key == "maxItems" || key == "minProperties" || key == "maxProperties"
+                || key == "minContains" || key == "maxContains") {
+                if (value.GetType() != Json::Type::Number) { err = key + " must be a number"; return false; }
+            } else if (key == "uniqueItems" || key == "readOnly" || key == "writeOnly" || key == "deprecated") {
+                if (value.GetType() != Json::Type::Boolean) { err = key + " must be boolean"; return false; }
+            }
+        }
+        return true;
+    }
+
+    bool ValidateToolMetadata(Json::Value@ supplied, string &out err) {
+        err = "";
+        if (supplied is null || supplied.GetType() != Json::Type::Object) {
+            err = "tool metadata must be an object"; return false;
+        }
+        auto keys = supplied.GetKeys();
+        for (uint i = 0; i < keys.Length; i++) {
+            string key = keys[i];
+            if (key != "annotations" && key != "output_schema") {
+                err = "metadata supports annotations/output_schema objects"; return false;
+            }
+            if (supplied[key].GetType() != Json::Type::Object) {
+                err = key + " must be an object"; return false;
+            }
+        }
+        if (supplied.HasKey("annotations")) {
+            auto annotations = supplied["annotations"];
+            auto annotationKeys = annotations.GetKeys();
+            for (uint i = 0; i < annotationKeys.Length; i++) {
+                string key = annotationKeys[i];
+                if (key != "title" && key != "readOnlyHint" && key != "destructiveHint"
+                    && key != "idempotentHint" && key != "openWorldHint") {
+                    err = "unknown tool annotation: " + key; return false;
+                }
+                auto value = annotations[key];
+                if (key == "title") {
+                    if (value.GetType() != Json::Type::String || string(value).Length > 256) {
+                        err = "annotation title must be a string of at most 256 characters"; return false;
+                    }
+                } else if (value.GetType() != Json::Type::Boolean) {
+                    err = "boolean tool annotations must be boolean"; return false;
+                }
+            }
+        }
+        if (supplied.HasKey("output_schema") && Json::Write(supplied["output_schema"]).Length > 262144) {
+            err = "output_schema exceeds 256 KiB"; return false;
+        }
+        if (supplied.HasKey("output_schema")) {
+            if (!ValidateMetadataSchemaShape(supplied["output_schema"], 0, err)) return false;
+        }
+        return true;
+    }
+
     Json::Value@ RegisterToolPack(ToolPackBuilder@ builder) {
+        auto options = Json::Object();
+        return RegisterToolPackEx(builder, options);
+    }
+
+    // Ordinary export: metadata/CAS options do not change the shared builder.
+    // options: {replace:false, expectedGeneration:"...", tools:{LocalName:{annotations:{}, output_schema:{}}}}
+    Json::Value@ RegisterToolPackEx(ToolPackBuilder@ builder, Json::Value &in options) {
         SweepDeadPacks();
         auto plugin = Meta::ExecutingPlugin();
-        if (plugin is null) {
-            return MakeError("RegisterToolPack: no executing plugin", "pack_no_plugin", false);
+        if (plugin is null) return MakeError("RegisterToolPack: no executing plugin", "pack_no_plugin");
+        if (builder is null) return MakeError("RegisterToolPack: builder is null", "pack_null_builder");
+        if (options.GetType() != Json::Type::Object) return MakeError("options must be an object", "pack_bad_options");
+        auto optionKeys = options.GetKeys();
+        for (uint i = 0; i < optionKeys.Length; i++) {
+            if (optionKeys[i] != "replace" && optionKeys[i] != "expectedGeneration" && optionKeys[i] != "tools")
+                return MakeError("unknown registration option", "pack_bad_options");
         }
-        if (builder is null) {
-            return MakeError("RegisterToolPack: builder is null", "pack_null_builder", false);
-        }
+        if (options.HasKey("replace") && options["replace"].GetType() != Json::Type::Boolean)
+            return MakeError("replace must be boolean", "pack_bad_options");
+        if (options.HasKey("expectedGeneration") && options["expectedGeneration"].GetType() != Json::Type::String)
+            return MakeError("expectedGeneration must be string", "pack_bad_options");
+        if (options.HasKey("tools") && options["tools"].GetType() != Json::Type::Object)
+            return MakeError("tools metadata must be an object", "pack_bad_options");
+        if (Json::Write(options).Length > 1048576) return MakeError("registration metadata exceeds 1 MiB", "pack_bad_options");
+        bool replace = options.HasKey("replace") && bool(options["replace"]);
+        string expected = options.HasKey("expectedGeneration") ? string(options["expectedGeneration"]) : "";
         string customId = builder.packId.Trim();
         string packId = customId.Length > 0 ? customId : plugin.ID;
-        if (customId.Length > 0 && !IsValidPackIdCharset(packId)) {
-            return MakeError("packId '" + packId + "' must match [A-Za-z][A-Za-z0-9_-]{0,63}", "pack_bad_id", false);
+        if (customId.Length > 0 && !IsValidPackIdCharset(packId)) return MakeError("invalid packId", "pack_bad_id");
+        if (packId.Length == 0 || packId.IndexOf(".") >= 0) return MakeError("invalid packId", "pack_bad_id");
+        if (IsReservedPackId(packId)) return MakeError("reserved packId", "pack_reserved_id");
+        int existingIndex = FindPackIndex(packId);
+        for (uint i = 0; i < g_RetiredPacks.Length; i++) {
+            if (g_RetiredPacks[i].packId == packId)
+                return MakeError("retired pack generation is still running", "pack_busy", true);
         }
-        if (packId.Length == 0 || packId.IndexOf(".") >= 0) {
-            return MakeError("packId '" + packId + "' is empty or contains '.'", "pack_bad_id", false);
-        }
-        if (IsReservedPackId(packId)) {
-            return MakeError("packId '" + packId + "' is reserved", "pack_reserved_id", false);
-        }
-        if (FindPackIndex(packId) >= 0) {
-            auto existing = g_Packs[uint(FindPackIndex(packId))];
-            return MakeError("pack '" + packId + "' is already registered by plugin '" + existing.pluginId + "'; UnregisterToolPack first", "pack_already_registered", false);
-        }
-        if (builder.dispatch is null) {
-            return MakeError("RegisterToolPack: dispatch is null", "pack_null_dispatch", false);
-        }
-        if (builder.tools.Length == 0) {
-            return MakeError("RegisterToolPack: no tools", "pack_empty", false);
-        }
+        RegisteredPack@ existing = existingIndex < 0 ? null : g_Packs[uint(existingIndex)];
+        if (existing !is null) {
+            if (!replace) return MakeError("pack already registered; use owner replacement with expectedGeneration", "pack_already_registered");
+            if (existing.pluginId != plugin.ID) return MakeError("only the owner can replace a pack", "pack_not_owner");
+            if (expected.Length == 0 || expected != existing.generation) return MakeError("pack generation is stale", "stale_generation");
+            if (existing.running > 0 && IsPackGenerationRunning(existing.generation))
+                return MakeError("pack generation is still running", "pack_busy", true);
+        } else if (replace || expected.Length > 0) return MakeError("replacement pack is no longer registered", "stale_generation");
+        if (builder.dispatch is null) return MakeError("dispatch is null", "pack_null_dispatch");
+        if (builder.tools.Length == 0 || builder.tools.Length > 512) return MakeError("pack needs 1..512 tools", "pack_empty");
 
         auto pack = RegisteredPack();
-        pack.packId = packId;
-        pack.pluginId = plugin.ID;
+        pack.packId = packId; pack.pluginId = plugin.ID;
         pack.latestReleaseUrl = builder.latestReleaseUrl.Trim().SubStr(0, UPDATE_URL_LIMIT + 1);
         @pack.dispatch = builder.dispatch;
-
+        array<ToolSchema@> records;
         for (uint i = 0; i < builder.tools.Length; i++) {
             auto t = builder.tools[i];
-            if (t is null || t.name.Length == 0) {
-                return MakeError("RegisterToolPack: tool " + i + " has empty name", "pack_bad_tool", false);
-            }
-            if (t.name.IndexOf(".") >= 0) {
-                return MakeError("tool name must not contain '.': " + t.name, "pack_bad_tool_name", false);
-            }
-            for (uint d = 0; d < pack.toolNames.Length; d++) {
-                if (pack.toolNames[d] == t.name) {
-                    return MakeError("duplicate tool name in pack: " + t.name, "pack_dup_tool", false);
-                }
-            }
+            if (t is null || t.name.Length == 0) return MakeError("empty tool name", "pack_bad_tool");
             string prefixed = packId + "." + t.name;
-            if (FindSchema(prefixed) >= 0 || IsPackToolName(prefixed)) {
-                return MakeError("tool already registered: " + prefixed, "pack_tool_collision", false);
+            if (!IsValidPublicToolName(prefixed)) return MakeError("invalid public tool name", "pack_bad_tool_name");
+            if (pack.toolNames.Find(t.name) >= 0) return MakeError("duplicate tool name", "pack_dup_tool");
+            if (FindSchema(prefixed) >= 0 && (existing is null || existing.toolNames.Find(t.name) < 0))
+                return MakeError("tool already registered", "pack_tool_collision");
+            Json::Value@ schema;
+            try { @schema = Json::Parse(t.schemaJson); }
+            catch { return MakeError("invalid schema JSON", "pack_bad_schema"); }
+            string err;
+            auto record = BuildToolSchemaRecord(prefixed, schema, err);
+            if (record is null) return MakeError("invalid tool schema: " + err, "pack_bad_schema");
+            auto meta = Json::Object();
+            if (options.HasKey("tools") && options["tools"].HasKey(t.name)) {
+                auto supplied = options["tools"][t.name];
+                string metadataError;
+                if (!ValidateToolMetadata(supplied, metadataError)) return MakeError(metadataError, "pack_bad_metadata");
+                @meta = CloneJsonValue(supplied);
+                if (meta is null) return MakeError("could not detach metadata", "pack_bad_metadata");
             }
-            Json::Value@ schema = null;
-            if (t.schemaJson.Length > 0) {
-                try {
-                    @schema = Json::Parse(t.schemaJson);
-                } catch {
-                    return MakeError("invalid schema JSON for " + prefixed + ": " + getExceptionInfo(), "pack_bad_schema", false);
-                }
-            }
-            if (schema is null || schema.GetType() != Json::Type::Object) {
-                return MakeError("schema for " + prefixed + " must be a JSON object", "pack_bad_schema", false);
-            }
-            pack.toolNames.InsertLast(t.name);
-            pack.descriptions.InsertLast(t.description);
-            pack.schemas.InsertLast(schema);
+            pack.toolNames.InsertLast(t.name); pack.descriptions.InsertLast(t.description);
+            pack.schemas.InsertLast(schema); pack.metadata.InsertLast(meta); records.InsertLast(record);
         }
-
-        for (uint i = 0; i < pack.toolNames.Length; i++) {
-            string err = "";
-            if (!RegisterToolSchema(packId + "." + pack.toolNames[i], pack.schemas[i], err)) {
-                for (uint j = 0; j < i; j++) {
-                    UnregisterToolSchema(packId + "." + pack.toolNames[j]);
-                }
-                return MakeError("schema register failed for " + pack.toolNames[i] + ": " + err, "pack_schema_register", false);
+        if (options.HasKey("tools")) {
+            auto keys = options["tools"].GetKeys();
+            for (uint i = 0; i < keys.Length; i++) {
+                if (pack.toolNames.Find(keys[i]) < 0) return MakeError("metadata names an unknown local tool", "pack_bad_metadata");
             }
         }
-
+        // Prepare complete successor tables without touching the current tables.
+        array<string> names;
+        array<ToolSchema@> schemas;
+        for (uint i = 0; i < g_schemaToolNames.Length; i++) {
+            if (existing !is null && g_schemaToolNames[i].StartsWith(packId + ".")) continue;
+            names.InsertLast(g_schemaToolNames[i]); schemas.InsertLast(g_schemaRecords[i]);
+        }
+        for (uint i = 0; i < records.Length; i++) {
+            names.InsertLast(records[i].toolName); schemas.InsertLast(records[i]);
+        }
+        auto packs = g_Packs;
+        if (existingIndex < 0) packs.InsertLast(pack);
+        else @packs[uint(existingIndex)] = pack;
+        pack.generation = "" + (g_NextPackGeneration + 1);
+        // No yields/callbacks between CAS validation and publication.
+        if (existing !is null) existing.retired = true;
+        g_schemaToolNames = names; g_schemaRecords = schemas; g_Packs = packs;
+        g_NextPackGeneration++;
+        InvalidateToolList();
+        @pack.definedAt = CapturePackLocation(packId, pack.generation);
         string updateWarning = PackUpdateUrlError(pack.latestReleaseUrl);
         if (updateWarning.Length > 0) warn("TM Control MCP pack '" + packId + "': " + updateWarning);
-        g_Packs.InsertLast(pack);
-        InvalidateToolList();
-        trace("TM Control MCP pack registered " + packId + " tools=" + pack.toolNames.Length);
         auto output = Json::Object();
-        output["pack"] = packId;
-        output["plugin"] = plugin.ID;
-        output["toolCount"] = int(pack.toolNames.Length);
+        output["pack"] = packId; output["plugin"] = plugin.ID;
+        output["generation"] = pack.generation; output["toolCount"] = int(pack.toolNames.Length);
+        output["replaced"] = existing !is null;
         AppendPackUpdateStatus(output, pack.pluginId, pack.latestReleaseUrl);
         return MakeSuccess(output);
     }
@@ -182,6 +334,7 @@ namespace TmMcp {
         if (dropped.Length == 0) {
             return MakeError("pack not registered: " + pluginId, "pack_not_found", false);
         }
+        InvalidateToolList();
         auto output = Json::Object();
         output["pack"] = pluginId;
         output["packs"] = dropped;
@@ -194,13 +347,14 @@ namespace TmMcp {
         auto caller = Meta::ExecutingPlugin();
         auto self = SelfPlugin();
         bool host = self !is null && caller !is null && caller.ID == self.ID;
+        // A plugin ID is the explicit remove-all-owned form. Resolve it
+        // before exact pack lookup so a custom prefix collision cannot make
+        // cleanup depend on which interpretation happened to win first.
+        if (caller !is null && packId == caller.ID) {
+            return UnregisterOwnedPacks(caller.ID);
+        }
         int idx = FindPackIndex(packId);
         if (idx < 0) {
-            // UnregisterToolPack(plugin.ID) drops every pack this plugin registered
-            // (covers SetPackId prefixes without forcing authors to store the custom id).
-            if (caller !is null && packId == caller.ID) {
-                return UnregisterOwnedPacks(caller.ID);
-            }
             return MakeError("pack not registered: " + packId, "pack_not_found", false);
         }
         bool owner = caller !is null && caller.ID == g_Packs[uint(idx)].pluginId;
@@ -208,6 +362,7 @@ namespace TmMcp {
             return MakeError("only the owning plugin can unregister pack " + packId, "pack_not_owner", false);
         }
         DropPackAt(uint(idx));
+        InvalidateToolList();
         auto output = Json::Object();
         output["pack"] = packId;
         output["unregistered"] = true;
@@ -227,6 +382,7 @@ namespace TmMcp {
             if (pack.toolNames[i] == local) { found = true; break; }
         }
         if (!found) return null;
+        if (pack.retired) return MakeError("pack generation is retired", "stale_generation");
         if (pack.dispatch is null) {
             return MakeError("pack '" + packId + "' has no dispatch", "pack_null_dispatch", false);
         }
@@ -234,11 +390,14 @@ namespace TmMcp {
         // uint started = Time::Now;
         // trace("TM Control MCP pack start " + name);
         Json::Value@ result = null;
+        pack.running++;
         try {
             @result = pack.dispatch(local, input);
         } catch {
             @result = MakeError("pack tool threw: " + getExceptionInfo(), "pack_exception", true);
         }
+        pack.running--;
+        if (pack.retired) return MakeError("pack generation retired during dispatch", "stale_generation");
         // string status = "err";
         // if (result !is null && result.HasKey("success") && bool(result["success"])) status = "ok";
         // trace("TM Control MCP pack done " + name + " " + status + " " + (Time::Now - started) + "ms");
@@ -259,6 +418,11 @@ namespace TmMcp {
                 tool["description"] = pack.descriptions[t];
                 tool["input_schema"] = pack.schemas[t];
                 tool["pack"] = pack.packId;
+                if (t < pack.metadata.Length && pack.metadata[t] !is null) {
+                    auto meta = pack.metadata[t];
+                    if (meta.HasKey("annotations")) tool["annotations"] = meta["annotations"];
+                    if (meta.HasKey("output_schema")) tool["output_schema"] = meta["output_schema"];
+                }
                 tools.Add(tool);
             }
         }
@@ -272,9 +436,11 @@ namespace TmMcp {
             auto o = Json::Object();
             o["id"] = pack.packId;
             o["plugin"] = pack.pluginId;
+            o["generation"] = pack.generation;
             o["toolCount"] = int(pack.toolNames.Length);
             auto p = Meta::GetPluginFromID(pack.pluginId);
             o["enabled"] = p !is null && p.Enabled;
+            if (pack.definedAt !is null) o["definedAt"] = pack.definedAt;
             AppendPackUpdateStatus(o, pack.pluginId, pack.latestReleaseUrl);
             packs.Add(o);
         }

@@ -4,6 +4,7 @@
 
 [Website](https://clankercode.github.io/tm-control-mcp/) ·
 [Latest version](https://clankercode.github.io/tm-control-mcp/latest-version.txt) ·
+[MCP CLI entrypoint](mcp-cli/npm/tm-control-mcp/README.md) ·
 [Pack authoring](docs/tool-packs.md) · [Pack updates](docs/pack-updates.md) ·
 [TestKit sample](docs/testkit.md)
 
@@ -93,7 +94,7 @@ Pointer peeks, safe memory reads, gizmo/fuzz helpers, macroblock header dumps �
 `.op` packages omit these tools from the registry.
 
 **Ground truth tool list:** `{"route":"tools"}` at runtime, or every
-`MakeTool("…")` in `src/McpTools.as` (**104 tools** (release; +7 DEV-only) at last count).
+`MakeTool("…")` in `src/McpTools.as` (**106 tools** (release; +7 DEV-only) at last count).
 
 ---
 
@@ -138,6 +139,10 @@ Override with `OPENPLANET_DIR` / `PLUGINS_DIR`.
 ```bash
 ./build.sh release   # → tm-control-mcp-<version>.op
 ```
+
+**MCP adapter CLI:** the [CLI entrypoint](mcp-cli/npm/tm-control-mcp/README.md)
+explains the npm launcher for Linux x64 and Windows x64. Build and test Rust
+only on [SSH or hosted CI build machines](packaging/mcp-cli-release.md).
 
 Enable the plugin in Openplanet’s UI. Confirm the socket:
 
@@ -198,6 +203,10 @@ python3 tools/call.py SetPluginSetting '{"varName":"S_TmMcpEnableSocket","value"
 `ControlPlugin` refuses **disable/unload/rebuild of itself** so agents cannot brick the
 control channel by accident. `reload` of self is allowed but drops the socket.
 
+There is no `ReloadPlugin` tool. Reload any plugin with
+`ControlPlugin {"action":"reload","id":"<plugin id>"}`; that includes RemoteBuild
+itself when its own reloads are stuck (`{"action":"reload","id":"RemoteBuild"}`).
+
 `load` is RemoteBuild-compatible: pass `{action:"load", id:"my-plugin"}` to load
 `Plugins/my-plugin/` (or `my-plugin.op`). If that plugin is already loaded it is
 unloaded then loaded from disk (required for `.op` archives — Openplanet locks
@@ -218,8 +227,15 @@ One JSON object per connection, newline-terminated. Response is one JSON object 
 **List tools**
 
 ```json
-{"route":"tools"}
+{"route":"catalog"}
 ```
+
+`{"route":"tools"}` is the older bare list. `python3 tools/call.py catalog` has the
+full descriptors (names at `data.tools[].name`); the `ListTools` tool is the compact
+view: each tool's pack and owning plugin id, plus where each pack registers itself.
+An unknown tool name answers `code:"unknown_tool"` with
+`suggestions` (the closest real names, built-in and pack) and a hint;
+`call.py` prints them on stderr.
 
 **Call a tool**
 
@@ -246,6 +262,27 @@ Errors may include structured fields:
 ```
 
 ### Client: `tools/call.py`
+
+For continuous crash/dialog detection on Linux/Wine and native Windows, use
+[crashwatch](docs/crashwatch.md). Its reader reports watcher heartbeat age,
+active boxes and new crash-log names; `call.py` consults it before the existing
+on-timeout desktop probe. The watcher never dismisses dialogs or restarts games.
+
+`PlayMap` performs a bounded raw-file GBX envelope check before queuing a local
+map. Invalid or truncated envelopes return `INVALID_MAP_FILE`; unresolved,
+remote and unsupported files report an unverified preflight state. The check
+does **not** parse compressed map bodies or validate embedded items. Malformed
+embedded content can still crash the native game loader, outside AngelScript
+exception handling; `queued:true` and `envelope_only` do not certify safe content.
+Use trusted maps and inspect `preflight` / `contentWarning` in results.
+
+On a local socket failure, the client checks PID-owned X11/Wine windows for a
+crash or message box. It returns `dialogs` with title/metadata evidence and exit
+code **14** when such a box is identified; ordinary transport failures remain
+code **4**. Unclassified secondary windows are candidates only. Missing display
+tools or native Wayland windows leave detection unavailable, so an empty list
+does not prove the game is healthy. No window is activated, dismissed, or captured.
+`tools/tm_get_running_pids.py --json` exposes the same dialog classification.
 
 ```bash
 python3 tools/call.py status
@@ -306,15 +343,16 @@ python3 tools/call.py EditNewMap '{"environment":"Stadium","decoration":"48x48Da
 2. Tag placements; clean with `RemoveByTag` instead of blind clear.
 3. Prefer E++ free placement and named macroblocks over one-by-one grid place.
 4. After menu nav: wait for `pageVisible` / mode change.
+5. **Leased / menu-only runs:** poll `GetBlockingScreen`; when `needsAction`, `DismissBlockingScreen {"action":"auto"}` (repeat — the disconnect flow lands on PressStart again), then `WaitUntil {"condition":"menuReached"}`.
 5. Stadium maps: empty `decoration=""` can trap the vista prompt — use a real deco or omit.
 6. Do not depend on old disabled library plugins (`mcp-tm` / `tm-mcptm`).
 
 ---
 
-## Current tools (104 release / 111 DEV)
+## Current tools (106 release / 113 DEV)
 
 Ground truth: every `MakeTool("…")` registration in `src/McpTools.as`.
-Prefer `{"route":"tools"}` at runtime if this list drifts.
+Prefer `{"route":"catalog"}` at runtime if this list drifts.
 
 ### Mode / map / dialogs
 
@@ -330,25 +368,44 @@ the authoritative per-tool indicator for whether these fields are present. The
 snapshot is the global dialog state after the call, not a claim that the tool
 caused it; another concurrent request or game action can change that state.
 
+Every socket tool response also carries a compact `data.dialog` next to
+`data.result`: `{"up":false}` when no dialog is up, otherwise
+`{"up":true,"kind","blocking","frame","text","hint"}` (`hint` names the call
+that answers it). `tools/call.py` prints it as one `dialog up:` line on stderr.
+`dialogKind` (in `GetDialog`, `dialogAfter`, readiness) is one of `askYesNo`,
+`saveAs`, `message`, `wait`, `frameDialog`, `menuDialog`, `none`; the raw
+`BasicDialogs` enum in `dialog` says `None` for the unsaved-changes prompt, so do
+not test it alone. Map switches (`EditNewMap`, `OpenMapInEditor`, `PlayMap`,
+`BackToMainMenu`, `CreateMapViaMenu`) and `ControlValidation` starts are refused
+with `DIALOG_BLOCKING` while a dialog needs an answer, and the first three leave
+the current map before queueing anything: a save prompt stops them with
+`output.started:false`. Nothing answers a save prompt for you. Design and live
+checklist: [`docs/dialogs.md`](docs/dialogs.md); in game: `GetGuide {topic:dialogs}`.
+
 | Tool | Summary |
 |------|---------|
 | `GetMode` | Current game mode (Menu / Race / Loading / MapEditor / ItemEditor / MediatrackerEditor / …). `Editor` is only the unknown-editor fallback; `WaitUntil equals=Editor` still matches any editor. |
-| `OpenMapInEditor` | Open a local map file in the editor (`path`). Warns if a leave-map dialog pops. |
+| `OpenMapInEditor` | Open a local map file in the editor (`path`). Leaves the current map first; stops with `DIALOG_BLOCKING` on the save prompt. |
 | `GetMapInfo` | Current editor map name and counts (+ bounds). |
 | `GetMapEnvironment` | Collection, decoration, map type/style, mood, collection-unit metadata. |
 | `SetMoodTimeOfDay` | Set `MoodTimeOfDay01` (0..1); optional `dynamic` → `MoodIsDynamicTime`. Change TOD before a second LM bake. |
 | `ComputeShadows` | Start `ComputeShadows1` (does not wait). `quality` Default default; `bustCache` default true. Then `WaitUntil condition=shadowsClear`. |
 | `ControlMapObjectives` | Get/set race objectives: `nbClones`, `nbLaps`, `isLapRace` (E++). |
 | `SaveMapAs` | Save under user Maps (`name`+`folder` or `fileName`; `overwrite`). |
-| `GetDialog` | Inspect `BasicDialogs` state / active frame. |
-| `RespondDialog` | Respond: `yes`, `no`, `cancel`, `ok`, `validate`, `hide`, … |
+| `GetDialog` | Full dialog state: `dialogKind`, `blocking`, frames, menu modals. |
+| `RespondDialog` | Respond: `yes`, `no`, `cancel`, `ok`, `validate`, `hide`, `frame-ok`, `frame-cancel`, … `frame-ok` refuses (`AMBIGUOUS_FRAME`, nothing clicked) a menu frame of several cards with no `ButtonOk`, e.g. the server join card; frame-ok/cancel report `output.frameClosed`. |
+| `GetBlockingScreen` | Detect the full-page menu screens `GetDialog` cannot see (ManiaLink pages): `kind` start-screen\|connecting\|connection-failed\|connection-error\|ubi-connect\|welcome-back\|none, error/status text, visible buttons with the `action` each maps to. `blocking` / `needsAction` / `suggestedAction`. |
+| `DismissBlockingScreen` | Click the safe button of a blocking screen through the game's own click dispatch. `action` auto\|start\|confirm\|play-offline\|retry\|later (explicit must fit the kind, `WRONG_KIND`); `waitMs` waits for the state to change and reports `after` + `menuReached`. Never clicks Quit game. |
+| `GetMenuFrameTree` | Control tree of a classic engine menu frame (`app.ActiveMenus[menuIndex]`: map-saved card, server join card); the ids `ClickClassicMenuControl` takes. |
+| `ClickClassicMenuControl` | Click a control or card on a classic menu frame by id, e.g. `{id:"ButtonJoin"}` on `FrameDialogJoin` (`ButtonSpectator`, `ButtonCancel`). Not for ManiaLink pages. |
+| `JoinServer` | From the main menu: open a `#join=host:password:port` link (or `#spectate=`), confirm the server card, wait for the playground (`JOIN_FAILED` on timeout). |
 
 ### Readiness / agent provenance / assert
 
 | Tool | Summary |
 |------|---------|
-| `GetReadiness` | Composite preflight (`want=editor\|menu\|any\|race`). |
-| `WaitUntil` | Poll mode/dialog/editorReady/pageVisible/map counts/readiness/shadowsClear (`timedOut` on budget). |
+| `GetReadiness` | Composite preflight (`want=editor\|menu\|any\|race`). `menu`/`any` also report a blocking screen (`Page_PressStart` / `Page_ConnectionError`) as a blocking reason; `checks.menuBlockingScreen` names the kind. |
+| `WaitUntil` | Poll mode/dialog/editorReady/pageVisible/map counts/readiness/shadowsClear/menuReached/blockingScreen (`timedOut` on budget). |
 | `GetLightmapComputeState` | Whether the editor is computing shadows / lightmap. |
 | `SetAgentTag` | Default provenance tag for subsequent `Place*` calls (empty clears). |
 | `ListTagged` | List tracked tagged placements (`prefix` / `tag:` prefix). |
@@ -360,7 +417,7 @@ caused it; another concurrent request or game action can change that state.
 
 | Tool | Summary |
 |------|---------|
-| `ControlValidation` | Validation / test / playground. |
+| `ControlValidation` | Validation / test / playground. `testFrom*` fail with `PLAYGROUND_NOT_STARTED` if the playground never starts (`waitMs`, default 10 s). |
 | `ControlSelection` | Copy-paste / custom selection. |
 | `GetCursor` | Editor cursor **coord** + selected block name/id. |
 | `GetEditorSelectionState` | Placement modes, picked block, selected models, cursor, variant. |
@@ -368,8 +425,12 @@ caused it; another concurrent request or game action can change that state.
 | `ControlEditMode` | Inspect/set `EditMode` / `PlaceMode`; optional model select. |
 | `GetEditorCamera` / `SetEditorCamera` | Numeric camera target/angles/distance. |
 | `ControlCamera` | centerOnCursor, watchWholeMap/start/CP/finish, zoom, look, … |
+| `AnimateEditorCamera` / `WaitEditorCamera` | Smooth camera moves in the background: a keyframed `path` (orbital keys or `position`+`lookAt`), an `orbit` (degrees, spiral, or until stopped), or `follow` the cursor / a point you `retarget`. Other camera tools, a new animation, mouse movement or leaving edit mode interrupt it; `WaitEditorCamera` (max 5 min) reports completion, or the interruption as an error. |
 | `FocusCamera` | Focus on world `(x,y,z)` via E++ animation. |
+| `MaxFPS` | Get or set the game's frame limit (`0` = uncapped); session-only, not saved to the config file. |
 | `ControlPlayCamera` | **In-play** camera: read state, switch mode (free / cam 1-3 / backwards / alt), place and aim the free camera. |
+| `GetPauseState` / `ControlPause` | Read the pause state from three game clocks; pause / resume solo or local play with the game's own in-game menu (refuses online). |
+| `GetDisplaySetting` / `SetDisplaySetting` / `RestoreDisplaySetting` | Read / set the game's bloom (none / medium / high) with a recorded restore. |
 | `TakeScreenshot` | Native viewport screenshot with file detection (`fullName`), `hideOverlay`, `forceRes`. |
 
 ### Blocks / items (read)
@@ -434,9 +495,11 @@ Menu stack is **landed**. Clicks use `CControlBase::OnAction` — **not**
 |------|---------|
 | `SetMenuPage` | MLHook `Router_Push` hierarchical `route`. |
 | `GetMenuPage` / `ListKnownMenuRoutes` | Mode + menu module; route catalogue. |
-| `EditNewMap` | Title-control new map (env + decoration + mapType). Warns if leaving a dirty map pops AskYesNo. |
-| `BackToMainMenu` | Unwind Editor/Race → menu. Warns and stops early on the unsaved-changes dialog. |
+| `EditNewMap` | Title-control new map (env + decoration + mapType). Leaves the current map first; stops with `DIALOG_BLOCKING` on the save prompt; `output.status`. |
+| `BackToMainMenu` | Unwind Editor/Race → menu. Stops with `blockedByDialog:true` on the unsaved-changes dialog (never answers it). |
 | `GetUILayers` / `GetActiveMenuPages` / `GetLayerTree` / `GetLayerXml` | Layer introspection. |
+| `ListManialinkPages` / `ViewManialinkPage` | What is on screen: pages across menu, playground and editor, and a concise text tree of visible controls (type, id, classes, label text). |
+| `ClickManialinkControl` / `WaitUntil {condition:manialink}` | Click a control by page + id in any context (menu, map, editor); wait (max 5 min) for a page or control to be shown, gone, or show some text. |
 | `ListMenuManialinkControls` / `FindMenuButtons` / `FindControlsByClass` / `FindControlsByLabel` | Discovery. |
 | `InspectMenuControl` / `FocusMenuControl` / `SetMenuControlVisible` | Probe / focus / show-hide. |
 | `ClickMenuButton` / `TriggerControlOnAction` | Real click dispatch. |
@@ -448,6 +511,18 @@ Menu stack is **landed**. Clicks use `CControlBase::OnAction` — **not**
 |------|---------|
 | `RunManialinkScript` | MLHook inject (`menu`/`in-map`/`in-editor`/`current`); optional `collectMs`/`resultEvent`. |
 | `ListGuides` / `GetGuide` | In-plugin documentation topics. |
+
+### Input devices / bindings
+
+| Tool | Summary |
+|------|---------|
+| `GetInputBindings` | Read-only. Every device the game sees (`devices`: `InputPort.ConnectedDevices`) and every pad (`pads`: `InputPort.Script_Pads`, with idle time and what it is pressing now), each pad with one binding row per action (`{index, action, player, display, raw}`, the Settings > Controls list for that controller), `noDevice` (the list for Device=null), and per-pad `named` race bindings for `actionIds` (default `GiveUp`, `Respawn`, `SecondaryRespawn`). `filter` matches the action name or its binding (`{"filter":"delete"}` finds every action bound to Delete); `boundOnly` drops unbound rows. The shared binding list it refills is put back (`sharedList.restored`). |
+
+### MwIds
+
+| Tool | Summary |
+|------|---------|
+| `ResolveMwIds` | MwId values to names and names to values, in batches. `values` (ints, `-1`, or `"0x..."`) → `{value, hex, tag, defined, name, table, slot, problem}`; a tag-01 (`0x40000000`) id is named only after its intern slot is read and found occupied, since `GetName()` on an unknown one can crash the game. `internIndex` ORs `0x40000000` into bare `table<<16\|slot` indexes. `names` → `{value, hex, tag, existed}` by a read-only intern-table lookup, checked against the live tables first (`lookup.verified`); `register:true` uses `MwId.SetName` instead, which **adds** missing names to the game's id table and reports `registered`. DEV builds: `ptr` (+`offset`/`offsets`, `count`, `stride`) reads u32 ids from memory and names them (`read`). |
 
 ### DEV / RE diagnostics
 
@@ -470,7 +545,7 @@ Only registered when the plugin is built with `defines = ["DEV"]`
 | `ControlFids` | `Fids::` drives/get/list/preload/updateTree/extract/getFullPath/fromNod. |
 | `ListPlugins` | Loaded plugins (`query`, `includeDisabled`, `includeUnloaded`). |
 | `GetPlugin` | One plugin by id/name; `includeSettings` optional. |
-| `ControlPlugin` | enable/disable/reload/unload/load/openSettings/getLogs (no self-disable/unload/rebuild). |
+| `ControlPlugin` | enable/disable/reload/unload/load/openSettings/getLogs (no self-disable/unload/rebuild). Reload a plugin (RemoteBuild too): `{action:"reload", id}`. |
 | `ListPluginSettings` | Settings for a plugin (default: this MCP plugin). |
 | `GetPluginSetting` / `SetPluginSetting` / `ResetPluginSetting` | Typed get/set/reset. |
 | `SavePluginSettings` | Persist settings to disk. |
@@ -498,6 +573,106 @@ Path-based place remains the reliable headless path; `ControlInventory` is for p
 ### Named macroblocks + skins
 
 Block/item specs support `variant`, `bgSkin`, `fgSkin`. Skins apply after successful `PlaceNamedMacroblock` and are verified when possible. Durable JSON is v2-capable (item skins) with v1 load compatibility. In-memory handles alone do not survive reload — use `SaveNamedMacroblock`.
+
+### Pause and bloom (`ControlPause`, `SetDisplaySetting`)
+
+For live checks on a leased instance that need the game paused or bloom
+changed, with no OS input. The agent stays in control the whole time: nothing
+here runs on its own (no timer, no watcher, no automatic restore), so the agent
+resumes and restores itself.
+
+**Pause.** `ControlPause {action:pause}` opens the game's own in-game (ESC)
+menu in solo/local play. It succeeds only after all three clocks
+(`PlaygroundClientScriptAPI.GameTime`, `GetCmdBufferCore().SimulationTime` and
+`.GameTime`) are unchanged and the menu is observed up on every frame of a full
+`holdMs` window (default 300). Every observed change counts (A→B→A isn't frozen).
+If a pre-existing menu wasn't up for the initial hold, the tool samples a fresh
+menu-up window. A pause request never closes a pre-existing menu.
+
+`ControlPause` checks locality, loading, playground, menu and dialog state
+after each frame and before a menu action. A loading, locality or context
+change aborts; it refuses online (`ONLINE_NOT_PAUSABLE`) and does not open
+behind a blocking dialog (`DIALOG_BLOCKING`). If a Show did not lead to a
+verified pause, the call attempts **at most one** cleanup Resume, and only if
+it observed the menu open and stay up and the fresh local, non-loading,
+same-context gate passes. It reports `cleanupSkipped` when it cannot dispatch.
+In explicit Resume and failed-Show cleanup, `menuShown`, `menuShownAfter` and
+`changed` are booleans or `"unknown"` if the menu state could not be read.
+Check for an explicit boolean before acting.
+`CLEANUP_FAILED` means closure wasn't verified after a Resume attempt. A timeout
+or reload isn't evidence of closure. Call `GetPauseState` after any failure;
+if the menu is up, use `ControlPause resume`. If `lateShowPossible:true`, call
+`GetPauseState` again after the menu appears closed. An unobserved or additional
+Show may still land, and the API cannot cancel or drain it. A menu or same-address
+context replacement with no observed edge cannot be distinguished.
+
+`ControlPause {action:resume}` closes the in-game menu with
+`CloseInGameMenu(Resume)` only, never Quit or a sub-menu, whoever opened it.
+`jumpMs` reports the first changed value relative to the pre-resume baseline
+for each clock where both were measured. A missing entry is **unmeasured**, not
+zero; a resume noop has no `jumpMs`. Both actions can succeed with `changed:false`
+when the requested state is already verified. The per-call budget is
+`3×holdMs + timeoutMs + 2 s` (max 18 s; `tools/call.py` waits that plus 5 s, or
+`--timeout` if longer). It is checked per frame, so a hitch can overrun it.
+`GetPauseState` changes nothing and samples online too. Its sample can restart
+on an unreadable clock or loading frame if the context holds; by contrast,
+loading aborts `ControlPause`. `menuShown`, locality and `pausable` reflect the
+end of the read-only sample. `menuShownAtStart` and `menuShown` are booleans
+or `"unknown"` if unreadable; check for an explicit boolean before acting.
+
+**Bloom.** `SetDisplaySetting {bloom:none|medium|high}` writes the user's own
+setting. Persistence and deferred `Apply` timing are unproven (Q3);
+`persisted:"assumed"` is not a save receipt. Set never overwrites the single
+`bloom-restore.txt` record in plugin storage, and refuses without a valid
+`port.override` marker (`IDENTITY_UNKNOWN`), while an older record exists
+(`LEGACY_RECORD_PRESENT`), while a wrapper is busy (`WRAPPER_BUSY`), or when
+readable bloom sources disagree (`SOURCES_DISAGREE`). It reads the prior,
+writes and reads back the record, then writes by one mechanism without
+yielding (`output.mechanism`: the tool's own script wrapper, or a direct
+`Viewport.SystemConfig` display/safe config write). `APPLY_UNVERIFIED` means
+same-frame read-back did not verify the change; the record is kept.
+`sideEffects` lists only changes in the same-frame readings of `dirtyCounter`,
+`displayMode` and `windowSize` (or `"unknown"` if unavailable); it cannot rule
+out a window or device reset.
+
+`RestoreDisplaySetting` requires a valid, matching record. If all readable
+sources hold the target and no known source is unreadable, it writes the prior
+and reads back all sources. If all are already at the prior, it writes nothing
+(`restored:false`, reason `already at prior`). Normal Restore **always keeps
+the record**. A conflict keeps it too. `{force:true}` can overwrite the user's
+current value **only within the same identity and config**. A user's same-value
+edit cannot be distinguished from the tool's write (limitation). Startup,
+disable and unload only report records, never apply or delete them.
+
+Before retiring, `GetDisplaySetting` must show the same matching pending record
+and the prior on every readable source, with none known unreadable, after
+an in-instance map reload or a same-prefix restart that preserves the upper dir.
+The default `tmc stop` wipe destroys the record; it is not a confirmation step.
+A map reload does not prove the setting was saved or that a deferred Apply finished.
+If Apply is unresolved, keep the record. Otherwise call
+`RestoreDisplaySetting {retire:true}`. Only `retired:true` confirms retirement;
+`no record` is not confirmation. Retire rechecks the identity, config and sources,
+refuses if a display call is busy, never writes bloom and cannot combine with
+`force:true`. Don't retire on immediate read-back alone.
+
+**What the record binds to.** The hash covers the prefix's user, app and plugin
+storage paths, active profile and display/safe config, and the tmc port marker.
+`tmc` overlays keep plugin storage in a private per-instance upper directory
+that `tmc stop` wipes by default. The primary has no marker, so Set refuses
+there. **Limitation:** prefixes with identical paths, profile, config and
+marker collide. This is a prefix-marker check, not a lease check.
+
+Manual recovery (an older build's `display-restore.json` / `.txt`, or a record
+from another instance): `GetDisplaySetting` shows `legacyRecord` /
+`restoreRecord` with its path and recorded value if readable. Check which
+instance wrote it, keep a copy, set bloom in Settings > Graphics if that is the
+value to restore, then delete the file. Never copy a record between instances.
+
+**Unproven live (2026-11-18):** Q1, whether a programmatic menu freezes the
+clocks the way ESC does (ESC in solo was measured to); Q2, whether bloom none
+takes effect without a restart; Q3, whether `Apply` resets the window or
+device or saves the config at once; Q4, whether a locally hosted server with
+no other clients pauses. Guide: `pause-bloom`.
 
 ### In-play camera (`ControlPlayCamera`)
 

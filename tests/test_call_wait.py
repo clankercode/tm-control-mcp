@@ -272,6 +272,66 @@ def test_enrich_max_lines_garbage_does_not_crash(tmp_path, monkeypatch):
     assert response["data"]["result"]["output"]["log"]["source"] == "host"
 
 
+def _fake_listener(proc: Path, pid: int, port: int, environ: dict) -> None:
+    """A /proc tree where `pid` holds a LISTEN socket on 127.0.0.1:`port` (inode 4242)."""
+    (proc / "net").mkdir(parents=True, exist_ok=True)
+    (proc / "net" / "tcp").write_text(
+        "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+        f"   0: 0100007F:{port:04X} 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 4242 1\n"
+        f"   1: 0100007F:{port:04X} 0100007F:9C40 01 00000000:00000000 00:00000000 00000000  1000        0 5151 1\n"
+    )
+    (proc / "net" / "tcp6").write_text("  sl  local_address\n")
+    fd = proc / str(pid) / "fd"
+    fd.mkdir(parents=True)
+    (fd / "7").symlink_to("socket:[4242]")
+    (proc / str(pid) / "environ").write_bytes(b"".join(f"{k}={v}\0".encode() for k, v in environ.items()))
+
+
+def test_host_log_follows_port_to_its_wine_prefix(tmp_path, monkeypatch):
+    """Multibox: the fallback must read the log of the game behind --port, not ~/OpenplanetNext."""
+    monkeypatch.delenv("TM_OPENPLANET_LOG", raising=False)
+    prefix = tmp_path / "compatdata-4" / "pfx"
+    log = prefix / "drive_c" / "users" / "steamuser" / "OpenplanetNext" / "Openplanet.log"
+    log.parent.mkdir(parents=True)
+    log.write_text("[    ScriptEngine] [ TRAC] [10:30:41.972]  Loaded plugin 'pilot-preview' (version 0.1.0)\n")
+    proc = tmp_path / "proc"
+    _fake_listener(proc, 10112, 30400, {"WINEPREFIX": str(prefix) + "/"})
+    assert call_mod.openplanet_log_path(30400, proc_root=proc) == log
+    # Another port, no listener we can see, or no log in that prefix: the old default.
+    default = Path.home() / "OpenplanetNext" / "Openplanet.log"
+    assert call_mod.openplanet_log_path(30006, proc_root=proc) == default
+    assert call_mod.openplanet_log_path(None, proc_root=proc) == default
+    log.unlink()
+    assert call_mod.openplanet_log_path(30400, proc_root=proc) == default
+
+
+def test_host_log_env_override_beats_port(tmp_path, monkeypatch):
+    pinned = tmp_path / "pinned.log"
+    monkeypatch.setenv("TM_OPENPLANET_LOG", str(pinned))
+    assert call_mod.openplanet_log_path(30400, proc_root=tmp_path / "no-proc") == pinned
+
+
+def test_enrich_reload_reads_the_ports_own_log(tmp_path, monkeypatch):
+    """Regression: on x-boss a leased instance's reload reported xsm's 06:49 lines (stale NFS host log)."""
+    monkeypatch.delenv("TM_OPENPLANET_LOG", raising=False)
+    prefix = tmp_path / "pfx"
+    log = prefix / "drive_c" / "users" / "steamuser" / "OpenplanetNext" / "Openplanet.log"
+    log.parent.mkdir(parents=True)
+    log.write_text(
+        '[    ScriptEngine] [ TRAC] [10:30:41.756]  Starting build for "pilot-preview"\n'
+        "[    ScriptEngine] [ TRAC] [10:30:41.972]  Loaded plugin 'pilot-preview' (version 0.1.0)\n"
+    )
+    proc = tmp_path / "proc"
+    _fake_listener(proc, 10112, 30400, {"WINEPREFIX": str(prefix)})
+    monkeypatch.setattr(call_mod, "PROC_ROOT", proc)
+    response = {"ok": True, "data": {"result": {"success": True, "output": {"action": "reload", "compile": {"count": 0}}}}}
+    call_mod.enrich_control_plugin_logs(response, "ControlPlugin", {"action": "reload", "id": "pilot-preview"}, port=30400)
+    compile_blob = response["data"]["result"]["output"]["compile"]
+    assert compile_blob["loaded"] is True
+    assert any("10:30:41.972" in line for line in compile_blob["lines"])
+    assert compile_blob["logPath"] == str(log)
+
+
 def test_socket_lifecycle_fixture_exists():
     root = Path(__file__).resolve().parents[1]
     assert (root / "tools" / "verify_socket_lifecycle.py").is_file()

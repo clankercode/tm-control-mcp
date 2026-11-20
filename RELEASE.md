@@ -291,3 +291,9 @@ if you've already built the `.op`.
 - Do not bind the control socket off localhost in docs/examples
 - Do not disable/unload the MCP plugin via automation during release smoke
 - Do not finish a release without pushing master + tag and creating the GitHub release
+
+## MCP CLI npm distribution
+
+The Rust MCP adapter's npm launcher and platform packages have a separate
+build-box release path. Follow [`packaging/mcp-cli-release.md`](packaging/mcp-cli-release.md)
+for x-p35 staging, Windows artifact verification, and npm publication.

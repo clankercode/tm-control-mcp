@@ -66,8 +66,8 @@ strict validation with `additionalProperties: false`).
    `{ ok: true, finalMode: "Editor", elapsedMs, steps: [{name, observed, ms}, ...] }`.
 6. Failure payload:  
    `{ ok: false, failedAt, expectedFrame, lastObserved, elapsedMs, steps }`  
-   (also returned via `MakeSuccess` so callers always get structured diagnostics;
-   protocol-level `MakeError` is reserved for missing/invalid args).
+   (returned in `output` with `success:false` and code `CREATE_MAP_FAILED`,
+   retaining diagnostics on menu-chain failure as well as argument errors).
 
 ## Implementation notes
 

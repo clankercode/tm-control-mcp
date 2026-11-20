@@ -1,0 +1,32 @@
+[package]
+name = "tm-control-mcp-cli"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "MCP stdio and Streamable HTTP adapter for tm-control-mcp"
+license = "MIT"
+
+[[bin]]
+name = "tm-control-mcp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "=1.0.100"
+axum = "=0.8.7"
+crossterm = "=0.29.0"
+futures = "=0.3.31"
+http = "=1.3.1"
+jsonschema = { version = "=0.60.0", default-features = false }
+ratatui = "=0.29.0"
+rmcp = { version = "=3.6.0", default-features = false, features = ["server", "transport-io", "transport-streamable-http-server"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.145"
+thiserror = "=2.0.17"
+tokio = { version = "=1.48.0", features = ["full"] }
+tokio-util = "=0.7.17"
+tracing = "=0.1.41"
+tracing-subscriber = { version = "=0.3.20", features = ["env-filter", "fmt"] }
+uuid = { version = "=1.18.1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "=3.23.0"

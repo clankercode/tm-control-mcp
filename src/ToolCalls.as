@@ -13,12 +13,32 @@ namespace TmMcp {
         Json::Value@ input;
         Json::Value@ result;
         string instance;
+        string packGeneration;
+        string source = "direct";     // "socket" only for Protocol.as requests
+        array<string> observers;      // subscriptions that sampled the admission
+        uint64 observedFrame = 0, observedWallMs = 0;
+        bool observerTruncated = false;
     }
     ToolCallRegistry g_ToolCalls;
     array<ToolInvocation@> g_UnfinishedWorkers;
     bool g_MonitorToolCalls = false;
     string g_ToolCallInstance = "";
     uint64 g_ToolCallsStarted = 0;
+
+    bool IsPackGenerationRunning(const string &in generation) {
+        for (uint i = 0; i < g_ToolCalls.calls.Length; i++) {
+            auto call = cast<ToolInvocation@>(g_ToolCalls.calls[i]);
+            if (call !is null && call.packGeneration == generation
+                && call.owner !is null && call.owner.IsRunning()) return true;
+        }
+        // Timed-out workers may still execute. Include quarantine until the
+        // actual coroutine stops, even though its public invocation finished.
+        for (uint i = 0; i < g_UnfinishedWorkers.Length; i++) {
+            auto call = g_UnfinishedWorkers[i];
+            if (call.packGeneration == generation && call.owner !is null && call.owner.IsRunning()) return true;
+        }
+        return false;
+    }
 
     void ToolCallEvent(const string &in message) {
         string bounded = TmMcpTraceOneLine(message);
@@ -41,7 +61,9 @@ namespace TmMcp {
         @call.result = result;
         call.finished = true;
         g_ToolCalls.Release(call.id);
+        CallOverlayFinish(call.id, call.name, call.started, result);
         ToolCallEvent("tool done " + call.name + " #" + call.id + " " + reason + " " + (Time::Now - call.started) + "ms");
+        if (call.observers.Length > 0) ObserveCall(call, "completed");
     }
 
     void SweepToolCalls() {
@@ -69,11 +91,19 @@ namespace TmMcp {
     }
 
     void MonitorToolCalls() {
-        while (g_MonitorToolCalls) { SweepToolCalls(); yield(); }
+        uint64 observerSweep = 0;
+        while (g_MonitorToolCalls) {
+            SweepToolCalls();
+            if (Time::Now - observerSweep >= 1000) { SweepCallObservers(); observerSweep = Time::Now; }
+            yield();
+        }
     }
 
     void StopToolCalls() {
         g_MonitorToolCalls = false;
+        // Shutdown drops subscriptions first: their owners see a lost subscription,
+        // never a shutdown completion for a call they may not have admitted.
+        StopCallObservers();
         auto calls = g_ToolCalls.calls;
         for (uint i = 0; i < calls.Length; i++) {
             auto call = cast<ToolInvocation@>(calls[i]);
@@ -83,17 +113,73 @@ namespace TmMcp {
         // shared_exports and a genuine reload creates a fresh instance.
     }
 
+    // Names the closest real tools (ToolNameSuggest.as). The caller's own name is
+    // echoed back only when it is name-shaped; it never reaches a log sink.
+    Json::Value@ UnknownToolError(const string &in name) {
+        bool echo = IsEchoableToolName(name);
+        auto suggestions = SuggestToolNames(name, g_schemaToolNames);
+        string message = echo ? "unknown tool '" + name + "'" : "unknown tool";
+        auto list = Json::Array();
+        for (uint i = 0; i < suggestions.Length; i++) {
+            message += (i == 0 ? "; did you mean " : ", ") + suggestions[i];
+            list.Add(suggestions[i]);
+        }
+        if (suggestions.Length > 0) message += "?";
+        auto err = MakeError(message, "unknown_tool", false, "", UNKNOWN_TOOL_HINT);
+        if (echo) err["tool"] = name;
+        err["suggestions"] = list;
+        return err;
+    }
+
     Json::Value@ ValidateToolCallName(const string &in name) {
         if (FindSchema(name) >= 0 || IsToolName(name)) return null;
         // Never interpolate an unrecognized caller-controlled name into either
-        // sink or the diagnostic result. It may contain secrets or newlines.
+        // log sink. It may contain secrets or newlines.
         ToolCallEvent("tool rejected <unknown> unknown_tool");
-        return MakeError("unknown tool", "unknown_tool");
+        return UnknownToolError(name);
     }
 
     Json::Value@ CallTool(const string &in name, Json::Value &in input) {
+        return CallToolExpected(name, input, null);
+    }
+
+    // Host-only entry point: keep the existing imported CallTool ABI intact.
+    Json::Value@ ValidateToolExpectation(const string &in name, Json::Value@ expect) {
+        SweepDeadPacks();
+        if (expect is null) return null;
+        if (expect.GetType() != Json::Type::Object || !expect.HasKey("instance")
+            || expect["instance"].GetType() != Json::Type::String
+            || string(expect["instance"]).Length == 0) {
+            return MakeError("expect requires a nonempty instance string", "invalid_expect");
+        }
+        auto keys = expect.GetKeys();
+        for (uint i = 0; i < keys.Length; i++) {
+            if (keys[i] != "instance" && keys[i] != "generation")
+                return MakeError("expect supports only instance and generation", "invalid_expect");
+        }
+        if (expect.HasKey("generation") && (expect["generation"].GetType() != Json::Type::String
+            || string(expect["generation"]).Length == 0)) {
+            return MakeError("expect.generation must be a nonempty string", "invalid_expect");
+        }
+        if (string(expect["instance"]) != g_ToolCallInstance)
+            return MakeError("catalog instance is stale", "stale_instance");
+        if (expect.HasKey("generation")) {
+            string generation;
+            if (!GetPackToolGeneration(name, generation) || generation != string(expect["generation"]))
+                return MakeError("pack generation is stale", "stale_generation");
+        }
+        return null;
+    }
+
+    Json::Value@ CallToolExpected(const string &in name, Json::Value &in input, Json::Value@ expect,
+                                  const string &in source = "direct") {
+        auto stale = ValidateToolExpectation(name, expect);
+        if (stale !is null) return stale;
         auto invalidName = ValidateToolCallName(name);
         if (invalidName !is null) return invalidName;
+        string validationError = ValidateToolInput(name, input);
+        if (validationError.Length > 0)
+            return MakeError("invalid input: " + validationError, "invalid_input");
         SweepToolCalls();
         if (!g_MonitorToolCalls) return MakeError("dispatch not running", "tool_shutdown", true);
         if (g_UnfinishedWorkers.Length > 0) {
@@ -122,23 +208,30 @@ namespace TmMcp {
         // Preserve WaitUntil's loading-aware 30-minute wait contract. Other
         // calls get 2 minutes; lifecycle calls get 60 seconds wall time, without
         // changing Openplanet's independent 15-second script execution limit.
-        call.budget = name == "WaitUntil" ? 2100000 : (name == "ControlPlugin" ? 60000 : 120000);
+        call.budget = name == "WaitUntil" ? 2100000 : name == "WaitEditorCamera" ? 330000 : (name == "ControlPlugin" || name == "DismissBlockingScreen" ? 150000 : 120000);
 #if DEV
         if (name == "DevCallGuardProbe") call.budget = 150;
 #endif
         call.instance = g_ToolCallInstance;
+        call.source = source;
+        GetPackToolGeneration(name, call.packGeneration);
         auto owner = CoroutineCallOwner();
         @call.owner = owner;
         if (!g_ToolCalls.Admit(call)) {
             auto held = g_ToolCalls.Find(name);
             ToolCallEvent("tool rejected " + name + " reentrant_tool held=#" + held.id + " ageMs=" + (Time::Now - held.started));
-            auto err = MakeError("reentrant tool call: " + name, "reentrant_tool", false);
+            auto err = MakeError("reentrant tool call: " + name, "reentrant_tool", false, "",
+                "Another " + name + " call is in flight (inFlight; status route calls.active). Calls of one tool never overlap or nest: let it finish, then call again.");
             err["inFlight"] = ToolCallToJson(held);
             return err;
         }
+        CallOverlayBegin(call.id, name);
         try {
             // Copy caller-owned input before crossing the worker boundary.
             @call.input = Json::Parse(Json::Write(input));
+            call.observedFrame = Time::FrameCount;
+            call.observedWallMs = Time::Now;
+            ObserveCall(call, "admitted");
             ToolCallEvent("tool start " + name + " #" + call.id);
             @owner.worker = startnew(CoroutineFuncUserdata(TmMcp_RunToolCall), call);
         } catch {
@@ -150,6 +243,16 @@ namespace TmMcp {
 
     void RunToolCall(ToolInvocation@ call) {
         if (call is null || call.finished || call.instance != g_ToolCallInstance) return;
+        // startnew is a yield boundary: never send an admitted old-generation
+        // call into a newly registered implementation of the same public name.
+        SweepDeadPacks();
+        if (call.packGeneration.Length > 0) {
+            string generation;
+            if (!GetPackToolGeneration(call.name, generation) || generation != call.packGeneration) {
+                FinishToolCall(call, MakeError("pack generation changed before dispatch", "stale_generation"), "stale_generation");
+                return;
+            }
+        }
 #if DEV
         // Deliberately outside the catch: emulate a VM-killed worker without
         // hanging the game for the script execution timeout.
@@ -178,6 +281,8 @@ namespace TmMcp {
         for (uint i = 0; i < g_ToolCalls.calls.Length; i++) active.Add(ToolCallToJson(g_ToolCalls.calls[i]));
         for (uint i = 0; i < g_UnfinishedWorkers.Length; i++) expired.Add(ToolCallToJson(g_UnfinishedWorkers[i]));
         o["instance"] = g_ToolCallInstance; o["uptimeMs"] = Time::Now - g_ToolCallsStarted;
+        o["callOverlayTotal"] = g_callOverlayCalls;
+        o["callOverlayHidden"] = g_callOverlayHidden;
         o["active"] = active; o["expiredWorkers"] = expired;
         o["recoveryRequired"] = g_UnfinishedWorkers.Length > 0;
         o["eventLog"] = TmMcpRequestTracePath();

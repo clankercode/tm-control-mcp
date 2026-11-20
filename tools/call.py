@@ -1,13 +1,44 @@
 #!/usr/bin/env python3
 import argparse
 import csv
+import difflib
 import json
+import math
 import os
 from pathlib import Path
 import socket
 import subprocess
 import sys
+import tempfile
 import time
+
+from tm_get_running_pids import find_game_dialogs
+
+from crashwatch import get_status as get_crashwatch_status
+
+
+def socket_failure(message, pretty, pids, host, fallback_code=4):
+    # Watcher reads precede the legacy X11 probe. Known remote hosts use one SSH
+    # attempt; unrelated endpoints must never inherit this desktop's evidence.
+    watcher_host = host if host in {"xsm", "x-lappy"} else None
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        import platform
+        local_host = platform.node().split(".")[0].lower()
+        watcher_host = local_host if local_host in {"xsm", "x-lappy"} else None
+    watcher = get_crashwatch_status(watcher_host) if watcher_host else None
+    if watcher and watcher["active_boxes"]:
+        print_json_error(message, pretty, trackmaniaPids=pids, crashwatch=watcher,
+                         hint="Crashwatch reports an active crash/dialog box. Preserve crash evidence and follow the approved recovery procedure; no dismissal or restart was performed.")
+        return 14
+    # These windows belong to local PIDs; never attach them to a remote server.
+    dialogs = find_game_dialogs(pids) if pids and host in {"localhost", "127.0.0.1", "::1"} else []
+    confirmed = next((d for d in dialogs if d["kind"] in {"crash", "message"}), None)
+    hint = ("A crash/message box is visible for Trackmania; inspect and resolve it before retrying. "
+            "No restart or dismissal was performed." if confirmed else
+            "No crash/message box was identified (display inspection may be unavailable). "
+            "If connected but no reply arrived, the server loop may have stopped; inspect Openplanet.log.")
+    print_json_error(message, pretty, trackmaniaPids=pids, dialogs=dialogs, crashwatch=watcher, hint=hint)
+    return 14 if confirmed else fallback_code
 
 
 def is_trackmania_process(cmdline: bytes) -> bool:
@@ -54,6 +85,19 @@ def print_json_error(message: str, pretty: bool, **extra) -> None:
     payload = {"ok": False, "error": message}
     payload.update(extra)
     print_json(payload, pretty)
+
+
+def dialog_notice(response: object) -> str | None:
+    """One stderr line when the bridge reports a game dialog in data.dialog."""
+    data = response.get("data") if isinstance(response, dict) else None
+    dialog = data.get("dialog") if isinstance(data, dict) else None
+    if not isinstance(dialog, dict) or dialog.get("up") is not True:
+        return None
+    bits = [f"kind={dialog.get('kind')}", f"blocking={str(dialog.get('blocking') is True).lower()}"]
+    for key in ("frame", "text", "hint"):
+        if isinstance(dialog.get(key), str) and dialog[key]:
+            bits.append(f"{key}={dialog[key]}")
+    return "[tm-control-mcp] dialog up: " + " ".join(bits)
 
 
 def screenshot_extension(input_data: object) -> str:
@@ -138,7 +182,6 @@ def attach_screenshot_path(response: object, screenshot_info: dict) -> None:
 
 
 CACHE_PATH = Path.home() / ".cache/tm-control-mcp/schemas.json"
-CACHE_TTL_SECONDS = 24 * 60 * 60
 # Idle WaitUntil budget (no loading screen yet). Once a load starts the
 # plugin keeps waiting; the socket must stay open for big-map loads.
 DEFAULT_WAIT_TIMEOUT_SECONDS = 20.0
@@ -163,21 +206,81 @@ def send_request(host: str, port: int, timeout: float, request: dict) -> dict:
 
 
 def load_schemas(host: str, port: int, timeout: float, refresh: bool) -> dict[str, dict]:
-    if not refresh and CACHE_PATH.is_file():
-        age = time.time() - CACHE_PATH.stat().st_mtime
-        if age < CACHE_TTL_SECONDS:
-            try:
-                return json.loads(CACHE_PATH.read_text())
-            except (json.JSONDecodeError, OSError):
-                pass
-    response = send_request(host, port, timeout, {"route": "tools"})
-    tools = response.get("data", [])
-    if not isinstance(tools, list):
-        raise RuntimeError(f"tools route returned unexpected payload: {response!r}")
-    schemas = {t["name"]: t.get("input_schema", {}) for t in tools if isinstance(t, dict) and "name" in t}
-    CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CACHE_PATH.write_text(json.dumps(schemas, separators=(",", ":")))
+    """Use disk schemas only after checking the endpoint's live catalog identity.
+
+    Legacy bridges have no identity, so their tools are fetched on every call.
+    An unavailable bridge must never authorize a call from a stale disk cache.
+    """
+    endpoint = {"host": host, "port": port}
+    status = send_request(host, port, timeout, {"route": "status"})
+    if not isinstance(status, dict) or not status.get("ok", False):
+        raise RuntimeError(f"status route failed: {status!r}")
+    status_data = status.get("data")
+    identity = status_data.get("catalog") if isinstance(status_data, dict) else None
+    if not (isinstance(identity, dict) and identity.get("schemaVersion") == 1
+            and isinstance(identity.get("instance"), str)
+            and isinstance(identity.get("revision"), str)):
+        identity = None
+    if identity is not None and not refresh:
+        try:
+            cached = json.loads(CACHE_PATH.read_text())
+            if (isinstance(cached, dict) and cached.get("version") == 2
+                    and cached.get("endpoint") == endpoint
+                    and cached.get("identity") == identity
+                    and isinstance(cached.get("schemas"), dict)):
+                return cached["schemas"]
+        except (json.JSONDecodeError, OSError):
+            pass
+    route = "catalog" if identity is not None else "tools"
+    response = send_request(host, port, timeout, {"route": route})
+    if not isinstance(response, dict) or not response.get("ok", False):
+        raise RuntimeError(f"{route} route failed: {response!r}")
+    data = response.get("data")
+    if identity is not None:
+        if not isinstance(data, dict) or data.get("schemaVersion") != 1:
+            raise RuntimeError(f"catalog route returned unexpected payload: {response!r}")
+        # The registry may change between status and catalog. Cache the identity
+        # belonging to the actual, coherent tools snapshot.
+        identity = {key: data.get(key) for key in ("schemaVersion", "instance", "revision")}
+        if not all(isinstance(identity[key], str) for key in ("instance", "revision")):
+            raise RuntimeError("catalog identity is malformed")
+        tool_list = data.get("tools")
+    else:
+        tool_list = data
+    if not isinstance(tool_list, list):
+        raise RuntimeError(f"{route} route returned unexpected payload: {response!r}")
+    schemas = {t["name"]: t.get("input_schema", {}) for t in tool_list
+               if isinstance(t, dict) and isinstance(t.get("name"), str)}
+    if identity is not None:
+        # Cache persistence is optional; permissions or a full disk must not
+        # prevent use of a successfully fetched live catalog.
+        temporary = None
+        try:
+            CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", dir=CACHE_PATH.parent, delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump({"version": 2, "endpoint": endpoint, "identity": identity,
+                           "schemas": schemas}, stream, separators=(",", ":"))
+            temporary.replace(CACHE_PATH)
+        except OSError:
+            pass
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
     return schemas
+
+
+def preflight_schema(host: str, port: int, timeout: float, refresh: bool,
+                     tool: str, input_data: object) -> tuple[dict | None, str]:
+    schemas = load_schemas(host, port, timeout, refresh)
+    schema = schemas.get(tool)
+    error = validate_input(tool, input_data, schema) if schema is not None else ""
+    if not refresh and (schema is None or error):
+        # Refresh only before dispatch; never retry a mutation after dispatch.
+        schemas = load_schemas(host, port, timeout, True)
+        schema = schemas.get(tool)
+        error = validate_input(tool, input_data, schema) if schema is not None else ""
+    return schema, error
 
 
 _JSON_TYPE_OF = {
@@ -250,6 +353,64 @@ def tool_result_output(response: dict) -> dict | None:
     return output if isinstance(output, dict) else None
 
 
+# ControlPause: the plugin's PausePolicy.as clamps and one-deadline budget,
+# mirrored here (tests/test_call_timeouts.py checks the two agree).
+PAUSE_HOLD_MS = (300, 100, 2000)      # default, min, max
+PAUSE_TIMEOUT_MS = (3000, 100, 10000)
+PAUSE_CLEANUP_RESERVE_MS = 2000
+PAUSE_SOCKET_SLACK_S = 5.0
+
+
+def pause_input_error(input_data: object) -> str | None:
+    """None when holdMs/timeoutMs are absent or finite integers, else why not.
+
+    The JSON decoder accepts 1e309 as infinity and NaN literals; int() of those
+    raises before any request is sent. The schema says integer, so a
+    fractional value is rejected here too. The plugin clamps again on its side.
+    """
+    if not isinstance(input_data, dict):
+        return None
+    for key in ("holdMs", "timeoutMs"):
+        if key not in input_data:
+            continue
+        value = input_data[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return f"{key} must be an integer number of milliseconds"
+        if isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
+            return f"{key} must be a finite integer number of milliseconds, got {value!r}"
+    return None
+
+
+def _pause_clamp(value: object, spec: tuple[int, int, int]) -> int:
+    default, lo, hi = spec
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    if isinstance(value, float) and not math.isfinite(value):
+        return lo if value != value or value < 0 else hi
+    # Clamp before narrowing, like the plugin.
+    if value < lo:
+        return lo
+    if value > hi:
+        return hi
+    return int(value)
+
+
+def pause_socket_timeout(timeout: float, input_data: object) -> float:
+    """Socket deadline for ControlPause.
+
+    The plugin stops a ControlPause call at budgetMs = 3*holdMs + timeoutMs +
+    2000 (clamped inputs; at most 18 s), checked once per game frame. The
+    socket gets that plus slack for the frames around it, or --timeout if that
+    is longer. If the client still times out, call GetPauseState before
+    pausing or resuming again.
+    """
+    data = input_data if isinstance(input_data, dict) else {}
+    hold = _pause_clamp(data.get("holdMs"), PAUSE_HOLD_MS) if "holdMs" in data else PAUSE_HOLD_MS[0]
+    wait = _pause_clamp(data.get("timeoutMs"), PAUSE_TIMEOUT_MS) if "timeoutMs" in data else PAUSE_TIMEOUT_MS[0]
+    budget_s = (3 * hold + wait + PAUSE_CLEANUP_RESERVE_MS) / 1000.0
+    return max(timeout, budget_s + PAUSE_SOCKET_SLACK_S)
+
+
 def wait_socket_timeout(timeout: float, timeout_ms: object) -> float:
     """Socket deadline for WaitUntil.
 
@@ -310,10 +471,52 @@ def wait_until_ready(host: str, port: int, timeout: float, want: str, budget_s: 
     )
 
 
-def openplanet_log_path() -> Path:
+PROC_ROOT = Path("/proc")
+
+
+def _listener_wine_prefix(port: int, proc_root: Path) -> str:
+    """WINEPREFIX of the local process listening on TCP `port` (Linux /proc), or ''."""
+    inodes = set()
+    for name in ("tcp", "tcp6"):
+        try:
+            rows = (proc_root / "net" / name).read_text().splitlines()[1:]
+        except OSError:
+            continue
+        for row in rows:
+            cols = row.split()
+            if len(cols) > 9 and cols[3] == "0A" and cols[1].rsplit(":", 1)[-1].upper() == f"{port:04X}":
+                inodes.add(f"socket:[{cols[9]}]")
+    if not inodes:
+        return ""
+    for pid_dir in proc_root.iterdir() if proc_root.is_dir() else ():
+        if not pid_dir.name.isdigit():
+            continue
+        try:
+            if not any(os.readlink(fd) in inodes for fd in (pid_dir / "fd").iterdir()):
+                continue
+            environ = (pid_dir / "environ").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        for item in environ:
+            if item.startswith(b"WINEPREFIX="):
+                return item[len(b"WINEPREFIX="):].decode(errors="replace")
+        return ""
+    return ""
+
+
+def openplanet_log_path(port: int | None = None, proc_root: Path | None = None) -> Path:
     configured = os.environ.get("TM_OPENPLANET_LOG")
     if configured:
         return Path(configured).expanduser()
+    # Multibox hosts run several games, each in its own Wine prefix; ~/OpenplanetNext
+    # belongs to at most one of them (on x-boss it is an NFS mount of another host's).
+    # Read the log of the game actually listening on the port we called.
+    if port:
+        prefix = _listener_wine_prefix(port, proc_root or PROC_ROOT)
+        if prefix:
+            own = Path(prefix) / "drive_c" / "users" / "steamuser" / "OpenplanetNext" / "Openplanet.log"
+            if own.is_file():
+                return own
     return Path.home() / "OpenplanetNext" / "Openplanet.log"
 
 
@@ -347,10 +550,10 @@ def line_looks_like_compile_fail(line: str) -> bool:
     )
 
 
-def collect_host_plugin_logs(plugin_id: str, max_lines: int = 80, compile_only: bool = True) -> dict:
+def collect_host_plugin_logs(plugin_id: str, max_lines: int = 80, compile_only: bool = True, port: int | None = None) -> dict:
     """RemoteBuild-style: read Openplanet.log from the host (game holds an exclusive lock)."""
-    path = openplanet_log_path()
-    report: dict = {"logPathBase": "Openplanet.log", "source": "host"}
+    path = openplanet_log_path(port)
+    report: dict = {"logPathBase": "Openplanet.log", "source": "host", "logPath": str(path)}
     if not path.is_file():
         report["error"] = f"Openplanet.log not found: {path}"
         report["lines"] = []
@@ -470,7 +673,7 @@ def _clamp_max_lines(value: object, default: int = 80) -> int:
     return max(1, min(400, n))
 
 
-def enrich_control_plugin_logs(response: dict, tool: str, input_data: object) -> None:
+def enrich_control_plugin_logs(response: dict, tool: str, input_data: object, port: int | None = None) -> None:
     """Fill compile/getLogs from the host log when the in-game reader is locked out."""
     if tool != "ControlPlugin" or not isinstance(response, dict) or not isinstance(input_data, dict):
         return
@@ -510,13 +713,13 @@ def enrich_control_plugin_logs(response: dict, tool: str, input_data: object) ->
             compile_only = input_data.get("compileOnly", True)
             if not isinstance(compile_only, bool):
                 compile_only = True
-            host = collect_host_plugin_logs(plugin_id, max_lines=max_lines, compile_only=compile_only)
+            host = collect_host_plugin_logs(plugin_id, max_lines=max_lines, compile_only=compile_only, port=port)
             output["log"] = host
             output["logSource"] = "host"
     elif action in {"load", "reload"}:
         compile_blob = output.get("compile")
         if needs_host(compile_blob):
-            host = collect_host_plugin_logs(plugin_id, max_lines=40, compile_only=True)
+            host = collect_host_plugin_logs(plugin_id, max_lines=40, compile_only=True, port=port)
             output["compile"] = host
             output["compileSource"] = "host"
 
@@ -548,6 +751,12 @@ def main() -> int:
         print(f"invalid input JSON: {exc}", file=sys.stderr)
         return 2
 
+    if args.route_or_tool == "ControlPause":
+        pause_err = pause_input_error(input_data)
+        if pause_err:
+            print_json_error(f"invalid input for ControlPause: {pause_err}", args.pretty, code="INVALID_INPUT")
+            return 2
+
     if args.route_or_tool == "recover" and not isinstance(input_data, dict):
         print(f"invalid input for recover: input must be an object, got {_json_type(input_data)}", file=sys.stderr)
         return 2
@@ -576,12 +785,10 @@ def main() -> int:
         try:
             wait_resp = wait_until_mode(args.host, args.port, args.timeout, args.wait_mode, args.wait_timeout)
         except (ConnectionRefusedError, TimeoutError, socket.timeout, OSError, json.JSONDecodeError) as exc:
-            print_json_error(
+            return socket_failure(
                 f"wait-mode failed contacting {args.host}:{args.port}: {exc}",
-                args.pretty,
-                trackmaniaPids=pids,
+                args.pretty, pids, args.host, 10,
             )
-            return 10
         out = tool_result_output(wait_resp) if isinstance(wait_resp, dict) else None
         if out is None or not out.get("ok", False):
             print_json_error(
@@ -596,12 +803,10 @@ def main() -> int:
         try:
             wait_resp = wait_until_ready(args.host, args.port, args.timeout, args.until_ready, args.wait_timeout)
         except (ConnectionRefusedError, TimeoutError, socket.timeout, OSError, json.JSONDecodeError) as exc:
-            print_json_error(
+            return socket_failure(
                 f"until-ready failed contacting {args.host}:{args.port}: {exc}",
-                args.pretty,
-                trackmaniaPids=pids,
+                args.pretty, pids, args.host, 12,
             )
-            return 12
         out = tool_result_output(wait_resp) if isinstance(wait_resp, dict) else None
         if out is None or not out.get("ok", False):
             print_json_error(
@@ -619,31 +824,29 @@ def main() -> int:
         print_json(wait_resp, args.pretty)
         return 0
 
-    if args.route_or_tool in {"status", "tools", "recover"}:
+    if args.route_or_tool in {"status", "tools", "catalog", "recover"}:
         request = {"route": args.route_or_tool}
         if args.route_or_tool == "recover":
             request["instance"] = input_data.get("instance", "")
     else:
         if args.strict or args.refresh_schemas:
             try:
-                schemas = load_schemas(args.host, args.port, args.timeout, args.refresh_schemas)
+                schema, err = preflight_schema(args.host, args.port, args.timeout,
+                                               args.refresh_schemas, args.route_or_tool, input_data)
+                known = [] if schema is not None else list(load_schemas(args.host, args.port, args.timeout, False))
             except (ConnectionRefusedError, TimeoutError, socket.timeout, OSError, RuntimeError, json.JSONDecodeError) as exc:
-                print_json_error(
+                return socket_failure(
                     f"Could not load tool schemas from {args.host}:{args.port}: {exc}",
-                    args.pretty,
-                    trackmaniaPids=pids,
-                    hint="Schemas are fetched via the 'tools' route; ensure the plugin socket is responsive, or drop --strict/--refresh-schemas.",
+                    args.pretty, pids, args.host, 7,
                 )
-                return 7
-            schema = schemas.get(args.route_or_tool)
             if schema is None:
                 print_json_error(
                     f"unknown tool '{args.route_or_tool}' (not in fetched schema list)",
                     args.pretty,
-                    hint="Run with --refresh-schemas if you recently added a tool, or check 'python3 tools/call.py tools' for the current list.",
+                    suggestions=difflib.get_close_matches(args.route_or_tool, known, n=5, cutoff=0.6),
+                    hint="Run with --refresh-schemas if you recently added a tool. List names with 'python3 tools/call.py catalog' (data.tools[].name).",
                 )
                 return 8
-            err = validate_input(args.route_or_tool, input_data, schema)
             if err:
                 print_json_error(
                     f"invalid input for {args.route_or_tool}: {err}",
@@ -659,10 +862,28 @@ def main() -> int:
 
     # Long-running tools need a bigger socket timeout
     call_timeout = args.timeout
+    # Answering a dialog can synchronously tear down an editor for several
+    # seconds. Map switches also expose waitMs up to ten seconds. Keep the
+    # ordinary read timeout short while allowing these transitions to finish.
+    if args.route_or_tool in {"RespondDialog", "OpenMapInEditor", "PlayMap",
+                              "BackToMainMenu", "ControlValidation", "EditNewMap"}:
+        call_timeout = max(call_timeout, 30.0)
+    # Map switches unwind to the menu before returning (editor quiesce up to
+    # 5s, then up to 30s while loading) and test starts wait for the playground.
+    if args.route_or_tool in {"OpenMapInEditor", "PlayMap", "BackToMainMenu",
+                              "ControlValidation", "EditNewMap"}:
+        call_timeout = max(call_timeout, 60.0)
     if args.route_or_tool == "WaitUntil" and isinstance(input_data, dict):
         # Plugin default is 20s when timeoutMs is omitted.
         wait_ms = input_data["timeoutMs"] if "timeoutMs" in input_data else int(DEFAULT_WAIT_TIMEOUT_SECONDS * 1000)
         call_timeout = wait_socket_timeout(call_timeout, wait_ms)
+    if args.route_or_tool == "WaitEditorCamera" and isinstance(input_data, dict):
+        # Without timeoutMs the plugin waits out the animation (max 5 min).
+        try:
+            wait_s = min(float(input_data.get("timeoutMs", 300000)), 300000.0) / 1000.0
+            call_timeout = max(call_timeout, wait_s + 5.0)
+        except (TypeError, ValueError):
+            pass
     if args.route_or_tool == "RunManialinkScript" and isinstance(input_data, dict):
         try:
             extra = float(input_data.get("waitMs", 0)) + float(input_data.get("collectMs", 0))
@@ -677,6 +898,8 @@ def main() -> int:
             call_timeout = max(call_timeout, 7.0)
     if args.route_or_tool == "ControlPlugin":
         call_timeout = max(call_timeout, 15.0)
+    if args.route_or_tool == "ControlPause":
+        call_timeout = pause_socket_timeout(call_timeout, input_data)
 
     try:
         with socket.create_connection((args.host, args.port), timeout=call_timeout) as sock:
@@ -693,13 +916,10 @@ def main() -> int:
                 if b"\n" in chunk:
                     break
     except (ConnectionRefusedError, TimeoutError, socket.timeout, OSError) as exc:
-        print_json_error(
+        return socket_failure(
             f"Could not reach TM Control MCP at {args.host}:{args.port}: {exc}",
-            args.pretty,
-            trackmaniaPids=pids,
-            hint="If Trackmania.exe is listed but the socket does not respond, Openplanet or the plugin may be frozen; restart the game or reload tm-control-mcp.",
+            args.pretty, pids, args.host,
         )
-        return 4
 
     response_text = b"".join(chunks).decode().strip()
     if not response_text:
@@ -725,8 +945,8 @@ def main() -> int:
     if screenshot_before is not None:
         attach_screenshot_path(response, find_new_screenshot(screenshot_before, screenshot_ext, args.timeout))
 
-    if args.route_or_tool not in {"status", "tools", "recover"}:
-        enrich_control_plugin_logs(response, args.route_or_tool, input_data)
+    if args.route_or_tool not in {"status", "tools", "catalog", "recover"}:
+        enrich_control_plugin_logs(response, args.route_or_tool, input_data, port=args.port)
 
     # Surface structured tool errors on stderr lightly when present
     if isinstance(response, dict):
@@ -743,6 +963,12 @@ def main() -> int:
                     if hint:
                         bits.append(f"hint={hint}")
                     print("[tm-control-mcp] " + " ".join(bits), file=sys.stderr)
+                suggestions = result.get("suggestions")
+                if isinstance(suggestions, list) and suggestions:
+                    print("[tm-control-mcp] did you mean: " + ", ".join(map(str, suggestions)), file=sys.stderr)
+        notice = dialog_notice(response)
+        if notice:
+            print(notice, file=sys.stderr)
 
     print_json(response, args.pretty)
     return 0

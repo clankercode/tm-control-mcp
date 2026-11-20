@@ -1,0 +1,14 @@
+# Example launcher configuration for a wrapper script. The binary accepts the
+# equivalent flags directly; this file is documentation rather than a runtime
+# parser input.
+mode = "stdio"
+native_host = "127.0.0.1"
+native_port = 30006
+http_listen = "127.0.0.1:30007"
+catalog_poll_ms = 2000
+events_jsonl = "/tmp/tm-control-events.jsonl"
+allowed_origins = []
+# monitor mode: attach to an existing HTTP server (the default) or start one.
+# monitor_attach = "127.0.0.1:30007"   # --attach; accepts only --ascii/--export-dir
+# monitor_serve = false                # --serve: bind http_listen + monitor,
+#                                      #          and the server-only keys above apply
