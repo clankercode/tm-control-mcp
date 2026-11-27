@@ -136,3 +136,64 @@ def test_schema():
             props = schema["properties"]
             assert set(props) == {"action", "waitMs"}
             assert schema.get("additionalProperties") is False
+
+
+def test_script_debugger_policy(as_runner, tmp_path):
+    # EVisibility order: Hidden, Editor, EditorAndLogs, LogsFull, LogsReduced.
+    run_policy(as_runner, tmp_path, r'''
+    string[] names = {"Hidden", "Editor", "EditorAndLogs", "LogsFull", "LogsReduced"};
+    for (uint i = 0; i < names.Length; i++) {
+        Check(ScriptDebuggerVisibilityName(int(i)) == names[i], "name " + names[i]);
+        Check(ScriptDebuggerVisibilityFromName(names[i]) == int(i), "index " + names[i]);
+    }
+    Check(ScriptDebuggerVisibilityName(9) == "Unknown", "unknown index");
+    Check(ScriptDebuggerVisibilityFromName("logsfull") == -1, "exact names only");
+    Check(ScriptDebuggerVisibilityFromName("Unknown") == -1, "Unknown is not settable");
+    Check(!ScriptDebuggerBlocks(0), "hidden");
+    Check(ScriptDebuggerBlocks(1), "editor blocks (live 2026-11-22)");
+    Check(ScriptDebuggerBlocks(2), "editor+logs blocks");
+    Check(!ScriptDebuggerBlocks(3), "logs full is a warning");
+    Check(!ScriptDebuggerBlocks(4), "logs reduced is a warning");
+    Check(!ScriptDebuggerBlocks(-1), "unknown");
+    // No auto action: DismissBlockingScreen must never hide the debugger.
+    Check(BlockingScreenAutoAction(BS_KIND_SCRIPT_DEBUGGER) == "", "no auto action");
+    ''')
+
+
+def _fn_body(src, signature):
+    start = src.index(signature)
+    depth = 0
+    for i in range(src.index("{", start), len(src)):
+        depth += {"{": 1, "}": -1}.get(src[i], 0)
+        if depth == 0:
+            return src[start:i + 1]
+    raise AssertionError("unterminated " + signature)
+
+
+def test_script_debugger_blocks_in_every_mode():
+    live = (ROOT / "src" / "BlockingScreens.as").read_text()
+    snap = _fn_body(live, "Json::Value BuildBlockingScreenSnapshot()")
+    assert "ScriptDebuggerSnapshot()" in snap and "BS_KIND_SCRIPT_DEBUGGER" in snap
+    # Not behind the menu-app guard: the menu part is a separate function.
+    assert "_GetMenuApp" not in snap
+    dismiss = _fn_body(live, "Json::Value@ DismissBlockingScreen(")
+    assert dismiss.index('"MANIASCRIPT_DEBUGGER"') < dismiss.index("_GetMenuApp()")
+    readiness = _fn_body(READINESS, "Json::Value BuildReadinessSnapshot(")
+    assert "BuildMenuBlockingScreenSnapshot()" in readiness
+    gate = readiness.index("if (debuggerBlocking) {")
+    # The blocker is added unconditionally on want, and want=any cannot soften it.
+    assert "want" not in readiness[readiness.rindex("\n", 0, gate):gate]
+    assert "menuBlockingScreen.Length == 0 && !debuggerBlocking" in readiness
+    assert 'checks["scriptDebugger"]' in readiness
+
+
+def test_dismiss_debugger_schema_limits_views():
+    line = next(l for l in MCP_TOOLS.splitlines() if 'MakeTool("DismissManiaScriptDebugger"' in l)
+    schema = json.loads(re.search(r"'(\{\"type\":.*\})'\)\);?\s*$", line).group(1))
+    assert schema["properties"]["visibility"]["enum"] == ["Hidden", "LogsFull", "LogsReduced"]
+    assert schema["additionalProperties"] is False
+    diag = (ROOT / "src" / "ManiaScriptDiagnostics.as").read_text()
+    body = _fn_body(diag, "Json::Value@ DismissManiaScriptDebugger(")
+    assert "target != 0 && target != 3 && target != 4" in body
+    # Messages are captured before the visibility changes.
+    assert body.index("ManiaScriptDiagnostics()") < body.index("debugger.Visibility = ")
