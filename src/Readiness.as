@@ -229,7 +229,7 @@ namespace TmMcp {
         bool debuggerBlocking = bool(scriptDebugger["blocking"]);
         string debuggerView = string(scriptDebugger["visibilityName"]);
         if (debuggerBlocking) {
-            blocking.InsertLast("ManiaScript debugger is up (" + debuggerView + "; GetManiaScriptDiagnostics)");
+            blocking.InsertLast("ManiaScript debugger is up (" + debuggerView + "; preserve the error with GetManiaScriptDiagnostics, then DismissManiaScriptDebugger)");
         }
 
         Json::Value warnings = Json::Array();

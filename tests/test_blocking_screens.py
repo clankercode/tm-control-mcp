@@ -154,6 +154,7 @@ def test_script_debugger_policy(as_runner, tmp_path):
     Check(ScriptDebuggerBlocks(2), "editor+logs blocks");
     Check(ScriptDebuggerBlocks(3), "logs full covers the screen (live 2026-11-27)");
     Check(ScriptDebuggerBlocks(4), "logs reduced blacks out the screen (live 2026-11-27)");
+    Check(ScriptDebuggerBlocks(5) && ScriptDebuggerBlocks(-1), "unknown values block");
     // No auto action: DismissBlockingScreen must never hide the debugger.
     Check(BlockingScreenAutoAction(BS_KIND_SCRIPT_DEBUGGER) == "", "no auto action");
     ''')

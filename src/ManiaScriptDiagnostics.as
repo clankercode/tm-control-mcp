@@ -12,7 +12,7 @@ namespace TmMcp {
         Json::Value o = Json::Object();
         o["available"] = false;
         o["visibility"] = 0;
-        o["visibilityName"] = ScriptDebuggerVisibilityName(0);
+        o["visibilityName"] = "Unavailable";
         o["visible"] = false;
         o["blocking"] = false;
         auto app = cast<CTrackMania>(GetApp());
