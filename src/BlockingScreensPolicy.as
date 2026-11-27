@@ -146,11 +146,11 @@ namespace TmMcp {
         return -1;
     }
 
-    // Editor views take over the screen (verified for Editor on 2026-11-22).
-    // The log-only views are reported as warnings: their input capture is
-    // unverified, and LogsFull is the route used to read the log.
+    // Every shown view covers the game (window captures 2026-11-22/27:
+    // Editor, and LogsFull/LogsReduced, which fill or black out the screen),
+    // so anything but Hidden blocks. LogsFull is still the route to read the log.
     bool ScriptDebuggerBlocks(int visibility) {
-        return visibility == 1 || visibility == 2;
+        return visibility != 0;
     }
 
     bool IsValidBlockingScreenAction(const string &in action) {

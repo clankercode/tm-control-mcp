@@ -233,9 +233,6 @@ namespace TmMcp {
         }
 
         Json::Value warnings = Json::Array();
-        if (bool(scriptDebugger["visible"]) && !debuggerBlocking) {
-            warnings.Add("ManiaScript debugger log view is up (" + debuggerView + ")");
-        }
         if (want == "editor" && !inventoryReady) warnings.Add("inventory still scanning items");
         if (menuBlockingScreen.Length > 0 && want != "menu" && want != "any") {
             warnings.Add("menu blocking screen: " + menuBlockingScreen);

@@ -19,8 +19,8 @@ Openplanet API. To read them without OS input, call
 `ERROR [153, 135] Function MB_MapIsRunning not found`, is legible there
 (2026-11-22). Call it again with `Hidden` afterwards.
 
-The debugger's `Editor`/`EditorAndLogs` views cover the game and take its input.
-`GetBlockingScreen` reports them as `kind:"maniascript-debugger"` and
+Every debugger view but `Hidden` covers the game (a ManiaLink compile error
+opens `LogsFull`). `GetBlockingScreen` reports them as `kind:"maniascript-debugger"` and
 `GetReadiness` as a blocker in every mode. `DialogEditScript_TempText` is script source, not the error log.
 `logAvailable:false` means unavailable, never an empty/clean log. A dismissed
 crash prompt can leave the maptype stopped, so `healthConfirmed` stays false.

@@ -100,7 +100,7 @@ namespace TmMcp {
             o["blocking"] = true;
             o["needsAction"] = true;
             o["suggestedAction"] = "";
-            o["hint"] = "The ManiaScript debugger is up (a script failed to compile or crashed); the game cannot take input. Preserve the error first (GetManiaScriptDiagnostics), then DismissManiaScriptDebugger. DismissBlockingScreen never hides it.";
+            o["hint"] = "The ManiaScript debugger covers the game (a script failed to compile or crashed). Preserve the error first (GetManiaScriptDiagnostics), then DismissManiaScriptDebugger. DismissBlockingScreen never hides it.";
         }
         return o;
     }
