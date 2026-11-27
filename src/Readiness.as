@@ -216,12 +216,20 @@ namespace TmMcp {
         // untouched (warning only there, which cannot happen in practice).
         string menuBlockingScreen = "";
         if (mode == "Menu") {
-            auto bsSnap = BuildBlockingScreenSnapshot();
+            auto bsSnap = BuildMenuBlockingScreenSnapshot();
             string bsKind = string(bsSnap["kind"]);
             if (bsKind != "none" && bsKind.Length > 0) menuBlockingScreen = bsKind;
         }
         if (menuBlockingScreen.Length > 0 && (want == "menu" || want == "any")) {
             blocking.InsertLast("blocking screen: " + menuBlockingScreen + " (DismissBlockingScreen)");
+        }
+
+        // The ManiaScript debugger overlay covers every mode.
+        auto scriptDebugger = ScriptDebuggerSnapshot();
+        bool debuggerBlocking = bool(scriptDebugger["blocking"]);
+        string debuggerView = string(scriptDebugger["visibilityName"]);
+        if (debuggerBlocking) {
+            blocking.InsertLast("ManiaScript debugger is up (" + debuggerView + "; preserve the error with GetManiaScriptDiagnostics, then DismissManiaScriptDebugger)");
         }
 
         Json::Value warnings = Json::Array();
@@ -243,11 +251,12 @@ namespace TmMcp {
         checks["hasChallenge"] = hasChallenge;
         checks["menuModuleAvailable"] = MenuModuleAvailable();
         checks["menuBlockingScreen"] = menuBlockingScreen;
+        checks["scriptDebugger"] = debuggerView;
         checks["eppToolPack"] = IsEditorPlusPlusAvailable();
 
         bool ready = blocking.Length == 0;
         // Soft: inventory scanning alone shouldn't hard-fail "any"
-        if (want == "any" && mode != "Unknown" && dialogClear && menuBlockingScreen.Length == 0) {
+        if (want == "any" && mode != "Unknown" && dialogClear && menuBlockingScreen.Length == 0 && !debuggerBlocking) {
             ready = true;
             // still list soft reasons
         }

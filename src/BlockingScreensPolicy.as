@@ -123,6 +123,36 @@ namespace TmMcp {
         return false;
     }
 
+    // Native ManiaScript debugger overlay (SystemOverlay.ScriptDebugger).
+    // Index order is CGameScriptDebugger::EVisibility. It renders over every
+    // mode (it was up in Race on 2026-11-22 after a mode script failed to
+    // load) and is a SystemOverlay, not a menu page or BasicDialog.
+    const string BS_KIND_SCRIPT_DEBUGGER = "maniascript-debugger";
+
+    string ScriptDebuggerVisibilityName(int visibility) {
+        if (visibility == 0) return "Hidden";
+        if (visibility == 1) return "Editor";
+        if (visibility == 2) return "EditorAndLogs";
+        if (visibility == 3) return "LogsFull";
+        if (visibility == 4) return "LogsReduced";
+        return "Unknown";
+    }
+
+    // -1 for an unknown name; names are matched exactly as reported.
+    int ScriptDebuggerVisibilityFromName(const string &in name) {
+        for (int i = 0; i <= 4; i++) {
+            if (ScriptDebuggerVisibilityName(i) == name) return i;
+        }
+        return -1;
+    }
+
+    // Every shown view covers the game (window captures 2026-11-22/27:
+    // Editor, and LogsFull/LogsReduced, which fill or black out the screen),
+    // so anything but Hidden blocks. LogsFull is still the route to read the log.
+    bool ScriptDebuggerBlocks(int visibility) {
+        return visibility != 0;
+    }
+
     bool IsValidBlockingScreenAction(const string &in action) {
         return action == "auto" || action == "start" || action == "confirm"
             || action == "play-offline" || action == "retry" || action == "later";

@@ -46,9 +46,20 @@ so not a tool pack):
 
 - **`GetBlockingScreen`** (read-only). Returns `kind`:
   `start-screen` | `connecting` | `connection-failed` |
-  `connection-error` | `ubi-connect` | `welcome-back` | `none`,
+  `connection-error` | `ubi-connect` | `welcome-back` |
+  `maniascript-debugger` | `none`,
   plus `blocking`, `needsAction`, `suggestedAction`, the error/status text,
   and the visible buttons (`id`, `label`, `displayText`, `action`).
+  `maniascript-debugger` is not a menu page: it is the native ManiaScript
+  debugger (`SystemOverlay.ScriptDebugger`) in any view but `Hidden`. It
+  covers the game in any mode after a script fails (seen in Race,
+  2026-11-22, `Editor` view, after a mode script failed to load). Window
+  captures on 2026-11-27: a menu ManiaLink compile error opens `LogsFull`
+  (script viewer + instances + log over the whole screen); `LogsReduced`
+  blacks out the top and shows the log below. It wins over the menu kinds;
+  `scriptDebugger` always reports the visibility. It has no auto action; `DismissBlockingScreen` refuses with
+  `MANIASCRIPT_DEBUGGER` so the error is preserved first (see
+  [maniascript-failures.md](maniascript-failures.md)).
 - **`DismissBlockingScreen {action, waitMs}`**. `auto` takes the suggested
   action per kind: start-screen → click start, connection-error → Confirm,
   connection-failed/ubi-connect → Play offline, welcome-back → Maybe later.

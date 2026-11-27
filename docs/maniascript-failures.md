@@ -13,7 +13,15 @@ change debugger selection.
 
 `GetManiaScriptDiagnostics` reads the active FrameAskYesNo message and the native
 debugger visibility. The native debugger log rows are not exposed by the current
-Openplanet API. `DialogEditScript_TempText` is script source, not the error log.
+Openplanet API. To read them without OS input, call
+`DismissManiaScriptDebugger {"visibility":"LogsFull"}` and take a window capture
+(`scripts/capture-instance-window.sh N` on tmc hosts); the compile error, e.g.
+`ERROR [153, 135] Function MB_MapIsRunning not found`, is legible there
+(2026-11-22). Call it again with `Hidden` afterwards.
+
+Every debugger view but `Hidden` covers the game (a ManiaLink compile error
+opens `LogsFull`). `GetBlockingScreen` reports them as `kind:"maniascript-debugger"` and
+`GetReadiness` as a blocker in every mode. `DialogEditScript_TempText` is script source, not the error log.
 `logAvailable:false` means unavailable, never an empty/clean log. A dismissed
 crash prompt can leave the maptype stopped, so `healthConfirmed` stays false.
 
@@ -28,6 +36,9 @@ values. Error responses retain cleanup/result information in output.
 
 Preserve the native debugger image before recovery. The game's crash prompt
 advertises Shift+Scroll Lock for restarting scripts. After recovery, check that
-the failed instance is green. Do not substitute the editor's ButtonReloadScripts,
+the failed instance is green. A game mode script (`CPlugFileTextScript`) that
+failed to load stays loaded for the life of the game process: fixing the file
+on disk does not recompile it (observed 2026-11-22). Recovery then needs a fresh
+game process. Do not substitute the editor's ButtonReloadScripts,
 which reloads editor plugins, for a proven maptype restart. No automatic recovery
 is performed by these diagnostics.

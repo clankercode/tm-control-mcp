@@ -47,7 +47,7 @@ def collect(call, screenshot=False):
     report["crashDialogDetected"] = crash if isinstance(crash, bool) else None
     # No native log getter exists. Never call missing text an empty/clean log.
     report["logAvailable"] = False
-    report["nextStep"] = "Read the native Script debugger Log tab in a verified image before recovery. TakeScreenshot is viewport only; Openplanet/plugin UI needs a window/compositor capture (docs/window-screenshots.md). Image existence does not prove the debugger is visible. A dismissed prompt is not proof of script health."
+    report["nextStep"] = "Read the native Script debugger log in a verified image before recovery: DismissManiaScriptDebugger {visibility:'LogsFull'} shows it without OS input. TakeScreenshot is viewport only; Openplanet/plugin UI needs a window/compositor capture (docs/window-screenshots.md). Image existence does not prove the debugger is visible. A dismissed prompt is not proof of script health."
     if screenshot:
         try:
             report["screenshot"] = call("TakeScreenshot", {"currentView": True, "hideOverlay": False})

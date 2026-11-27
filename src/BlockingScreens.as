@@ -89,7 +89,23 @@ namespace TmMcp {
         return e;
     }
 
+    // Menu pages plus the ManiaScript debugger overlay, which covers every
+    // mode and takes precedence (it renders over any menu page).
     Json::Value BuildBlockingScreenSnapshot() {
+        Json::Value o = BuildMenuBlockingScreenSnapshot();
+        Json::Value debugger = ScriptDebuggerSnapshot();
+        o["scriptDebugger"] = debugger;
+        if (bool(debugger["blocking"])) {
+            o["kind"] = BS_KIND_SCRIPT_DEBUGGER;
+            o["blocking"] = true;
+            o["needsAction"] = true;
+            o["suggestedAction"] = "";
+            o["hint"] = "The ManiaScript debugger covers the game (a script failed to compile or crashed). Preserve the error first (GetManiaScriptDiagnostics), then DismissManiaScriptDebugger. DismissBlockingScreen never hides it.";
+        }
+        return o;
+    }
+
+    Json::Value BuildMenuBlockingScreenSnapshot() {
         Json::Value o = Json::Object();
         o["mode"] = DetectGameModeName();
         auto menuApp = _GetMenuApp();
@@ -253,6 +269,10 @@ namespace TmMcp {
     }
 
     Json::Value@ DismissBlockingScreen(Json::Value &in input) {
+        if (bool(ScriptDebuggerSnapshot()["blocking"])) {
+            return MakeError("the ManiaScript debugger is up", "MANIASCRIPT_DEBUGGER", false, "",
+                "Not dismissed automatically: preserve the error (GetManiaScriptDiagnostics), then DismissManiaScriptDebugger.");
+        }
         if (_GetMenuApp() is null) {
             return MakeError("menu mania app not available (not in menu?)", "WRONG_MODE", false, "Menu",
                 "These screens exist only in the main menu module.");
